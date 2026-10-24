@@ -751,6 +751,8 @@ impl App {
         };
         let font_size = self.settings.font_size;
         let word_wrap = self.settings.word_wrap;
+        let relative_line_numbers = self.settings.relative_line_numbers;
+        let ruler_column = self.settings.ruler_column;
         let focus_editor = std::mem::take(&mut self.focus_editor);
         let font_id = FontId::monospace(font_size);
         let viewport_width = ui.available_width();
@@ -848,6 +850,21 @@ impl App {
                 ),
             );
             let painter = ui.painter().with_clip_rect(viewport);
+            if ruler_column > 0 {
+                let char_width = ui
+                    .ctx()
+                    .fonts_mut(|fonts| fonts.glyph_width(&FontId::monospace(font_size), '0'));
+                let x = galley_pos.x + f32::from(ruler_column) * char_width;
+                if x > gutter_rect.right() && x < viewport.right() {
+                    painter.line_segment(
+                        [
+                            egui::pos2(x, viewport.top()),
+                            egui::pos2(x, viewport.bottom()),
+                        ],
+                        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(91, 103, 120, 90)),
+                    );
+                }
+            }
             painter.rect_filled(gutter_rect, CornerRadius::ZERO, theme::EDITOR_BG);
             painter.line_segment(
                 [
@@ -868,10 +885,15 @@ impl App {
                     } else {
                         theme::TEXT_FAINT
                     };
+                    let display_no = if relative_line_numbers && line_no != doc.cursor_line {
+                        line_no.abs_diff(doc.cursor_line)
+                    } else {
+                        line_no
+                    };
                     painter.text(
                         egui::pos2(gutter_rect.right() - 9.0, top + row.size.y * 0.5),
                         Align2::RIGHT_CENTER,
-                        line_no.to_string(),
+                        display_no.to_string(),
                         gutter_font.clone(),
                         color,
                     );
@@ -1693,6 +1715,25 @@ impl App {
                         ui.checkbox(&mut draft.auto_scroll_output, "构建输出自动滚动");
                         ui.checkbox(&mut draft.show_hidden, "显示隐藏文件");
                     });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut draft.relative_line_numbers, "相对行号");
+                        ui.label(
+                            RichText::new("换行标尺")
+                                .size(11.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                        egui::ComboBox::from_id_salt("simple_embedded_ruler_column")
+                            .selected_text(match draft.ruler_column {
+                                80 => "80 列",
+                                120 => "120 列",
+                                _ => "关闭",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut draft.ruler_column, 0, "关闭");
+                                ui.selectable_value(&mut draft.ruler_column, 80, "80 列");
+                                ui.selectable_value(&mut draft.ruler_column, 120, "120 列");
+                            });
+                    });
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(format!(
@@ -1760,6 +1801,12 @@ impl App {
 
             self.settings.font_size = draft.font_size.clamp(10.0, 28.0);
             self.settings.word_wrap = draft.word_wrap;
+            self.settings.relative_line_numbers = draft.relative_line_numbers;
+            self.settings.ruler_column = if matches!(draft.ruler_column, 80 | 120) {
+                draft.ruler_column
+            } else {
+                0
+            };
             self.settings.auto_scroll_output = draft.auto_scroll_output;
             self.settings.show_hidden = draft.show_hidden;
             self.settings.save();

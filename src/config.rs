@@ -525,6 +525,8 @@ pub struct Settings {
     pub show_hidden: bool,
     pub font_size: f32,
     pub word_wrap: bool,
+    pub relative_line_numbers: bool,
+    pub ruler_column: u16,
     pub auto_scroll_output: bool,
     pub output_open: bool,
     pub output_height: f32,
@@ -542,6 +544,8 @@ impl Default for Settings {
             show_hidden: false,
             font_size: 14.0,
             word_wrap: true,
+            relative_line_numbers: false,
+            ruler_column: 0,
             auto_scroll_output: true,
             output_open: true,
             output_height: 214.0,
@@ -610,6 +614,9 @@ impl Settings {
 
     fn sanitize(&mut self) {
         self.font_size = self.font_size.clamp(10.0, 28.0);
+        if !matches!(self.ruler_column, 80 | 120) {
+            self.ruler_column = 0;
+        }
         if !self.output_height.is_finite() || self.output_height <= 0.0 {
             self.output_height = 214.0;
         }
