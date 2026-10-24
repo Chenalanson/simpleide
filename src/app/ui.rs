@@ -157,6 +157,7 @@ impl App {
                 let available_height = ui.available_height();
                 let resource_header_height = 42.0;
                 let info_header_height = 34.0;
+                let info_inline = has_project && resource_open && !info_open;
                 let (resource_height, info_height, show_splitter) = if !has_project {
                     (
                         if resource_open {
@@ -167,6 +168,8 @@ impl App {
                         0.0,
                         false,
                     )
+                } else if info_inline {
+                    (available_height, 0.0, false)
                 } else {
                     match (resource_open, info_open) {
                         (true, true) => {
@@ -310,6 +313,11 @@ impl App {
                                                 });
                                             }
                                             ui.add_space(8.0);
+                                            if info_inline {
+                                                ui.add_space(4.0);
+                                                light_separator(ui);
+                                                info_header_row(ui, &mut info_open);
+                                            }
                                         },
                                     );
                                 });
@@ -317,7 +325,7 @@ impl App {
                     },
                 );
 
-                if has_project {
+                if has_project && !info_inline {
                     if show_splitter {
                         let split_span = (resource_height + info_height).max(1.0);
                         let (split_rect, split_response) = ui.allocate_exact_size(
@@ -330,6 +338,10 @@ impl App {
                             self.left_split = (self.left_split
                                 + split_response.drag_delta().y / split_span)
                                 .clamp(0.18, 0.82);
+                            self.settings.left_split = self.left_split;
+                        }
+                        if split_response.drag_stopped() {
+                            self.settings.save();
                         }
                         let line_color = if split_response.hovered() || split_response.dragged() {
                             theme::ACCENT
@@ -353,38 +365,7 @@ impl App {
                             if !show_splitter {
                                 light_separator(ui);
                             }
-                            Frame::new()
-                                .inner_margin(Margin::symmetric(11, 5))
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        if section_chevron(ui, info_open).clicked() {
-                                            info_open = !info_open;
-                                        }
-                                        let (bar_rect, _) = ui.allocate_exact_size(
-                                            egui::vec2(3.0, 13.0),
-                                            Sense::hover(),
-                                        );
-                                        ui.painter().rect_filled(
-                                            bar_rect,
-                                            CornerRadius::same(1),
-                                            theme::ACCENT,
-                                        );
-                                        if ui
-                                            .add(
-                                                Button::new(
-                                                    RichText::new("工程信息")
-                                                        .size(12.5)
-                                                        .strong()
-                                                        .color(theme::TEXT_DIM),
-                                                )
-                                                .frame(false),
-                                            )
-                                            .clicked()
-                                        {
-                                            info_open = !info_open;
-                                        }
-                                    });
-                                });
+                            info_header_row(ui, &mut info_open);
                             if info_open {
                                 light_separator(ui);
                                 Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
@@ -402,8 +383,13 @@ impl App {
                         },
                     );
                 }
-                self.resource_open = resource_open;
-                self.info_open = info_open;
+                if self.resource_open != resource_open || self.info_open != info_open {
+                    self.resource_open = resource_open;
+                    self.info_open = info_open;
+                    self.settings.resource_open = resource_open;
+                    self.settings.info_open = info_open;
+                    self.settings.save();
+                }
             });
     }
 
@@ -1738,6 +1724,35 @@ fn parse_meta_lines(text: &str) -> Vec<String> {
         }
     }
     lines
+}
+
+fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool) {
+    Frame::new()
+        .inner_margin(Margin::symmetric(11, 5))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if section_chevron(ui, *info_open).clicked() {
+                    *info_open = !*info_open;
+                }
+                let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
+                ui.painter()
+                    .rect_filled(bar_rect, CornerRadius::same(1), theme::ACCENT);
+                if ui
+                    .add(
+                        Button::new(
+                            RichText::new("工程信息")
+                                .size(12.5)
+                                .strong()
+                                .color(theme::TEXT_DIM),
+                        )
+                        .frame(false),
+                    )
+                    .clicked()
+                {
+                    *info_open = !*info_open;
+                }
+            });
+        });
 }
 
 fn section_chevron(ui: &mut egui::Ui, open: bool) -> egui::Response {

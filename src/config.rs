@@ -527,6 +527,9 @@ pub struct Settings {
     pub word_wrap: bool,
     pub auto_scroll_output: bool,
     pub output_open: bool,
+    pub left_split: f32,
+    pub resource_open: bool,
+    pub info_open: bool,
 }
 
 impl Default for Settings {
@@ -540,6 +543,9 @@ impl Default for Settings {
             word_wrap: true,
             auto_scroll_output: true,
             output_open: true,
+            left_split: 0.5,
+            resource_open: true,
+            info_open: true,
         }
     }
 }
@@ -602,6 +608,10 @@ impl Settings {
 
     fn sanitize(&mut self) {
         self.font_size = self.font_size.clamp(10.0, 28.0);
+        if !self.left_split.is_finite() || self.left_split <= 0.0 {
+            self.left_split = 0.5;
+        }
+        self.left_split = self.left_split.clamp(0.18, 0.82);
         self.recent_projects.retain(|path| path.is_dir());
         self.recent_projects.dedup();
         self.recent_projects.truncate(MAX_RECENT_PROJECTS);

@@ -163,6 +163,9 @@ impl App {
         initial_file: Option<PathBuf>,
     ) -> Self {
         let settings = Settings::load();
+        let left_split = settings.left_split.clamp(0.18, 0.82);
+        let resource_open = settings.resource_open;
+        let info_open = settings.info_open;
         let mut app = Self {
             build: BuildController::default(),
             highlighter: Arc::new(Highlighter::new()),
@@ -177,9 +180,9 @@ impl App {
             meta_add: None,
             build_options_draft: None,
             build_options_tab: BuildOptionsTab::default(),
-            left_split: 0.5,
-            resource_open: true,
-            info_open: true,
+            left_split,
+            resource_open,
+            info_open,
             pending: None,
             toast: None,
             allow_close: false,
