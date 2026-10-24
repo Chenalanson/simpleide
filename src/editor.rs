@@ -97,6 +97,7 @@ pub struct Document {
     pub bom: bool,
     pub syntax_name: Option<String>,
     pub language: String,
+    pub cursor_index: usize,
     pub cursor_line: usize,
     pub cursor_column: usize,
     pub bookmarks: BTreeSet<usize>,
@@ -118,6 +119,7 @@ impl Document {
             bom: loaded.bom,
             syntax_name,
             language,
+            cursor_index: 0,
             cursor_line: 1,
             cursor_column: 1,
             bookmarks: BTreeSet::new(),
@@ -142,6 +144,7 @@ impl Document {
     }
 
     pub fn update_cursor(&mut self, char_index: usize) {
+        self.cursor_index = char_index;
         let (line, column) = crate::util::line_column_at_char(self.buffer.as_string(), char_index);
         self.cursor_line = line;
         self.cursor_column = column;

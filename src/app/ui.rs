@@ -840,6 +840,8 @@ impl App {
                 response = Some(output.response.response);
             });
 
+        let bracket_match =
+            crate::brackets::matching_bracket(doc.buffer.as_string(), doc.cursor_index);
         if let Some((galley, galley_pos)) = gutter {
             let viewport = scroll_output.inner_rect;
             let gutter_rect = egui::Rect::from_min_max(
@@ -863,6 +865,35 @@ impl App {
                         ],
                         Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(91, 103, 120, 90)),
                     );
+                }
+            }
+            if let Some((first, second)) = bracket_match {
+                let char_width = ui
+                    .ctx()
+                    .fonts_mut(|fonts| fonts.glyph_width(&FontId::monospace(font_size), '0'));
+                for index in [first, second] {
+                    let caret = galley
+                        .pos_from_cursor(egui::text::CCursor::new(index))
+                        .translate(galley_pos.to_vec2());
+                    let rect = egui::Rect::from_min_size(
+                        caret.min,
+                        egui::vec2(char_width, caret.height()),
+                    );
+                    if rect.intersects(viewport) {
+                        painter.rect_filled(
+                            rect.expand(0.5),
+                            CornerRadius::same(2),
+                            Color32::from_rgba_unmultiplied(88, 196, 221, 45),
+                        );
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(rect.left(), rect.bottom() - 1.5),
+                                egui::pos2(rect.right(), rect.bottom()),
+                            ),
+                            CornerRadius::ZERO,
+                            theme::ACCENT,
+                        );
+                    }
                 }
             }
             painter.rect_filled(gutter_rect, CornerRadius::ZERO, theme::EDITOR_BG);

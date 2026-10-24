@@ -443,6 +443,31 @@ impl App {
         self.set_toast(format!("跳转到书签：第 {target} 行"), Severity::Info);
     }
 
+    fn jump_to_matching_bracket(&mut self, ctx: &egui::Context) {
+        let Some(index) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(index) else {
+            return;
+        };
+        let Some((_, target)) =
+            crate::brackets::matching_bracket(doc.buffer.as_string(), doc.cursor_index)
+        else {
+            self.set_toast("光标不在可匹配的括号上", Severity::Info);
+            return;
+        };
+        doc.update_cursor(target);
+        let editor_id = egui::Id::new(("simple_embedded_code_editor", &doc.path));
+        let mut state = egui::text_edit::TextEditState::load(ctx, editor_id).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(
+                egui::text::CCursor::new(target),
+            )));
+        state.store(ctx, editor_id);
+        self.focus_editor = true;
+    }
+
     fn request_close_tab(&mut self, index: usize) {
         let Some(doc) = self.tabs.get(index) else {
             return;
@@ -763,6 +788,7 @@ impl App {
             bookmark_toggle,
             bookmark_next,
             bookmark_prev,
+            bracket_jump,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -779,6 +805,7 @@ impl App {
                 command && input.key_pressed(egui::Key::F2),
                 !command && !input.modifiers.shift && input.key_pressed(egui::Key::F2),
                 !command && input.modifiers.shift && input.key_pressed(egui::Key::F2),
+                command && input.key_pressed(egui::Key::CloseBracket),
             )
         });
 
@@ -810,6 +837,9 @@ impl App {
             self.goto_bookmark(ctx, true);
         } else if bookmark_prev {
             self.goto_bookmark(ctx, false);
+        }
+        if bracket_jump {
+            self.jump_to_matching_bracket(ctx);
         }
         if zoom_in || zoom_out {
             let delta = if zoom_in { 1.0 } else { -1.0 };
