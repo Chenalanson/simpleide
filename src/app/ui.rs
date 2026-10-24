@@ -1325,34 +1325,50 @@ fn meta_group(
     content: impl FnOnce(&mut egui::Ui),
 ) {
     let id = ui.make_persistent_id(("simple_embedded_meta_group", title));
+    let selected_id = egui::Id::new("simple_embedded_meta_list_selected");
     let mut open = ui
         .data_mut(|data| data.get_persisted::<bool>(id))
         .unwrap_or(default_open);
-    let mut toggle = false;
+    let selected = ui.data_mut(|data| data.get_persisted::<egui::Id>(selected_id)) == Some(id);
 
-    ui.horizontal(|ui| {
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::click());
-        paint_chevron(ui.painter(), rect, open, theme::ACCENT);
-        if response.clicked() {
-            toggle = true;
-        }
-        if ui
-            .add(
-                Button::new(
-                    RichText::new(title)
-                        .size(12.5)
-                        .strong()
-                        .color(theme::TEXT_DIM),
-                )
-                .frame(false),
-            )
-            .clicked()
-        {
-            toggle = true;
-        }
-    });
+    let row_height = 22.0;
+    let row_rect = egui::Rect::from_min_size(
+        ui.cursor().min,
+        egui::vec2(ui.available_width(), row_height),
+    );
+    let hovered = ui.rect_contains_pointer(row_rect);
+    let fill = if selected {
+        Color32::from_rgb(36, 84, 108)
+    } else if hovered {
+        Color32::from_rgb(28, 49, 63)
+    } else {
+        Color32::TRANSPARENT
+    };
+    if fill != Color32::TRANSPARENT {
+        ui.painter()
+            .rect_filled(row_rect, CornerRadius::same(4), fill);
+    }
 
-    if toggle {
+    let row = ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), row_height),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.style_mut().interaction.selectable_labels = false;
+            let (chevron_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::hover());
+            paint_chevron(ui.painter(), chevron_rect, open, theme::ACCENT);
+            ui.label(RichText::new(title).size(12.5).strong().color(if selected {
+                theme::TEXT
+            } else {
+                theme::TEXT_DIM
+            }));
+        },
+    );
+    let response = row
+        .response
+        .interact(Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() {
+        ui.data_mut(|data| data.insert_persisted(selected_id, id));
         open = !open;
         ui.data_mut(|data| data.insert_persisted(id, open));
     }
@@ -1451,6 +1467,7 @@ fn meta_editable_list(
         egui::vec2(ui.available_width(), row_height),
         Layout::left_to_right(Align::Center),
         |ui| {
+            ui.style_mut().interaction.selectable_labels = false;
             let (chevron_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::hover());
             paint_chevron(ui.painter(), chevron_rect, open, theme::ACCENT);
             ui.label(RichText::new(label).size(11.0).color(if selected {
@@ -1469,7 +1486,10 @@ fn meta_editable_list(
             plus.on_hover_text(format!("添加{label}"));
         },
     );
-    let response = row.response.interact(Sense::click());
+    let response = row
+        .response
+        .interact(Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
     if response.clicked() || plus_clicked {
         ui.data_mut(|data| data.insert_persisted(selected_id, id));
     }
@@ -1510,6 +1530,7 @@ fn meta_editable_list(
 
 fn paint_plus_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if response.hovered() {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(28, 55, 43));
