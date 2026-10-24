@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include "board.h"
 
-/* Minimal blink example for MiniEIDE.
+/* Minimal blink example for Simple embedded.
  * Open this folder, then press Build (Ctrl+B). */
 int main(void) {
     board_init();

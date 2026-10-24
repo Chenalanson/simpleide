@@ -1,10 +1,10 @@
 # Blink demo firmware
 
-A tiny folder-as-project example for MiniEIDE.
+A tiny folder-as-project example for Simple embedded.
 
 ## Try it
 
-1. Open this folder in MiniEIDE.
+1. Open this folder in Simple embedded.
 2. Expand `src` and click `main.c`.
 3. Press **Build** or `Ctrl+B`.
 4. Check the build output panel at the bottom.

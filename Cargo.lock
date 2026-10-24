@@ -1229,20 +1229,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mini-embedded-ide"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "encoding_rs",
- "rfd",
- "serde",
- "serde_json",
- "syntect",
- "tempfile",
-]
-
-[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2102,6 +2088,21 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "simple-embedded"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "encoding_rs",
+ "raw-window-handle",
+ "rfd",
+ "serde",
+ "serde_json",
+ "syntect",
+ "tempfile",
+]
 
 [[package]]
 name = "skrifa"

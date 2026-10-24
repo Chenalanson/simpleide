@@ -7,9 +7,7 @@ use std::rc::Rc;
 use eframe::egui::TextBuffer;
 
 use crate::highlight::{self, Highlighter, SharedLayoutCache};
-use crate::util::{
-    file_name, line_count, read_text_file, relative_display, write_text_file, LineEnding,
-};
+use crate::util::{file_name, read_text_file, relative_display, write_text_file, LineEnding};
 
 pub struct EditorBuffer {
     text: String,
@@ -138,10 +136,6 @@ impl Document {
         )?;
         self.saved_revision = revision_before_save;
         Ok(())
-    }
-
-    pub fn line_count(&self) -> usize {
-        line_count(self.buffer.as_string())
     }
 
     pub fn update_cursor(&mut self, char_index: usize) {

@@ -45,6 +45,7 @@ pub struct RunSpec {
     pub args: Vec<OsString>,
     pub cwd: std::path::PathBuf,
     pub display: String,
+    pub env_paths: Vec<std::path::PathBuf>,
 }
 
 enum BuildEvent {
@@ -316,6 +317,15 @@ fn spawn_process(spec: &RunSpec) -> Result<SpawnedProcess, String> {
         .env("CARGO_TERM_COLOR", "always")
         .env("CLICOLOR_FORCE", "1")
         .env("TERM", "xterm-256color");
+    if !spec.env_paths.is_empty() {
+        if let Some(existing) = std::env::var_os("PATH") {
+            let mut paths = spec.env_paths.clone();
+            paths.extend(std::env::split_paths(&existing));
+            if let Ok(joined) = std::env::join_paths(paths) {
+                command.env("PATH", joined);
+            }
+        }
+    }
     hide_console(&mut command);
 
     let mut child = command
@@ -466,6 +476,7 @@ mod tests {
             args: vec!["/C".into(), "echo build-ok".into()],
             cwd: std::env::current_dir().unwrap(),
             display: "echo build-ok".into(),
+            env_paths: Vec::new(),
         };
         #[cfg(not(target_os = "windows"))]
         let spec = RunSpec {
@@ -473,6 +484,7 @@ mod tests {
             args: vec!["-c".into(), "echo build-ok".into()],
             cwd: std::env::current_dir().unwrap(),
             display: "echo build-ok".into(),
+            env_paths: Vec::new(),
         };
 
         let mut controller = BuildController::default();

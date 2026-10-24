@@ -10,8 +10,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::build::{RunSpec, TaskKind};
-use crate::util::{project_key, shell_quote_posix};
+use crate::util::{display_path, project_key, shell_quote_posix};
 
+pub const APP_NAME: &str = "Simple embedded";
+const APP_DATA_DIR: &str = "SimpleEmbedded";
+const LEGACY_APP_DATA_DIR: &str = "MiniEIDE";
 const MAX_RECENT_PROJECTS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +44,8 @@ pub struct BuildConfig {
     pub ssh_host: String,
     pub ssh_port: u16,
     pub remote_dir: String,
+    /// Extra directories prepended to PATH for local build commands.
+    pub extra_paths: Vec<String>,
 }
 
 impl Default for BuildConfig {
@@ -54,6 +59,7 @@ impl Default for BuildConfig {
             ssh_host: String::new(),
             ssh_port: 22,
             remote_dir: String::new(),
+            extra_paths: Vec::new(),
         }
     }
 }
@@ -93,6 +99,8 @@ impl BuildConfig {
             "Cargo"
         } else if lower.contains("cmake") {
             "CMake"
+        } else if lower.contains("uv4") || lower.contains(".uvprojx") {
+            "Keil"
         } else if lower.contains("make") {
             "Make"
         } else if lower.contains("ninja") {
@@ -150,14 +158,40 @@ impl BuildConfig {
                 args,
                 cwd: project_root.to_path_buf(),
                 display: format!("ssh {host} · {raw}"),
+                env_paths: Vec::new(),
             })
         } else {
+            let mut env_paths: Vec<PathBuf> = self
+                .extra_paths
+                .iter()
+                .map(|path| path.trim())
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .collect();
+
+            // POSIX-style Makefiles commonly invoke `rm`, `cp`, etc. Windows
+            // Make implementations cannot run those unless a Unix userland is
+            // on PATH. Git for Windows is the most common source, so add its
+            // usr/bin automatically for local Make builds.
+            #[cfg(target_os = "windows")]
+            if looks_like_make(raw) {
+                if let Some(dir) = find_posix_tools_dir() {
+                    if !env_paths.iter().any(|path| {
+                        path.to_string_lossy()
+                            .eq_ignore_ascii_case(&dir.to_string_lossy())
+                    }) {
+                        env_paths.push(dir);
+                    }
+                }
+            }
+
             #[cfg(target_os = "windows")]
             let spec = RunSpec {
                 program: "cmd".into(),
                 args: vec!["/S".into(), "/C".into(), raw.into()],
                 cwd: project_root.to_path_buf(),
                 display: raw.to_owned(),
+                env_paths,
             };
 
             #[cfg(not(target_os = "windows"))]
@@ -166,6 +200,7 @@ impl BuildConfig {
                 args: vec!["-c".into(), raw.into()],
                 cwd: project_root.to_path_buf(),
                 display: raw.to_owned(),
+                env_paths,
             };
 
             Ok(spec)
@@ -173,12 +208,95 @@ impl BuildConfig {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn looks_like_make(command: &str) -> bool {
+    command
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, '&' | '|' | ';'))
+        .filter(|token| !token.is_empty())
+        .map(|token| token.trim_matches('"').to_ascii_lowercase())
+        .any(|token| {
+            token == "make"
+                || token == "make.exe"
+                || token.ends_with("-make")
+                || token.ends_with("-make.exe")
+                || token == "gmake"
+                || token == "gmake.exe"
+                || token.ends_with("\\make.exe")
+                || token.ends_with("/make.exe")
+        })
+}
+
+#[cfg(target_os = "windows")]
+fn find_posix_tools_dir() -> Option<PathBuf> {
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            if dir.join("rm.exe").is_file() {
+                return Some(dir);
+            }
+            if dir.join("git.exe").is_file() {
+                if let Some(root) = dir.parent() {
+                    let candidate = root.join("usr").join("bin");
+                    if candidate.join("rm.exe").is_file() {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        candidates.push(
+            PathBuf::from(program_files)
+                .join("Git")
+                .join("usr")
+                .join("bin"),
+        );
+    }
+    #[cfg(target_pointer_width = "64")]
+    if let Some(program_files) = std::env::var_os("ProgramFiles(x86)") {
+        candidates.push(
+            PathBuf::from(program_files)
+                .join("Git")
+                .join("usr")
+                .join("bin"),
+        );
+    }
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(
+            PathBuf::from(local_app_data)
+                .join("Programs")
+                .join("Git")
+                .join("usr")
+                .join("bin"),
+        );
+    }
+    candidates.extend(
+        [
+            r"C:\msys64\usr\bin",
+            r"C:\msys32\usr\bin",
+            r"C:\cygwin64\bin",
+            r"C:\cygwin\bin",
+        ]
+        .into_iter()
+        .map(PathBuf::from),
+    );
+
+    candidates
+        .into_iter()
+        .find(|dir| dir.join("rm.exe").is_file())
+}
+
 pub fn autodetect(project_root: &Path) -> BuildConfig {
+    let mut extra_paths = Vec::new();
+
     if project_root.join("Cargo.toml").is_file() {
+        add_tool_dir(&mut extra_paths, find_in_path("cargo"));
         return BuildConfig {
             build_command: "cargo build".to_owned(),
             clean_command: "cargo clean".to_owned(),
             rebuild_command: "cargo clean && cargo build".to_owned(),
+            extra_paths,
             ..BuildConfig::default()
         };
     }
@@ -187,16 +305,28 @@ pub fn autodetect(project_root: &Path) -> BuildConfig {
         .iter()
         .any(|name| project_root.join(name).is_file());
     if has_makefile {
-        let make = make_program();
+        let make_path = find_one_of(&["make", "gmake", "mingw32-make"]);
+        let make = make_path
+            .as_ref()
+            .and_then(|path| path.file_stem())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "make".to_owned());
+        add_tool_dir(&mut extra_paths, make_path);
+        add_tool_dir(
+            &mut extra_paths,
+            find_one_of(&["arm-none-eabi-gcc", "gcc", "clang"]),
+        );
         return BuildConfig {
-            build_command: make.to_owned(),
+            build_command: make.clone(),
             clean_command: format!("{make} clean"),
             rebuild_command: format!("{make} clean && {make}"),
+            extra_paths,
             ..BuildConfig::default()
         };
     }
 
     if project_root.join("CMakeLists.txt").is_file() {
+        add_tool_dir(&mut extra_paths, find_in_path("cmake"));
         let has_cache = project_root.join("build").join("CMakeCache.txt").is_file();
         return BuildConfig {
             build_command: if has_cache {
@@ -206,6 +336,7 @@ pub fn autodetect(project_root: &Path) -> BuildConfig {
             },
             clean_command: "cmake --build build --target clean".to_owned(),
             rebuild_command: "cmake --build build --clean-first".to_owned(),
+            extra_paths,
             ..BuildConfig::default()
         };
     }
@@ -213,33 +344,46 @@ pub fn autodetect(project_root: &Path) -> BuildConfig {
     BuildConfig::default()
 }
 
-fn make_program() -> &'static str {
-    for candidate in ["make", "gmake", "mingw32-make"] {
-        if executable_in_path(candidate) {
-            return match candidate {
-                "make" => "make",
-                "gmake" => "gmake",
-                _ => "mingw32-make",
-            };
-        }
-    }
-    "make"
+fn find_one_of(names: &[&str]) -> Option<PathBuf> {
+    names.iter().find_map(|name| find_in_path(name))
 }
 
-fn executable_in_path(name: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    for dir in std::env::split_paths(&paths) {
-        if dir.join(name).is_file() {
-            return true;
-        }
-        #[cfg(target_os = "windows")]
-        if dir.join(format!("{name}.exe")).is_file() {
-            return true;
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    let mut candidates = vec![name.to_owned()];
+    #[cfg(target_os = "windows")]
+    {
+        if Path::new(name).extension().is_none() {
+            candidates.push(format!("{name}.exe"));
+            candidates.push(format!("{name}.cmd"));
+            candidates.push(format!("{name}.bat"));
         }
     }
-    false
+    for dir in std::env::split_paths(&paths) {
+        for candidate in &candidates {
+            let path = dir.join(candidate);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn add_tool_dir(paths: &mut Vec<String>, executable: Option<PathBuf>) {
+    let Some(executable) = executable else {
+        return;
+    };
+    let Some(parent) = executable.parent() else {
+        return;
+    };
+    let path = display_path(parent);
+    if !paths
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&path))
+    {
+        paths.push(path);
+    }
 }
 
 pub fn detected_tool(project_root: &Path) -> Option<&'static str> {
@@ -287,6 +431,7 @@ impl Default for Settings {
 
 impl Settings {
     pub fn load() -> Self {
+        migrate_legacy_settings();
         let path = settings_path();
         let Ok(bytes) = std::fs::read(&path) else {
             return Self::default();
@@ -356,11 +501,33 @@ impl Settings {
 }
 
 pub fn settings_path() -> PathBuf {
+    config_dir().join("settings.json")
+}
+
+fn config_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return PathBuf::from(appdata).join(APP_DATA_DIR);
+        }
+    }
+
+    if let Some(config) = std::env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(config).join("simple-embedded");
+    }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        return PathBuf::from(home).join(".config").join("simple-embedded");
+    }
+
+    PathBuf::from(".simple-embedded")
+}
+
+fn legacy_settings_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         if let Some(appdata) = std::env::var_os("APPDATA") {
             return PathBuf::from(appdata)
-                .join("MiniEIDE")
+                .join(LEGACY_APP_DATA_DIR)
                 .join("settings.json");
         }
     }
@@ -378,6 +545,23 @@ pub fn settings_path() -> PathBuf {
     }
 
     PathBuf::from(".mini-eide-settings.json")
+}
+
+fn migrate_legacy_settings() {
+    let new_path = settings_path();
+    if new_path.exists() {
+        return;
+    }
+    let old_path = legacy_settings_path();
+    if !old_path.is_file() {
+        return;
+    }
+    if let Some(parent) = new_path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let _ = std::fs::copy(old_path, new_path);
 }
 
 #[cfg(test)]
@@ -433,6 +617,33 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .contains("cd '/home/dev/my firmware' && make -j4"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn identifies_make_commands() {
+        assert!(looks_like_make("mingw32-make clean"));
+        assert!(looks_like_make("gmake -j4"));
+        assert!(looks_like_make("make.exe"));
+        assert!(!looks_like_make("cmake --build build"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn local_make_adds_posix_tools_when_available() {
+        if find_posix_tools_dir().is_none() {
+            return;
+        }
+        let cfg = BuildConfig {
+            build_command: "mingw32-make".into(),
+            clean_command: "mingw32-make clean".into(),
+            ..BuildConfig::default()
+        };
+        let spec = cfg.make_spec(TaskKind::Clean, Path::new(".")).unwrap();
+        assert!(spec
+            .env_paths
+            .iter()
+            .any(|dir| dir.join("rm.exe").is_file()));
     }
 
     #[test]

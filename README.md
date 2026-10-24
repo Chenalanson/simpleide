@@ -1,18 +1,22 @@
-# MiniEIDE
+# Simple embedded
 
-一个 Windows 桌面端的极简嵌入式编辑器：**文件夹就是工程**，打开目录 → 编辑代码 → 一键构建 → 查看彩色日志。没有工程导入向导，没有芯片包，没有存储器布局，也不会向工程目录写入任何项目文件。
+一个 Windows 桌面端的极简嵌入式编辑器：**文件夹就是工程**，导入目录 → 编辑代码 → 一键构建 → 查看彩色日志。没有工程向导，没有芯片包，没有存储器布局，也不会向工程目录写入任何项目文件。
 
-使用 Rust + `eframe/egui` 编写。界面为三栏布局：左侧文件树、中间多标签代码编辑、底部异步构建输出。
+使用 Rust + `eframe/egui` 编写。界面是左侧工程卡片与文件树、中间多标签代码编辑、底部异步构建输出，构建操作集中在右侧操作栏。
 
-![MiniEIDE](docs/editor.png)
+![Simple embedded](docs/editor.png)
 
-首次启动：直接打开文件夹，没有工程向导。
+未打开工程时，左上角直接提供“导入工程”，中间只显示一行提示。
 
-![欢迎页](docs/welcome.png)
+![导入工程](docs/welcome.png)
+
+从打开目录到构建、SSH、烧录和常见问题的完整中文教程：[docs/TUTORIAL.md](docs/TUTORIAL.md)。
 
 ## 功能
 
 - 打开任意文件夹作为工程，不做 `Makefile` / `Cargo.toml` / `CMakeLists.txt` 之外的项目配置
+- 深色标题栏与界面配色一致，构建 / 清理 / 重构建 / 烧录集中在右侧操作栏
+- 左侧工程卡片显示构建模式和命令，可打开设置或切换工程
 - 左侧目录树：展开/折叠、隐藏文件、刷新、点击打开文件；右键可在资源管理器或 VS Code 中打开
 - 多文件 Tab、脏标记、关闭前提示保存
 - 文本编辑：`Ctrl+S` 保存、Tab 缩进、撤销/重做、复制粘贴等由 egui 文本编辑控件提供
@@ -24,6 +28,7 @@
 - 本地构建或远程 SSH 构建（复用系统 OpenSSH）
 - Flash 命令可选，在本地工程目录执行，方便接 J-Link / OpenOCD
 - 每工程独立构建配置，保存在用户目录，不污染工程
+- 可追加工具链 PATH；本地 Make 构建会自动接入 Git for Windows / MSYS 的 `rm` 等 Unix 工具
 
 ## 运行
 
@@ -42,7 +47,7 @@ cargo run --release -- D:\firmware\my-board src\main.c
 构建后的可执行文件：
 
 ```text
-target\release\mini-embedded-ide.exe
+target\release\simple-embedded.exe
 ```
 
 ## 快捷键
@@ -68,9 +73,11 @@ target\release\mini-embedded-ide.exe
 | `Makefile` | `make`，否则尝试 `gmake` / `mingw32-make`（Windows） | `<make> clean` | `<make> clean && <make>` |
 | `CMakeLists.txt` | `cmake -S . -B build && cmake --build build` | 清理 target | clean-first |
 
-检测结果只是初始值，在 **设置** 中可随时修改。编辑器只负责调用命令，不接管 CMake/Make/Cargo 的构建逻辑。
+检测结果只是初始值，点击左上角工程卡片的 **配置** 可随时修改。编辑器只负责调用命令，不接管 CMake/Make/Cargo 的构建逻辑。
 
 构建前会自动保存所有未保存文件，然后通过本机 shell（Windows 为 `cmd /S /C`）在工程根目录启动进程。日志从 stdout/stderr 双流读取；Windows 下停止会调用 `taskkill /T` 终止子进程树。
+
+POSIX 风格的 Makefile 常用 `rm`、`cp` 等命令；在 Windows 上运行本地 Make 构建时，程序会自动寻找 Git for Windows / MSYS / Cygwin 的 `usr\bin` 并前置到 PATH。也可以在设置中手动填写额外工具链路径。
 
 ### 远程 SSH 构建
 
@@ -96,14 +103,14 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 <host> "cd '<远程目录>' && <构建
 JLink.exe -CommanderScript flash.jlink
 ```
 
-这样可以由 J-Link 直接访问本机 USB。留空时顶部烧录按钮自动禁用。当前没有内置 MCP 客户端；如果后续要接 `jlink-mcp`，可以直接把 Flash 命令替换为对应的命令行封装。
+这样可以由 J-Link 直接访问本机 USB。留空时右侧操作栏的烧录按钮自动禁用。当前没有内置 MCP 客户端；如果后续要接 `jlink-mcp`，可以直接把 Flash 命令替换为对应的命令行封装。
 
 ## 配置与“零工程文件”
 
 所有设置都在：
 
 ```text
-%APPDATA%\MiniEIDE\settings.json
+%APPDATA%\SimpleEmbedded\settings.json
 ```
 
 内容包括最近工程、每个工程各自的 Build/Clean/Rebuild/Flash/SSH 配置、字号、自动换行、输出面板状态等。
@@ -125,8 +132,8 @@ cargo run --release -- examples\blink examples\blink\src\main.c
 ```text
 src/
   main.rs        窗口、字体、图标
-  app.rs         应用状态、快捷键、顶部栏、状态栏、构建输出
-  app/ui.rs      文件树、Tab、编辑器、欢迎页、设置/确认弹窗
+  app.rs         应用状态、快捷键、右侧操作栏、构建输出
+  app/ui.rs      工程卡片、文件树、Tab、编辑器、空状态、设置/确认弹窗
   build.rs       子进程、stdout/stderr、停止、日志事件
   config.rs      自动检测、每工程设置、SSH 命令
   editor.rs      String 文档 + egui TextBuffer 适配 + 保存
@@ -163,3 +170,5 @@ cargo run
 ```
 
 测试覆盖自动检测、SSH 命令构造、CRLF 保存、文件树展开、ANSI 解析和后台命令执行等。
+
+面向后续开发者和 AI 代理的工程约定、架构与验证清单见 [AGENTS.md](AGENTS.md)。

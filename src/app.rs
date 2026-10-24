@@ -1,4 +1,4 @@
-//! MiniEIDE application shell: three-pane layout, tabs, build output and settings.
+//! Simple embedded application shell: workspace, setup steps, tabs and build output.
 
 mod ui;
 
@@ -10,15 +10,17 @@ use eframe::egui::{
     self, Align, Button, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText,
     ScrollArea, Sense, Stroke, ViewportCommand,
 };
+#[cfg(target_os = "windows")]
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::build::{BuildController, BuildOutcome, LastBuild, TaskKind};
-use crate::config::{autodetect, detected_tool, settings_path, BuildConfig, BuildTarget, Settings};
+use crate::config::{detected_tool, settings_path, BuildConfig, BuildTarget, Settings, APP_NAME};
 use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::highlight::{self, Highlighter};
 use crate::log::Severity;
 use crate::theme;
-use crate::util::{self, format_duration, project_key, truncate_chars};
+use crate::util::{self, format_duration, project_key};
 
 struct Project {
     root: PathBuf,
@@ -38,6 +40,7 @@ impl Project {
 
 struct SettingsDraft {
     config: BuildConfig,
+    extra_paths_text: String,
     font_size: f32,
     word_wrap: bool,
     auto_scroll_output: bool,
@@ -65,7 +68,6 @@ struct Toast {
 
 enum Action {
     OpenPicker,
-    OpenProject(PathBuf),
     OpenFile(PathBuf),
     SelectTab(usize),
     CloseTab(usize),
@@ -97,6 +99,8 @@ pub struct App {
     allow_close: bool,
     focus_editor: bool,
     last_title: String,
+    native_theme_requested: bool,
+    native_titlebar_styled: bool,
 }
 
 impl App {
@@ -120,6 +124,8 @@ impl App {
             allow_close: false,
             focus_editor: false,
             last_title: String::new(),
+            native_theme_requested: false,
+            native_titlebar_styled: false,
             settings,
         };
         app.build.auto_scroll = app.settings.auto_scroll_output;
@@ -382,6 +388,7 @@ impl App {
 
     fn open_settings(&mut self) {
         self.settings_draft = Some(SettingsDraft {
+            extra_paths_text: self.build_config.extra_paths.join("\n"),
             config: self.build_config.clone(),
             font_size: self.settings.font_size,
             word_wrap: self.settings.word_wrap,
@@ -518,7 +525,6 @@ impl App {
         for action in actions {
             match action {
                 Action::OpenPicker => self.pick_project_folder(),
-                Action::OpenProject(path) => self.request_open_project(path),
                 Action::OpenFile(path) => self.open_file(path),
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
@@ -571,6 +577,29 @@ impl App {
         }
     }
 
+    fn style_native_window(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        if !self.native_theme_requested {
+            ctx.send_viewport_cmd(ViewportCommand::SetTheme(egui::SystemTheme::Dark));
+            self.native_theme_requested = true;
+        }
+
+        #[cfg(target_os = "windows")]
+        if !self.native_titlebar_styled {
+            if let Ok(handle) = frame.window_handle() {
+                if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+                    style_windows_titlebar(win32.hwnd.get());
+                    self.native_titlebar_styled = true;
+                    ctx.request_repaint();
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = frame;
+            self.native_titlebar_styled = true;
+        }
+    }
+
     fn sync_title(&mut self, ctx: &egui::Context) {
         let title = if let Some(project) = &self.project {
             let file = self
@@ -578,9 +607,9 @@ impl App {
                 .map(|doc| format!("{} — ", doc.name))
                 .unwrap_or_default();
             let dirty = if self.has_unsaved() { " ●" } else { "" };
-            format!("{file}{}{dirty} — MiniEIDE", project.name)
+            format!("{file}{}{dirty} — {APP_NAME}", project.name)
         } else {
-            "MiniEIDE — 嵌入式极简工作台".to_owned()
+            APP_NAME.to_owned()
         };
         if title != self.last_title {
             self.last_title = title.clone();
@@ -635,22 +664,19 @@ fn same_path(a: &Path, b: &Path) -> bool {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.build.poll();
         self.handle_close_request(&ctx);
         self.handle_shortcuts(&ctx);
         self.handle_dropped_files(&ctx);
+        self.style_native_window(&ctx, frame);
 
         let mut actions = Vec::new();
 
-        self.show_top_bar(ui, &mut actions);
-        self.show_status_bar(ui);
-
-        if self.project.is_some() {
-            self.show_output_panel(ui, &mut actions);
-            self.show_side_panel(ui, &mut actions);
-        }
+        self.show_action_rail(ui, &mut actions);
+        self.show_output_panel(ui, &mut actions);
+        self.show_side_panel(ui, &mut actions);
         self.show_center(ui, &mut actions);
 
         if self.settings_draft.is_some() {
@@ -692,203 +718,214 @@ fn toast_life(severity: Severity) -> Duration {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn style_windows_titlebar(hwnd: isize) {
+    use std::ffi::c_void;
+
+    const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+    const DWMWA_USE_IMMERSIVE_DARK_MODE_OLD: u32 = 19;
+    const DWMWA_BORDER_COLOR: u32 = 34;
+    const DWMWA_CAPTION_COLOR: u32 = 35;
+    const DWMWA_TEXT_COLOR: u32 = 36;
+
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: isize,
+            attribute: u32,
+            value: *const c_void,
+            value_size: u32,
+        ) -> i32;
+    }
+
+    fn colorref(color: Color32) -> u32 {
+        u32::from(color.r()) | (u32::from(color.g()) << 8) | (u32::from(color.b()) << 16)
+    }
+
+    let dark = 1_i32;
+    unsafe {
+        let result = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            (&dark as *const i32).cast(),
+            std::mem::size_of::<i32>() as u32,
+        );
+        if result != 0 {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
+                (&dark as *const i32).cast(),
+                std::mem::size_of::<i32>() as u32,
+            );
+        }
+
+        let caption = colorref(theme::PANEL);
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CAPTION_COLOR,
+            (&caption as *const u32).cast(),
+            std::mem::size_of::<u32>() as u32,
+        );
+        let border = colorref(theme::BORDER_SOFT);
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            (&border as *const u32).cast(),
+            std::mem::size_of::<u32>() as u32,
+        );
+        let text = colorref(theme::TEXT);
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TEXT_COLOR,
+            (&text as *const u32).cast(),
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
+}
+
 impl App {
-    fn show_top_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    fn show_action_rail(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let running = self.build.is_running();
         let has_project = self.project.is_some();
-        let mode = self.build_config.mode_summary();
         let can_build = has_project && !running && self.build_config.has_command(TaskKind::Build);
         let can_clean = has_project && !running && self.build_config.has_command(TaskKind::Clean);
         let can_rebuild =
             has_project && !running && self.build_config.has_command(TaskKind::Rebuild);
         let can_flash = has_project && !running && self.build_config.has_command(TaskKind::Flash);
-        let (status_color, status_text) = self.build_status();
-        let project_info = self.project.as_ref().map(|project| {
-            (
-                truncate_chars(&project.name, 24),
-                util::display_path(&project.root),
-            )
-        });
-        let dirty = self.dirty_count();
 
-        egui::Panel::top("mini_eide_top_bar")
-            .exact_size(58.0)
+        egui::Panel::right("simple_embedded_action_rail")
+            .exact_size(104.0)
             .frame(
                 Frame::new()
                     .fill(theme::PANEL)
-                    .inner_margin(Margin::symmetric(14, 8))
+                    .inner_margin(Margin::symmetric(10, 12))
                     .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT)),
             )
             .show_inside(ui, |ui| {
-                ui.horizontal_centered(|ui| {
-                    brand(ui);
+                ui.spacing_mut().interact_size.y = 30.0;
+                ui.vertical_centered(|ui| {
+                    let width = ui.available_width();
 
-                    ui.add_space(8.0);
-                    if let Some((name, path)) = &project_info {
-                        project_chip(ui, name, &mode, path, dirty > 0);
-                        ui.add_space(4.0);
-                        let response = ui.add(theme::secondary_button("打开工程"));
-                        if response.clicked() {
-                            actions.push(Action::OpenPicker);
+                    if running {
+                        let stop = egui::Button::new(
+                            RichText::new("停止")
+                                .size(12.5)
+                                .strong()
+                                .color(theme::ERROR),
+                        )
+                        .fill(theme::ERROR.gamma_multiply(0.13))
+                        .stroke(Stroke::new(1.0_f32, theme::ERROR.gamma_multiply(0.55)))
+                        .corner_radius(6)
+                        .min_size(egui::vec2(width, 34.0));
+                        if ui.add(stop).on_hover_text("终止构建进程树").clicked() {
+                            actions.push(Action::StopTask);
                         }
-                        response.on_hover_text("打开另一个工程文件夹 (Ctrl+O)");
+                        ui.add_space(8.0);
+                        ui.spinner();
                     } else {
-                        let response = ui.add(theme::primary_button("打开工程文件夹"));
-                        if response.clicked() {
-                            actions.push(Action::OpenPicker);
-                        }
-                        response.on_hover_text("直接选择任意文件夹作为工程 (Ctrl+O)");
-                    }
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(theme::ghost_button("设置"))
-                            .on_hover_text("构建命令与编辑器设置 (Ctrl+,)")
-                            .clicked()
-                        {
-                            actions.push(Action::OpenSettings);
-                        }
-
-                        ui.add_space(4.0);
-                        if has_project && running {
-                            let stop = egui::Button::new(
-                                RichText::new("停止")
-                                    .size(12.0)
-                                    .strong()
-                                    .color(theme::ERROR),
-                            )
-                            .fill(theme::ERROR.gamma_multiply(0.13))
-                            .stroke(Stroke::new(1.0_f32, theme::ERROR.gamma_multiply(0.55)))
-                            .corner_radius(6)
-                            .min_size(egui::vec2(56.0, 28.0));
-                            if ui.add(stop).on_hover_text("终止构建进程树").clicked() {
-                                actions.push(Action::StopTask);
-                            }
-                            ui.spinner();
-                            ui.label(RichText::new(status_text).size(11.5).color(status_color));
+                        let build_tip = if can_build {
+                            "构建工程 (Ctrl+B)"
                         } else if has_project {
-                            let tip = if self.build_config.has_command(TaskKind::Flash) {
-                                "调用配置的烧录命令（在本地工程目录执行）"
-                            } else {
-                                "尚未配置烧录命令，请打开设置填写"
-                            };
-                            let response =
-                                ui.add_enabled(can_flash, theme::secondary_button("烧录"));
-                            let response = if can_flash {
-                                response.on_hover_text(tip)
-                            } else {
-                                response.on_disabled_hover_text(tip)
-                            };
-                            if response.clicked() {
-                                actions.push(Action::Run(TaskKind::Flash));
-                            }
-
-                            let rebuild_tip = if can_rebuild {
-                                "清理后重新构建 (Ctrl+Shift+B)"
-                            } else {
-                                "Rebuild 命令尚未配置"
-                            };
-                            let response =
-                                ui.add_enabled(can_rebuild, theme::secondary_button("重构建"));
-                            let response = if can_rebuild {
-                                response.on_hover_text(rebuild_tip)
-                            } else {
-                                response.on_disabled_hover_text(rebuild_tip)
-                            };
-                            if response.clicked() {
-                                actions.push(Action::Run(TaskKind::Rebuild));
-                            }
-
-                            let clean_tip = if can_clean {
-                                "执行 Clean 命令"
-                            } else {
-                                "Clean 命令尚未配置"
-                            };
-                            let response =
-                                ui.add_enabled(can_clean, theme::secondary_button("清理"));
-                            let response = if can_clean {
-                                response.on_hover_text(clean_tip)
-                            } else {
-                                response.on_disabled_hover_text(clean_tip)
-                            };
-                            if response.clicked() {
-                                actions.push(Action::Run(TaskKind::Clean));
-                            }
-
-                            let build_tip = if can_build {
-                                "构建工程 (Ctrl+B)"
-                            } else if has_project {
-                                "Build 命令尚未配置，点击“设置”填写"
-                            } else {
-                                "请先打开工程"
-                            };
-                            let response = ui.add_enabled(can_build, theme::primary_button("构建"));
-                            let response = if can_build {
-                                response.on_hover_text(build_tip)
-                            } else {
-                                response.on_disabled_hover_text(build_tip)
-                            };
-                            if response.clicked() {
-                                actions.push(Action::Run(TaskKind::Build));
-                            }
+                            "请先在左上角工程卡片中配置构建环境"
+                        } else {
+                            "请先导入工程并配置构建环境"
+                        };
+                        let button = if can_build {
+                            theme::primary_button("构建").min_size(egui::vec2(width, 34.0))
+                        } else {
+                            egui::Button::new(
+                                RichText::new("构建").color(theme::TEXT_FAINT).size(12.5),
+                            )
+                            .fill(theme::SURFACE)
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                            .corner_radius(6)
+                            .min_size(egui::vec2(width, 34.0))
+                        };
+                        let response = ui.add_enabled(can_build, button);
+                        let response = if can_build {
+                            response.on_hover_text(build_tip)
+                        } else {
+                            response.on_disabled_hover_text(build_tip)
+                        };
+                        if response.clicked() {
+                            actions.push(Action::Run(TaskKind::Build));
                         }
-                    });
-                });
-            });
-    }
 
-    fn show_status_bar(&mut self, ui: &mut egui::Ui) {
-        let (status_color, status_text) = self.build_status();
-        let mode = if self.project.is_some() {
-            self.build_config.mode_summary()
-        } else {
-            "未打开工程".to_owned()
-        };
-        let active = self.active_document();
-        let dirty = self.dirty_count();
-        let mut right_parts: Vec<String> = Vec::new();
-        if let Some(doc) = active {
-            right_parts.push(format!("行 {}, 列 {}", doc.cursor_line, doc.cursor_column));
-            right_parts.push("UTF-8".to_owned());
-            right_parts.push(doc.newline_label().to_owned());
-            right_parts.push(doc.language.clone());
-            right_parts.push(format!("{} 行", doc.line_count()));
-        } else if self.project.is_some() {
-            right_parts.push("从左侧打开文件".to_owned());
-        } else {
-            right_parts.push("Ctrl+O 打开工程".to_owned());
-        }
+                        ui.add_space(6.0);
+                        let clean_tip = if can_clean {
+                            "执行 Clean 命令"
+                        } else if has_project {
+                            "Clean 命令尚未配置"
+                        } else {
+                            "请先导入工程并配置构建环境"
+                        };
+                        let response = ui
+                            .add_enabled_ui(can_clean, |ui| {
+                                ui.add_sized([width, 30.0], theme::secondary_button("清理"))
+                            })
+                            .inner;
+                        let response = if can_clean {
+                            response.on_hover_text(clean_tip)
+                        } else {
+                            response.on_disabled_hover_text(clean_tip)
+                        };
+                        if response.clicked() {
+                            actions.push(Action::Run(TaskKind::Clean));
+                        }
 
-        egui::Panel::bottom("mini_eide_status_bar")
-            .exact_size(24.0)
-            .frame(
-                Frame::new()
-                    .fill(theme::PANEL)
-                    .inner_margin(Margin::symmetric(10, 2))
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT)),
-            )
-            .show_inside(ui, |ui| {
-                ui.spacing_mut().interact_size.y = 18.0;
-                ui.horizontal_centered(|ui| {
-                    colored_dot(ui, status_color, 6.0);
-                    ui.label(RichText::new(status_text).size(11.0).color(status_color));
-                    ui.label(RichText::new("·").size(11.0).color(theme::BORDER));
-                    ui.label(RichText::new(mode).size(10.5).color(theme::TEXT_FAINT));
-                    if dirty > 0 {
-                        ui.label(
-                            RichText::new(format!("· {dirty} 个文件未保存"))
-                                .size(10.5)
-                                .color(theme::WARNING),
-                        );
+                        ui.add_space(6.0);
+                        let rebuild_tip = if can_rebuild {
+                            "清理后重新构建 (Ctrl+Shift+B)"
+                        } else if has_project {
+                            "Rebuild 命令尚未配置"
+                        } else {
+                            "请先导入工程并配置构建环境"
+                        };
+                        let response = ui
+                            .add_enabled_ui(can_rebuild, |ui| {
+                                ui.add_sized([width, 30.0], theme::secondary_button("重构建"))
+                            })
+                            .inner;
+                        let response = if can_rebuild {
+                            response.on_hover_text(rebuild_tip)
+                        } else {
+                            response.on_disabled_hover_text(rebuild_tip)
+                        };
+                        if response.clicked() {
+                            actions.push(Action::Run(TaskKind::Rebuild));
+                        }
+
+                        ui.add_space(6.0);
+                        let flash_tip = if can_flash {
+                            "调用配置的烧录命令（在本地工程目录执行）"
+                        } else if has_project {
+                            "尚未配置烧录命令，请打开设置填写"
+                        } else {
+                            "请先导入工程并配置构建环境"
+                        };
+                        let response = ui
+                            .add_enabled_ui(can_flash, |ui| {
+                                ui.add_sized([width, 30.0], theme::secondary_button("烧录"))
+                            })
+                            .inner;
+                        let response = if can_flash {
+                            response.on_hover_text(flash_tip)
+                        } else {
+                            response.on_disabled_hover_text(flash_tip)
+                        };
+                        if response.clicked() {
+                            actions.push(Action::Run(TaskKind::Flash));
+                        }
                     }
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(right_parts.join("   ·   "))
-                                .size(10.5)
-                                .color(theme::TEXT_FAINT),
-                        );
-                    });
+                    ui.add_space((ui.available_height() - 30.0).max(0.0));
+                    if ui
+                        .add_sized([width, 30.0], theme::ghost_button("设置"))
+                        .on_hover_text("构建环境与编辑器设置 (Ctrl+,)")
+                        .clicked()
+                    {
+                        actions.push(Action::OpenSettings);
+                    }
                 });
             });
     }
@@ -902,7 +939,7 @@ impl App {
         let mut toggle_output = false;
         let (status_color, status_text) = self.build_status();
 
-        let mut panel = egui::Panel::bottom("mini_eide_build_output");
+        let mut panel = egui::Panel::bottom("simple_embedded_build_output");
         panel = if open {
             panel
                 .resizable(true)
@@ -1011,45 +1048,16 @@ impl App {
                     });
 
                 if open {
-                    let body_height = ui.available_height();
                     Frame::new()
                         .fill(theme::EDITOR_BG)
                         .inner_margin(Margin::symmetric(10, 5))
                         .show(ui, |ui| {
                             ui.set_min_height(170.0);
-                            if self.build.log.is_empty() {
-                                let hint = if self.project.is_none() {
-                                    "打开工程后，构建输出会显示在这里。"
-                                } else if self.build_config.build_command.trim().is_empty() {
-                                    "尚未配置构建命令。点击“设置”填写 Build / Clean / Rebuild。"
-                                } else {
-                                    "尚无构建输出。点击上方「构建」开始，或按 Ctrl+B。"
-                                };
-                                ui.vertical_centered(|ui| {
-                                    ui.add_space((body_height * 0.10).clamp(8.0, 24.0));
-                                    ui.label(
-                                        RichText::new("▶").size(20.0).color(theme::TEXT_FAINT),
-                                    );
-                                    ui.label(
-                                        RichText::new(hint).size(11.5).color(theme::TEXT_FAINT),
-                                    );
-                                    if !self.build_config.build_command.trim().is_empty() {
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "$ {}",
-                                                self.build_config.build_command
-                                            ))
-                                            .monospace()
-                                            .size(10.5)
-                                            .color(theme::TEXT_FAINT),
-                                        );
-                                    }
-                                });
-                            } else {
+                            if !self.build.log.is_empty() {
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 let row_height = 18.0;
                                 let mut scroll = ScrollArea::vertical()
-                                    .id_salt("mini_eide_build_log")
+                                    .id_salt("simple_embedded_build_log")
                                     .auto_shrink([false, false]);
                                 if auto_scroll {
                                     scroll = scroll.stick_to_bottom(true);
@@ -1172,57 +1180,6 @@ impl App {
     }
 }
 
-fn brand(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), Sense::hover());
-    paint_logo(ui.painter(), rect);
-    ui.add_space(1.0);
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                ui.label(RichText::new("Mini").size(14.5).strong().color(theme::TEXT));
-                ui.label(
-                    RichText::new("EIDE")
-                        .size(14.5)
-                        .strong()
-                        .color(theme::ACCENT),
-                );
-            });
-            ui.label(
-                RichText::new("嵌入式极简工作台")
-                    .size(9.5)
-                    .color(theme::TEXT_FAINT),
-            );
-        });
-    });
-}
-
-fn project_chip(ui: &mut egui::Ui, name: &str, mode: &str, path: &str, dirty: bool) {
-    Frame::new()
-        .fill(theme::SURFACE)
-        .stroke(Stroke::new(1.0_f32, theme::BORDER))
-        .corner_radius(6)
-        .inner_margin(Margin::symmetric(9, 4))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                colored_dot(
-                    ui,
-                    if dirty {
-                        theme::WARNING
-                    } else {
-                        theme::SUCCESS
-                    },
-                    5.0,
-                );
-                ui.label(RichText::new(name).size(12.0).strong().color(theme::TEXT));
-                ui.label(RichText::new(mode).size(9.5).color(theme::TEXT_FAINT));
-            });
-        })
-        .response
-        .on_hover_text(path);
-}
-
 fn small_flat_button(text: &str, color: Color32) -> egui::Button<'static> {
     Button::new(RichText::new(text.to_owned()).size(10.5).color(color))
         .frame(false)
@@ -1233,55 +1190,4 @@ fn small_flat_button(text: &str, color: Color32) -> egui::Button<'static> {
 fn colored_dot(ui: &mut egui::Ui, color: Color32, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), Sense::hover());
     ui.painter().circle_filled(rect.center(), size * 0.5, color);
-}
-
-fn paint_logo(painter: &egui::Painter, rect: egui::Rect) {
-    let radius = (rect.width() * 0.24).round().clamp(3.0, 20.0) as u8;
-    painter.rect_filled(rect, CornerRadius::same(radius), theme::BORDER);
-    painter.rect_filled(
-        rect.shrink(1.0),
-        CornerRadius::same(radius.saturating_sub(1)),
-        theme::PANEL_RAISED,
-    );
-
-    let w = rect.width();
-    let h = rect.height();
-    let stroke = Stroke::new((w * 0.055).max(1.4), theme::ACCENT);
-    let left = rect.left();
-    let top = rect.top();
-    let cy = rect.center().y;
-
-    painter.line_segment(
-        [
-            egui::pos2(left + w * 0.45, top + h * 0.36),
-            egui::pos2(left + w * 0.34, cy),
-        ],
-        stroke,
-    );
-    painter.line_segment(
-        [
-            egui::pos2(left + w * 0.34, cy),
-            egui::pos2(left + w * 0.45, top + h * 0.64),
-        ],
-        stroke,
-    );
-    painter.line_segment(
-        [
-            egui::pos2(left + w * 0.55, top + h * 0.36),
-            egui::pos2(left + w * 0.66, cy),
-        ],
-        stroke,
-    );
-    painter.line_segment(
-        [
-            egui::pos2(left + w * 0.66, cy),
-            egui::pos2(left + w * 0.55, top + h * 0.64),
-        ],
-        stroke,
-    );
-    painter.circle_filled(
-        egui::pos2(left + w * 0.50, top + h * 0.50),
-        (w * 0.032).max(0.8),
-        theme::SUCCESS,
-    );
 }

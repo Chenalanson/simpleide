@@ -224,20 +224,6 @@ pub fn line_column_at_char(text: &str, char_index: usize) -> (usize, usize) {
     (line, column)
 }
 
-pub fn line_count(text: &str) -> usize {
-    text.bytes().filter(|byte| *byte == b'\n').count() + 1
-}
-
-pub fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        text.to_owned()
-    } else {
-        let mut value: String = text.chars().take(max_chars).collect();
-        value.push('…');
-        value
-    }
-}
-
 pub fn project_key(path: &Path) -> String {
     let value = path.to_string_lossy().replace('/', "\\");
     if cfg!(target_os = "windows") {

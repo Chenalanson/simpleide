@@ -1,4 +1,4 @@
-//! Visual identity for MiniEIDE.
+//! Visual identity for Simple embedded.
 
 use eframe::egui::{self, Color32, FontFamily, FontId, Stroke, TextStyle};
 
