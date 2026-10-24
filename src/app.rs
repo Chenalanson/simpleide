@@ -2,7 +2,7 @@
 
 mod ui;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,6 +23,7 @@ use crate::config::{
 use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::formatting;
+use crate::git::{self, GitStatus};
 use crate::highlight::{self, Highlighter};
 use crate::ignore::IgnoreRules;
 use crate::log::{LogFilter, Severity};
@@ -293,6 +294,7 @@ enum Action {
     SetEncoding(TextEncoding),
     ToggleReadOnly,
     FormatDocument,
+    OpenGitStatus,
     SelectTab(usize),
     CloseTab(usize),
     SaveActive,
@@ -333,6 +335,10 @@ pub struct App {
     diagnostics_revision: u64,
     dirty_signature: u64,
     autosave_since: Option<Instant>,
+    git: GitStatus,
+    git_line_marks: BTreeSet<usize>,
+    git_line_key: Option<(PathBuf, u64)>,
+    git_open: bool,
     left_split: f32,
     resource_open: bool,
     info_open: bool,
@@ -376,6 +382,10 @@ impl App {
             diagnostics_revision: u64::MAX,
             dirty_signature: 0,
             autosave_since: None,
+            git: GitStatus::default(),
+            git_line_marks: BTreeSet::new(),
+            git_line_key: None,
+            git_open: false,
             left_split,
             resource_open,
             info_open,
@@ -453,6 +463,9 @@ impl App {
         self.tabs.clear();
         self.active = None;
         self.focus_editor = false;
+        self.git_line_marks.clear();
+        self.git_line_key = None;
+        self.refresh_git_status();
         self.settings.remember_project(&root);
         self.settings.save();
 
@@ -694,6 +707,47 @@ impl App {
         }
     }
 
+    fn refresh_git_status(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.git = GitStatus::default();
+            self.git_line_marks.clear();
+            self.git_line_key = None;
+            return;
+        };
+        self.git = GitStatus::load(&root);
+        if let Some(tree) = &mut self.tree {
+            tree.set_git_status(&self.git);
+        }
+        self.git_line_key = None;
+        self.refresh_git_line_marks();
+    }
+
+    fn refresh_git_line_marks(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.git_line_marks.clear();
+            self.git_line_key = None;
+            return;
+        };
+        let Some(active) = self.active else {
+            self.git_line_marks.clear();
+            self.git_line_key = None;
+            return;
+        };
+        let Some(doc) = self.tabs.get(active) else {
+            return;
+        };
+        let key = (doc.path.clone(), doc.saved_revision);
+        if self.git_line_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.git_line_key = Some(key);
+        if self.git.is_repo {
+            self.git_line_marks = git::changed_lines(&root, &doc.path);
+        } else {
+            self.git_line_marks.clear();
+        }
+    }
+
     fn save_active(&mut self) -> bool {
         let Some(index) = self.active else {
             return true;
@@ -720,7 +774,7 @@ impl App {
             }
         }
         let name = doc.name.clone();
-        match doc.save() {
+        let saved = match doc.save() {
             Ok(()) => {
                 if let Some(err) = format_error {
                     self.set_toast(
@@ -736,7 +790,12 @@ impl App {
                 self.set_toast(format!("保存 {name} 失败：{err}"), Severity::Error);
                 false
             }
+        };
+        if saved {
+            self.git_line_key = None;
+            self.refresh_git_status();
         }
+        saved
     }
 
     fn save_all_dirty(&mut self) -> Result<usize, String> {
@@ -754,6 +813,9 @@ impl App {
             doc.save()
                 .map_err(|err| format!("保存 {} 失败：{err}", doc.name))?;
             saved += 1;
+        }
+        if saved > 0 {
+            self.refresh_git_status();
         }
         Ok(saved)
     }
@@ -1384,6 +1446,7 @@ impl App {
             find_prev,
             project_search_open,
             format_document,
+            git_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -1407,6 +1470,7 @@ impl App {
                 input.key_pressed(egui::Key::F3) && input.modifiers.shift,
                 command && input.modifiers.shift && input.key_pressed(egui::Key::F),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::I),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::G),
             )
         });
 
@@ -1466,6 +1530,10 @@ impl App {
                 self.project_search.use_regex = self.find.use_regex;
             }
         }
+        if git_open {
+            self.git_open = true;
+            self.refresh_git_status();
+        }
         if format_document {
             self.format_current_document();
         }
@@ -1475,6 +1543,10 @@ impl App {
         }
         if self.project_search.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.project_search.open = false;
+            self.focus_editor = true;
+        }
+        if self.git_open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.git_open = false;
             self.focus_editor = true;
         }
         if zoom_in || zoom_out {
@@ -1551,6 +1623,10 @@ impl App {
                 Action::SetEncoding(encoding) => self.set_encoding(encoding),
                 Action::ToggleReadOnly => self.toggle_read_only(),
                 Action::FormatDocument => self.format_current_document(),
+                Action::OpenGitStatus => {
+                    self.git_open = true;
+                    self.refresh_git_status();
+                }
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
                         self.active = Some(index);
@@ -1575,6 +1651,7 @@ impl App {
                     if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
                         self.project_meta = ProjectMeta::detect(&root);
                     }
+                    self.refresh_git_status();
                 }
                 Action::ToggleHidden => {
                     self.settings.show_hidden = !self.settings.show_hidden;
@@ -1747,6 +1824,9 @@ impl eframe::App for App {
         if self.project_search.open && !modal_open {
             self.show_project_search(&ctx, &mut actions);
         }
+        if self.git_open && !modal_open {
+            self.show_git_status(&ctx, &mut actions);
+        }
 
         if self.settings_draft.is_none()
             && self.pending.is_none()
@@ -1757,6 +1837,7 @@ impl eframe::App for App {
             self.apply_actions(&ctx, actions);
         }
 
+        self.refresh_git_line_marks();
         self.tick_autosave(&ctx);
         self.show_toast(&ctx);
         self.sync_title(&ctx);

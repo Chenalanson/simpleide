@@ -7,6 +7,7 @@ mod config;
 mod editor;
 mod file_tree;
 mod formatting;
+mod git;
 mod highlight;
 mod ignore;
 mod indent;

@@ -1,10 +1,11 @@
 //! Lazy, cached project file tree with custom-painted rows.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Align2, Color32, FontId, Sense, Shape, Stroke};
 
+use crate::git::{status_badges, GitStatus};
 use crate::ignore::IgnoreRules;
 use crate::theme;
 use crate::util::file_name;
@@ -30,6 +31,7 @@ pub struct FileTree {
     respect_gitignore: bool,
     extra_ignore: String,
     ignore: IgnoreRules,
+    git_badges: BTreeMap<String, char>,
 }
 
 impl FileTree {
@@ -48,6 +50,7 @@ impl FileTree {
             respect_gitignore,
             extra_ignore: extra_ignore.to_owned(),
             ignore,
+            git_badges: BTreeMap::new(),
         };
         tree.expanded.insert(tree.root.clone());
         tree.warm_root();
@@ -58,6 +61,10 @@ impl FileTree {
         self.children.clear();
         self.ignore = IgnoreRules::load(&self.root, self.respect_gitignore, &self.extra_ignore);
         self.warm_root();
+    }
+
+    pub fn set_git_status(&mut self, status: &GitStatus) {
+        self.git_badges = status_badges(status);
     }
 
     pub fn set_ignore_rules(&mut self, respect_gitignore: bool, extra_ignore: &str) {
@@ -111,7 +118,7 @@ impl FileTree {
             }
         };
         let expanded = self.expanded.contains(&root);
-        let row = row(ui, &root_name, true, expanded, 0, false, true);
+        let row = row(ui, &root_name, true, expanded, 0, false, None);
 
         if row.response.clicked() {
             if expanded {
@@ -160,6 +167,10 @@ impl FileTree {
         for entry in entries {
             let selected = active == Some(entry.path.as_path());
             let is_expanded = entry.is_dir && self.expanded.contains(&entry.path);
+            let badge = self
+                .git_badges
+                .get(&crate::util::project_key(&entry.path))
+                .copied();
             let row = row(
                 ui,
                 &entry.name,
@@ -167,7 +178,7 @@ impl FileTree {
                 is_expanded,
                 depth,
                 selected,
-                entry.is_dir,
+                badge,
             );
 
             if row.response.clicked() {
@@ -249,7 +260,7 @@ fn row(
     is_expanded: bool,
     depth: usize,
     selected: bool,
-    _expandable: bool,
+    badge: Option<char>,
 ) -> RowResponse {
     let height = 22.0;
     let (rect, response) =
@@ -306,6 +317,8 @@ fn row(
         let text_x = icon_x + 16.0;
         let text_color = if selected {
             theme::TEXT
+        } else if let Some(badge) = badge {
+            crate::git::badge_color(badge)
         } else {
             theme::TEXT_DIM
         };
@@ -316,6 +329,15 @@ fn row(
             FontId::proportional(13.0),
             text_color,
         );
+        if let Some(badge) = badge {
+            painter.text(
+                egui::pos2(rect.right() - 8.0, rect.center().y),
+                Align2::RIGHT_CENTER,
+                badge,
+                FontId::monospace(10.0),
+                crate::git::badge_color(badge),
+            );
+        }
     }
 
     RowResponse { response }

@@ -231,6 +231,20 @@ impl App {
                                                 {
                                                     actions.push(Action::ToggleHidden);
                                                 }
+                                                if ui
+                                                    .add(
+                                                        Button::new(
+                                                            RichText::new("Git")
+                                                                .size(12.0)
+                                                                .color(theme::TEXT_FAINT),
+                                                        )
+                                                        .frame(false),
+                                                    )
+                                                    .on_hover_text("查看 Git 状态 (Ctrl+Shift+G)")
+                                                    .clicked()
+                                                {
+                                                    actions.push(Action::OpenGitStatus);
+                                                }
                                             },
                                         );
                                     }
@@ -1139,6 +1153,129 @@ impl App {
         }
     }
 
+    pub(super) fn show_git_status(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let root = self.project.as_ref().map(|project| project.root.clone());
+        let mut open = self.git_open;
+        let mut refresh = false;
+        let mut clicked = None;
+        let git = self.git.clone();
+        egui::Window::new("Git 状态")
+            .id(Id::new("simple_embedded_git_status"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([640.0, 440.0])
+            .min_height(360.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .inner_margin(Margin::same(12))
+                    .corner_radius(6),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(600.0);
+                ui.set_min_height(340.0);
+                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Git 状态")
+                            .size(16.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("×", theme::TEXT_DIM))
+                            .on_hover_text("关闭")
+                            .clicked()
+                        {
+                            open = false;
+                        }
+                        if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
+                            refresh = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                if !git.is_repo {
+                    ui.label(
+                        RichText::new(
+                            git.error
+                                .clone()
+                                .unwrap_or_else(|| "当前工程不是 Git 仓库".to_owned()),
+                        )
+                        .size(11.5)
+                        .color(theme::TEXT_FAINT),
+                    );
+                } else {
+                    ui.horizontal(|ui| {
+                        if !git.branch.is_empty() {
+                            ui.label(
+                                RichText::new(format!("分支 {}", git.branch))
+                                    .size(11.5)
+                                    .color(theme::ACCENT),
+                            );
+                        }
+                        ui.label(
+                            RichText::new(format!("{} 个变更", git.files.len()))
+                                .size(11.5)
+                                .color(theme::TEXT_FAINT),
+                        );
+                    });
+                    ui.separator();
+                    if git.files.is_empty() {
+                        ui.label(
+                            RichText::new("工作区干净")
+                                .size(11.5)
+                                .color(theme::TEXT_FAINT),
+                        );
+                    } else {
+                        ScrollArea::vertical()
+                            .id_salt("simple_embedded_git_files")
+                            .max_height(360.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for file in &git.files {
+                                    let relative = root
+                                        .as_ref()
+                                        .map(|root| util::relative_display(root, &file.path))
+                                        .unwrap_or_else(|| util::display_path(&file.path));
+                                    let badge =
+                                        crate::git::badge_for_code(&file.code).unwrap_or('?');
+                                    let color = crate::git::badge_color(badge);
+                                    let label = format!("{}  {}", badge, relative);
+                                    if ui
+                                        .selectable_label(
+                                            false,
+                                            RichText::new(label)
+                                                .size(11.5)
+                                                .monospace()
+                                                .color(color),
+                                        )
+                                        .on_hover_text(format!(
+                                            "{}  {}",
+                                            file.code.trim(),
+                                            util::display_path(&file.path)
+                                        ))
+                                        .clicked()
+                                    {
+                                        clicked = Some(file.path.clone());
+                                    }
+                                }
+                            });
+                    }
+                }
+            });
+        self.git_open = open;
+        if refresh {
+            self.refresh_git_status();
+        }
+        if let Some(path) = clicked {
+            actions.push(Action::OpenAt(path.to_string_lossy().into_owned(), 1, 1));
+        }
+    }
+
     fn show_code_editor(&mut self, ui: &mut egui::Ui) {
         let Some(active) = self.active else {
             return;
@@ -1156,6 +1293,21 @@ impl App {
                     .filter(|diagnostic| same_path(&diagnostic.path, &doc.path))
                     .map(|diagnostic| (diagnostic.line, diagnostic.severity))
                     .collect::<BTreeMap<usize, Severity>>()
+            })
+            .unwrap_or_default();
+        let git_marks = self
+            .tabs
+            .get(active)
+            .map(|doc| {
+                if self
+                    .git_line_key
+                    .as_ref()
+                    .is_some_and(|(path, _)| same_path(path, &doc.path))
+                {
+                    self.git_line_marks.clone()
+                } else {
+                    BTreeSet::new()
+                }
             })
             .unwrap_or_default();
         let Some(doc) = self.tabs.get_mut(active) else {
@@ -1450,6 +1602,16 @@ impl App {
                             ),
                             CornerRadius::same(1),
                             theme::ACCENT,
+                        );
+                    }
+                    if git_marks.contains(&line_no) {
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                egui::pos2(gutter_rect.left() + 7.0, top + 3.0),
+                                egui::vec2(2.0, (row.size.y - 6.0).max(4.0)),
+                            ),
+                            CornerRadius::same(1),
+                            theme::WARNING,
                         );
                     }
                     if let Some(severity) = markers.get(&line_no) {
