@@ -24,7 +24,8 @@
 - 多文件 Tab、脏标记、关闭前提示保存
 - 文本编辑：`Ctrl+S` 保存、Tab 缩进、撤销/重做、复制粘贴等由 egui 文本编辑控件提供
 - syntect 语法高亮：C/C++/ASM/Rust/Makefile/CMake/TOML/JSON 等
-- 自动换行开关、代码字号调节、CRLF/LF 保持
+- 自动换行开关、代码字号调节、相对行号、空白字符、换行标尺、CRLF/LF 保持
+- 查找 / 替换：大小写、正则、上下一个、全部替换，匹配高亮
 - Build / Clean / Rebuild / Flash 在后台线程执行，UI 不冻结
 - 实时抓取 stdout/stderr，解析 ANSI 颜色，按 `error` / `warning` 自动标红/标黄
 - 构建前自动保存所有脏文件；可停止构建进程树

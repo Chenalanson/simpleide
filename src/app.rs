@@ -64,6 +64,146 @@ struct MetaDraft {
     note: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+struct FindMatch {
+    start_byte: usize,
+    end_byte: usize,
+    start_char: usize,
+}
+
+struct FindState {
+    open: bool,
+    replace_open: bool,
+    query: String,
+    replacement: String,
+    case_sensitive: bool,
+    use_regex: bool,
+    matches: Vec<FindMatch>,
+    active: usize,
+    error: Option<String>,
+    compiled: Option<regex::Regex>,
+    version: u64,
+    last_revision: u64,
+    dirty: bool,
+    focus_query: bool,
+}
+
+impl Default for FindState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            replace_open: false,
+            query: String::new(),
+            replacement: String::new(),
+            case_sensitive: false,
+            use_regex: false,
+            matches: Vec::new(),
+            active: 0,
+            error: None,
+            compiled: None,
+            version: 0,
+            last_revision: u64::MAX,
+            dirty: false,
+            focus_query: false,
+        }
+    }
+}
+
+impl FindState {
+    fn ensure_matches(&mut self, text: &str, revision: u64) {
+        if !self.open {
+            self.matches.clear();
+            self.compiled = None;
+            self.last_revision = revision;
+            return;
+        }
+        if !self.dirty && self.last_revision == revision {
+            return;
+        }
+        self.rebuild(text, revision);
+    }
+
+    fn rebuild(&mut self, text: &str, revision: u64) {
+        self.matches.clear();
+        self.compiled = None;
+        self.error = None;
+        self.active = 0;
+        self.last_revision = revision;
+        self.dirty = false;
+        self.version = self.version.wrapping_add(1);
+        if self.query.is_empty() {
+            return;
+        }
+        let pattern = if self.use_regex {
+            self.query.clone()
+        } else {
+            regex::escape(&self.query)
+        };
+        let compiled = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(!self.case_sensitive)
+            .build();
+        let compiled = match compiled {
+            Ok(compiled) => compiled,
+            Err(err) => {
+                self.error = Some(err.to_string());
+                return;
+            }
+        };
+        for matched in compiled.find_iter(text) {
+            if matched.start() == matched.end() {
+                continue;
+            }
+            let start_char = text[..matched.start()].chars().count();
+            self.matches.push(FindMatch {
+                start_byte: matched.start(),
+                end_byte: matched.end(),
+                start_char,
+            });
+        }
+        self.compiled = Some(compiled);
+    }
+
+    fn current(&self) -> Option<&FindMatch> {
+        self.matches.get(self.active)
+    }
+
+    fn decorations(&self) -> Vec<(std::ops::Range<usize>, bool)> {
+        self.matches
+            .iter()
+            .enumerate()
+            .map(|(index, matched)| (matched.start_byte..matched.end_byte, index == self.active))
+            .collect()
+    }
+
+    fn select_next(&mut self, cursor: usize, forward: bool) -> bool {
+        if self.matches.is_empty() {
+            return false;
+        }
+        let matches = self
+            .matches
+            .iter()
+            .enumerate()
+            .filter(|(_, matched)| matched.start_char >= cursor)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let next = if forward {
+            matches.first().copied().unwrap_or(0)
+        } else {
+            let before = self
+                .matches
+                .iter()
+                .enumerate()
+                .filter(|(_, matched)| matched.start_char < cursor)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            before.last().copied().unwrap_or(self.matches.len() - 1)
+        };
+        self.active = next;
+        self.version = self.version.wrapping_add(1);
+        true
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MetaListField {
     Includes,
@@ -148,6 +288,7 @@ pub struct App {
     meta_add: Option<MetaAddDraft>,
     build_options_draft: Option<BuildOptions>,
     build_options_tab: BuildOptionsTab,
+    find: FindState,
     left_split: f32,
     resource_open: bool,
     info_open: bool,
@@ -184,6 +325,7 @@ impl App {
             meta_add: None,
             build_options_draft: None,
             build_options_tab: BuildOptionsTab::default(),
+            find: FindState::default(),
             left_split,
             resource_open,
             info_open,
@@ -467,6 +609,127 @@ impl App {
             )));
         state.store(ctx, editor_id);
         self.focus_editor = true;
+    }
+
+    fn find_next(&mut self, ctx: &egui::Context, forward: bool) {
+        let Some(active) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(active) else {
+            return;
+        };
+        let revision = doc.buffer.revision();
+        self.find.ensure_matches(doc.buffer.as_string(), revision);
+        if self.find.error.is_some() {
+            self.set_toast("查找正则表达式有误", Severity::Warning);
+            return;
+        }
+        if self.find.matches.is_empty() {
+            self.set_toast("未找到匹配项", Severity::Info);
+            return;
+        }
+        let cursor = doc.cursor_index;
+        let mut from = cursor;
+        if forward
+            && self
+                .find
+                .current()
+                .is_some_and(|matched| matched.start_char == cursor)
+        {
+            from = cursor.saturating_add(1);
+        }
+        if self.find.select_next(from, forward) {
+            let target = self
+                .find
+                .current()
+                .map(|matched| matched.start_char)
+                .unwrap_or(0);
+            doc.update_cursor(target);
+            set_editor_cursor(ctx, &doc.path, target);
+        }
+    }
+
+    fn replace_current_match(&mut self, ctx: &egui::Context) {
+        let Some(active) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(active) else {
+            return;
+        };
+        let revision = doc.buffer.revision();
+        self.find.ensure_matches(doc.buffer.as_string(), revision);
+        let Some(matched) = self.find.current().cloned() else {
+            self.set_toast("没有可替换的匹配项", Severity::Info);
+            return;
+        };
+        let text = doc.buffer.as_string().to_owned();
+        let replacement = if self.find.use_regex {
+            self.find
+                .compiled
+                .as_ref()
+                .map(|regex| {
+                    regex
+                        .replace(
+                            &text[matched.start_byte..matched.end_byte],
+                            self.find.replacement.as_str(),
+                        )
+                        .into_owned()
+                })
+                .unwrap_or_else(|| self.find.replacement.clone())
+        } else {
+            self.find.replacement.clone()
+        };
+        let mut new_text = String::with_capacity(text.len() + replacement.len());
+        new_text.push_str(&text[..matched.start_byte]);
+        new_text.push_str(&replacement);
+        new_text.push_str(&text[matched.end_byte..]);
+        let new_cursor = matched.start_char + replacement.chars().count();
+        doc.buffer.set_text(new_text);
+        doc.update_cursor(new_cursor);
+        set_editor_cursor(ctx, &doc.path, new_cursor);
+        self.find.dirty = true;
+        self.find
+            .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+        self.find.select_next(new_cursor, true);
+        self.set_toast("已替换 1 处", Severity::Success);
+    }
+
+    fn replace_all_matches(&mut self, ctx: &egui::Context) {
+        let Some(active) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(active) else {
+            return;
+        };
+        let revision = doc.buffer.revision();
+        self.find.ensure_matches(doc.buffer.as_string(), revision);
+        let count = self.find.matches.len();
+        if count == 0 {
+            self.set_toast("没有可替换的匹配项", Severity::Info);
+            return;
+        }
+        let text = doc.buffer.as_string().to_owned();
+        let new_text = if let Some(regex) = &self.find.compiled {
+            if self.find.use_regex {
+                regex
+                    .replace_all(&text, self.find.replacement.as_str())
+                    .into_owned()
+            } else {
+                regex
+                    .replace_all(&text, regex::NoExpand(&self.find.replacement))
+                    .into_owned()
+            }
+        } else {
+            text
+        };
+        doc.buffer.set_text(new_text);
+        doc.update_cursor(0);
+        set_editor_cursor(ctx, &doc.path, 0);
+        self.find.dirty = true;
+        self.find
+            .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+        self.find.active = 0;
+        self.set_toast(format!("已替换 {count} 处"), Severity::Success);
     }
 
     fn request_close_tab(&mut self, index: usize) {
@@ -791,6 +1054,10 @@ impl App {
             bookmark_next,
             bookmark_prev,
             bracket_jump,
+            find_open,
+            find_replace,
+            find_next,
+            find_prev,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -808,6 +1075,10 @@ impl App {
                 !command && !input.modifiers.shift && input.key_pressed(egui::Key::F2),
                 !command && input.modifiers.shift && input.key_pressed(egui::Key::F2),
                 command && input.key_pressed(egui::Key::CloseBracket),
+                command && input.key_pressed(egui::Key::F),
+                command && input.key_pressed(egui::Key::H),
+                input.key_pressed(egui::Key::F3) && !input.modifiers.shift,
+                input.key_pressed(egui::Key::F3) && input.modifiers.shift,
             )
         });
 
@@ -842,6 +1113,25 @@ impl App {
         }
         if bracket_jump {
             self.jump_to_matching_bracket(ctx);
+        }
+        if find_open {
+            self.find.open = true;
+            self.find.replace_open = false;
+            self.find.focus_query = true;
+        }
+        if find_replace {
+            self.find.open = true;
+            self.find.replace_open = true;
+            self.find.focus_query = true;
+        }
+        if find_next {
+            self.find_next(ctx, true);
+        } else if find_prev {
+            self.find_next(ctx, false);
+        }
+        if self.find.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.find.open = false;
+            self.focus_editor = true;
         }
         if zoom_in || zoom_out {
             let delta = if zoom_in { 1.0 } else { -1.0 };
@@ -1039,6 +1329,17 @@ fn build_result_status(last: &LastBuild) -> (Color32, String) {
         BuildOutcome::Cancelled => (theme::WARNING, format!("{}已停止", last.kind.verb())),
         BuildOutcome::Error(_) => (theme::ERROR, format!("{}无法执行", last.kind.verb())),
     }
+}
+
+fn set_editor_cursor(ctx: &egui::Context, path: &Path, char_index: usize) {
+    let editor_id = egui::Id::new(("simple_embedded_code_editor", path));
+    let mut state = egui::text_edit::TextEditState::load(ctx, editor_id).unwrap_or_default();
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::one(
+            egui::text::CCursor::new(char_index),
+        )));
+    state.store(ctx, editor_id);
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -1627,4 +1928,58 @@ fn small_flat_button(text: &str, color: Color32) -> egui::Button<'static> {
 fn colored_dot(ui: &mut egui::Ui, color: Color32, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), Sense::hover());
     ui.painter().circle_filled(rect.center(), size * 0.5, color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_matches_literal_and_case_insensitive() {
+        let mut find = FindState {
+            open: true,
+            query: "foo".to_owned(),
+            ..Default::default()
+        };
+        find.rebuild("foo Foo foo", 1);
+        assert_eq!(find.matches.len(), 3);
+        find.case_sensitive = true;
+        find.rebuild("foo Foo foo", 1);
+        assert_eq!(find.matches.len(), 2);
+    }
+
+    #[test]
+    fn find_supports_regex_and_reports_errors() {
+        let mut find = FindState {
+            open: true,
+            query: "f.o".to_owned(),
+            use_regex: true,
+            ..Default::default()
+        };
+        find.rebuild("foo fxo f.o", 1);
+        assert_eq!(find.matches.len(), 3);
+        find.query = "[".to_owned();
+        find.rebuild("foo", 2);
+        assert!(find.error.is_some());
+        assert!(find.matches.is_empty());
+    }
+
+    #[test]
+    fn find_navigation_wraps() {
+        let mut find = FindState {
+            open: true,
+            query: "x".to_owned(),
+            ..Default::default()
+        };
+        find.rebuild("x a x b x", 1);
+        assert_eq!(find.matches.len(), 3);
+        assert!(find.select_next(0, true));
+        assert_eq!(find.active, 0);
+        assert!(find.select_next(1, true));
+        assert_eq!(find.active, 1);
+        assert!(find.select_next(99, true));
+        assert_eq!(find.active, 0);
+        assert!(find.select_next(0, false));
+        assert_eq!(find.active, 2);
+    }
 }

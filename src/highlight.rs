@@ -1,6 +1,7 @@
 //! Syntect-backed syntax highlighting with a tiny per-document galley cache.
 
 use std::cell::RefCell;
+use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -76,6 +77,7 @@ impl Highlighter {
         syntax_name: Option<&str>,
         font_id: FontId,
         wrap_width: f32,
+        search_ranges: &[(Range<usize>, bool)],
     ) -> egui::text::LayoutJob {
         let mut job = egui::text::LayoutJob::default();
         job.wrap.max_width = wrap_width;
@@ -91,6 +93,7 @@ impl Highlighter {
 
         let Some(syntax_name) = syntax_name else {
             job.append(text, 0.0, default_format);
+            apply_search_highlights(&mut job, search_ranges);
             return job;
         };
         let Some(syntax) = self.syntax_set.find_syntax_by_name(syntax_name) else {
@@ -136,8 +139,62 @@ impl Highlighter {
         if appended < text.len() {
             job.append(&text[appended..], 0.0, default_format);
         }
+        apply_search_highlights(&mut job, search_ranges);
         job
     }
+}
+
+fn apply_search_highlights(
+    job: &mut egui::text::LayoutJob,
+    search_ranges: &[(Range<usize>, bool)],
+) {
+    if search_ranges.is_empty() {
+        return;
+    }
+    let mut sections = Vec::with_capacity(job.sections.len() + search_ranges.len());
+    for section in job.sections.drain(..) {
+        let mut cursor = section.byte_range.start;
+        let end = section.byte_range.end;
+        let mut first = true;
+        for (range, active) in search_ranges {
+            if range.end <= cursor || range.start >= end {
+                continue;
+            }
+            let start = range.start.max(cursor);
+            let stop = range.end.min(end);
+            if cursor < start {
+                let mut plain = section.clone();
+                plain.byte_range = cursor..start;
+                if !first {
+                    plain.leading_space = 0.0;
+                }
+                sections.push(plain);
+                first = false;
+            }
+            if start < stop {
+                let mut highlighted = section.clone();
+                highlighted.byte_range = start..stop;
+                highlighted.leading_space = if first { section.leading_space } else { 0.0 };
+                highlighted.format.background = if *active {
+                    Color32::from_rgb(72, 83, 52)
+                } else {
+                    Color32::from_rgb(37, 56, 65)
+                };
+                sections.push(highlighted);
+                first = false;
+                cursor = stop;
+            }
+        }
+        if cursor < end || (first && !section.byte_range.is_empty()) {
+            let mut plain = section;
+            plain.byte_range = cursor..end;
+            if !first {
+                plain.leading_space = 0.0;
+            }
+            sections.push(plain);
+        }
+    }
+    job.sections = sections;
 }
 
 #[derive(Default)]
@@ -145,6 +202,7 @@ pub struct LayoutCache {
     revision: u64,
     wrap_width: f32,
     font_size: f32,
+    decorations_key: u64,
     galley: Option<Arc<Galley>>,
 }
 
@@ -155,6 +213,8 @@ pub struct LayoutSpec<'a> {
     pub revision: u64,
     pub wrap_width: f32,
     pub font_id: FontId,
+    pub decorations_key: u64,
+    pub search_ranges: &'a [(Range<usize>, bool)],
 }
 
 pub fn new_cache() -> SharedLayoutCache {
@@ -179,6 +239,7 @@ pub fn layout_cached(
             if cache_borrow.revision == spec.revision
                 && (cache_borrow.wrap_width - normalized_width).abs() < 0.25
                 && (cache_borrow.font_size - spec.font_id.size).abs() < f32::EPSILON
+                && cache_borrow.decorations_key == spec.decorations_key
             {
                 return Arc::clone(galley);
             }
@@ -190,6 +251,7 @@ pub fn layout_cached(
         spec.syntax_name,
         spec.font_id.clone(),
         normalized_width,
+        spec.search_ranges,
     );
     let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
 
@@ -197,6 +259,7 @@ pub fn layout_cached(
     cache.revision = spec.revision;
     cache.wrap_width = normalized_width;
     cache.font_size = spec.font_id.size;
+    cache.decorations_key = spec.decorations_key;
     cache.galley = Some(Arc::clone(&galley));
     galley
 }

@@ -35,6 +35,13 @@ impl EditorBuffer {
         &self.text
     }
 
+    pub fn set_text(&mut self, text: String) {
+        if self.text != text {
+            self.text = text;
+            self.bump();
+        }
+    }
+
     fn bump(&self) {
         self.revision.set(self.revision.get().wrapping_add(1));
     }

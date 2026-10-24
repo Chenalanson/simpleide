@@ -545,6 +545,9 @@ impl App {
 
                 self.show_tab_strip(ui, actions);
                 self.show_editor_toolbar(ui, actions);
+                if self.find.open {
+                    self.show_find_bar(ui);
+                }
                 ui.separator();
                 self.show_code_editor(ui);
             });
@@ -734,6 +737,19 @@ impl App {
                         {
                             actions.push(Action::ToggleWrap);
                         }
+                        if ui
+                            .add(
+                                Button::new(
+                                    RichText::new("查找").size(12.0).color(theme::TEXT_DIM),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text("查找 / 替换 (Ctrl+F)")
+                            .clicked()
+                        {
+                            self.find.open = true;
+                            self.find.focus_query = true;
+                        }
                         ui.label(RichText::new(&language).size(12.0).color(theme::INFO));
                         ui.label(RichText::new(newline).size(12.0).color(theme::TEXT_FAINT));
                         ui.label(RichText::new("UTF-8").size(12.0).color(theme::TEXT_FAINT));
@@ -742,13 +758,181 @@ impl App {
             });
     }
 
+    fn show_find_bar(&mut self, ui: &mut egui::Ui) {
+        let mut next = false;
+        let mut previous = false;
+        let mut replace_current = false;
+        let mut replace_all = false;
+        Frame::new()
+            .fill(theme::PANEL)
+            .inner_margin(Margin::symmetric(12, 5))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("查找").size(11.5).color(theme::TEXT_DIM));
+                    let query = ui.add(
+                        TextEdit::singleline(&mut self.find.query)
+                            .id(Id::new("simple_embedded_find_query"))
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .desired_width(220.0)
+                            .hint_text("查找内容"),
+                    );
+                    if self.find.focus_query {
+                        query.request_focus();
+                        self.find.focus_query = false;
+                    }
+                    if query.changed() {
+                        self.find.dirty = true;
+                    }
+                    if query.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                        next = true;
+                    }
+
+                    if ui
+                        .selectable_label(self.find.case_sensitive, RichText::new("Aa").size(11.0))
+                        .on_hover_text("区分大小写")
+                        .clicked()
+                    {
+                        self.find.case_sensitive = !self.find.case_sensitive;
+                        self.find.dirty = true;
+                    }
+                    if ui
+                        .selectable_label(self.find.use_regex, RichText::new(".*").size(11.0))
+                        .on_hover_text("正则表达式")
+                        .clicked()
+                    {
+                        self.find.use_regex = !self.find.use_regex;
+                        self.find.dirty = true;
+                    }
+
+                    if let Some(active) = self.active {
+                        if let Some(doc) = self.tabs.get(active) {
+                            self.find
+                                .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+                        }
+                    }
+
+                    let status = if let Some(error) = &self.find.error {
+                        error.clone()
+                    } else if self.find.query.is_empty() {
+                        "0/0".to_owned()
+                    } else {
+                        format!(
+                            "{}/{}",
+                            if self.find.matches.is_empty() {
+                                0
+                            } else {
+                                self.find.active + 1
+                            },
+                            self.find.matches.len()
+                        )
+                    };
+                    let status_color = if self.find.error.is_some() {
+                        theme::ERROR
+                    } else {
+                        theme::TEXT_FAINT
+                    };
+                    ui.label(RichText::new(status).size(10.5).color(status_color));
+
+                    if ui
+                        .add(small_flat_button("上一个", theme::TEXT_DIM))
+                        .clicked()
+                    {
+                        previous = true;
+                    }
+                    if ui
+                        .add(small_flat_button("下一个", theme::TEXT_DIM))
+                        .clicked()
+                    {
+                        next = true;
+                    }
+                    if ui
+                        .add(small_flat_button(
+                            if self.find.replace_open {
+                                "隐藏替换"
+                            } else {
+                                "替换"
+                            },
+                            theme::TEXT_DIM,
+                        ))
+                        .clicked()
+                    {
+                        self.find.replace_open = !self.find.replace_open;
+                    }
+                    if ui
+                        .add(small_flat_button("×", theme::TEXT_DIM))
+                        .on_hover_text("关闭查找")
+                        .clicked()
+                    {
+                        self.find.open = false;
+                        self.focus_editor = true;
+                    }
+                });
+
+                if self.find.replace_open {
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("替换为").size(11.5).color(theme::TEXT_DIM));
+                        ui.add(
+                            TextEdit::singleline(&mut self.find.replacement)
+                                .id(Id::new("simple_embedded_find_replace"))
+                                .font(FontId::monospace(12.0))
+                                .text_color(theme::TEXT)
+                                .background_color(theme::BG)
+                                .desired_width(220.0)
+                                .hint_text("替换内容"),
+                        );
+                        if ui
+                            .add(theme::secondary_button("替换"))
+                            .on_hover_text("替换当前匹配")
+                            .clicked()
+                        {
+                            replace_current = true;
+                        }
+                        if ui.add(theme::secondary_button("全部替换")).clicked() {
+                            replace_all = true;
+                        }
+                    });
+                }
+            });
+
+        if next {
+            self.find_next(ui.ctx(), true);
+        }
+        if previous {
+            self.find_next(ui.ctx(), false);
+        }
+        if replace_current {
+            self.replace_current_match(ui.ctx());
+        }
+        if replace_all {
+            self.replace_all_matches(ui.ctx());
+        }
+    }
+
     fn show_code_editor(&mut self, ui: &mut egui::Ui) {
         let Some(active) = self.active else {
             return;
         };
+        if let Some(doc) = self.tabs.get(active) {
+            self.find
+                .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+        }
         let Some(doc) = self.tabs.get_mut(active) else {
             return;
         };
+        let search_ranges = if self.find.open {
+            self.find.decorations()
+        } else {
+            Vec::new()
+        };
+        let decorations_key = self
+            .find
+            .version
+            .wrapping_mul(2)
+            .wrapping_add(u64::from(self.find.open));
         let font_size = self.settings.font_size;
         let word_wrap = self.settings.word_wrap;
         let relative_line_numbers = self.settings.relative_line_numbers;
@@ -790,6 +974,8 @@ impl App {
                     revision: revision.get(),
                     wrap_width: effective_wrap,
                     font_id: font_id.clone(),
+                    decorations_key,
+                    search_ranges: &search_ranges,
                 },
                 &cache,
             )
