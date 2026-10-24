@@ -63,6 +63,8 @@ struct SettingsDraft {
     autosave_delay_ms: u64,
     format_on_save: bool,
     clang_format_path: String,
+    debug_program: String,
+    gdb_path: String,
     auto_scroll_output: bool,
     show_hidden: bool,
     respect_gitignore: bool,
@@ -132,6 +134,17 @@ struct HexState {
     open: bool,
     dump: crate::hexview::HexDump,
     error: Option<String>,
+}
+
+#[derive(Default)]
+struct DebugState {
+    open: bool,
+    session: Option<crate::debugger::DebugSession>,
+    input: String,
+    error: Option<String>,
+    breakpoints: BTreeSet<(PathBuf, usize)>,
+    target: Option<PathBuf>,
+    log: Vec<String>,
 }
 
 #[derive(Default)]
@@ -361,6 +374,13 @@ enum Action {
     OpenRegisters,
     OpenHex(PathBuf),
     OpenArrayGenerator,
+    OpenDebug,
+    DebugContinue,
+    DebugStepOver,
+    DebugStepInto,
+    DebugFinish,
+    DebugStop,
+    DebugSend(String),
     SelectTab(usize),
     CloseTab(usize),
     SaveActive,
@@ -401,6 +421,7 @@ pub struct App {
     registers: RegisterState,
     hex: HexState,
     array: ArrayState,
+    debug: DebugState,
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
     diagnostics_revision: u64,
@@ -453,6 +474,7 @@ impl App {
             registers: RegisterState::default(),
             hex: HexState::default(),
             array: ArrayState::default(),
+            debug: DebugState::default(),
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
             diagnostics_revision: u64::MAX,
@@ -845,6 +867,148 @@ impl App {
                 self.registers.error = Some(err);
             }
         }
+    }
+
+    fn debug_target(&self) -> Option<PathBuf> {
+        let configured = self.settings.debug_program.trim();
+        if !configured.is_empty() {
+            let path = PathBuf::from(configured);
+            return path.is_file().then_some(path);
+        }
+        let root = self.project.as_ref()?.root.clone();
+        let mut candidates = Vec::new();
+        for dir in [
+            root.join("build"),
+            root.join("Debug"),
+            root.join("Release"),
+            root.join("out"),
+            root.clone(),
+        ] {
+            let Ok(read_dir) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let extension = path
+                    .extension()
+                    .map(|value| value.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                if !matches!(extension.as_str(), "elf" | "axf" | "exe" | "out") {
+                    continue;
+                }
+                let modified = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok());
+                candidates.push((modified, path));
+            }
+        }
+        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
+        candidates.into_iter().next().map(|(_, path)| path)
+    }
+
+    fn start_debug_session(&mut self) -> bool {
+        let Some(target) = self.debug_target() else {
+            self.set_toast(
+                "未找到调试程序，请在设置中填写 ELF/EXE 路径",
+                Severity::Warning,
+            );
+            self.debug.open = true;
+            return false;
+        };
+        let Some(gdb) = crate::debugger::detect_gdb(&self.settings.gdb_path) else {
+            self.set_toast("未找到 gdb，请在设置中填写 gdb 路径", Severity::Warning);
+            self.debug.open = true;
+            return false;
+        };
+        match crate::debugger::DebugSession::start(&target, &gdb) {
+            Ok(mut session) => {
+                for (path, line) in &self.debug.breakpoints {
+                    session.send(&format!("break \"{}\":{}", gdb_source_path(path), line));
+                }
+                self.debug.session = Some(session);
+                self.debug.target = Some(target.clone());
+                self.debug.error = None;
+                self.debug.log.clear();
+                self.debug.open = true;
+                self.set_toast(
+                    format!("调试会话已启动：{}", util::display_path(&target)),
+                    Severity::Success,
+                );
+                true
+            }
+            Err(err) => {
+                self.debug.error = Some(err.clone());
+                self.debug.open = true;
+                self.set_toast(err, Severity::Error);
+                false
+            }
+        }
+    }
+
+    fn debug_continue(&mut self) {
+        if self.debug.session.is_none() && !self.start_debug_session() {
+            return;
+        }
+        if let Some(session) = &mut self.debug.session {
+            if !session.started {
+                session.send("run");
+                session.started = true;
+            } else {
+                session.send("continue");
+            }
+        }
+    }
+
+    fn debug_command(&mut self, command: &str) {
+        let Some(session) = &mut self.debug.session else {
+            self.set_toast("请先启动调试会话", Severity::Warning);
+            return;
+        };
+        session.send(command);
+    }
+
+    fn debug_stop(&mut self) {
+        if let Some(mut session) = self.debug.session.take() {
+            session.poll();
+            self.debug.log = session.log.clone();
+            session.stop();
+            self.debug.log.push("[调试已停止]".to_owned());
+        }
+        self.debug.error = None;
+    }
+
+    fn toggle_breakpoint(&mut self) {
+        let Some(doc) = self.active_document() else {
+            return;
+        };
+        let path = doc.path.clone();
+        let line = doc.cursor_line;
+        let key = (path.clone(), line);
+        let added = if self.debug.breakpoints.contains(&key) {
+            self.debug.breakpoints.remove(&key);
+            if let Some(session) = &mut self.debug.session {
+                session.send(&format!("clear \"{}\":{}", gdb_source_path(&path), line));
+            }
+            false
+        } else {
+            self.debug.breakpoints.insert(key);
+            if let Some(session) = &mut self.debug.session {
+                session.send(&format!("break \"{}\":{}", gdb_source_path(&path), line));
+            }
+            true
+        };
+        self.set_toast(
+            if added {
+                format!("已添加断点：第 {line} 行")
+            } else {
+                format!("已移除断点：第 {line} 行")
+            },
+            Severity::Info,
+        );
     }
 
     fn open_hex(&mut self, path: &Path) {
@@ -1406,6 +1570,8 @@ impl App {
             autosave_delay_ms: self.settings.autosave_delay_ms,
             format_on_save: self.settings.format_on_save,
             clang_format_path: self.settings.clang_format_path.clone(),
+            debug_program: self.settings.debug_program.clone(),
+            gdb_path: self.settings.gdb_path.clone(),
             auto_scroll_output: self.settings.auto_scroll_output,
             show_hidden: self.settings.show_hidden,
             respect_gitignore: self.settings.respect_gitignore,
@@ -1653,6 +1819,12 @@ impl App {
             hex_open,
             array_open,
             registers_open,
+            debug_continue,
+            debug_stop,
+            debug_next,
+            debug_step,
+            debug_finish,
+            breakpoint_toggle,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -1682,6 +1854,12 @@ impl App {
                 command && input.modifiers.shift && input.key_pressed(egui::Key::H),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::A),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::R),
+                input.key_pressed(egui::Key::F5) && !input.modifiers.shift,
+                input.key_pressed(egui::Key::F5) && input.modifiers.shift,
+                input.key_pressed(egui::Key::F10),
+                input.key_pressed(egui::Key::F11) && !input.modifiers.shift,
+                input.key_pressed(egui::Key::F11) && input.modifiers.shift,
+                input.key_pressed(egui::Key::F9),
             )
         });
 
@@ -1766,6 +1944,20 @@ impl App {
             self.registers.open = true;
             self.refresh_registers();
         }
+        if debug_continue {
+            self.debug_continue();
+        } else if debug_stop {
+            self.debug_stop();
+        } else if debug_next {
+            self.debug_command("next");
+        } else if debug_step {
+            self.debug_command("step");
+        } else if debug_finish {
+            self.debug_command("finish");
+        }
+        if breakpoint_toggle {
+            self.toggle_breakpoint();
+        }
         if format_document {
             self.format_current_document();
         }
@@ -1800,6 +1992,9 @@ impl App {
         if self.array.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.array.open = false;
             self.focus_editor = true;
+        }
+        if self.debug.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.debug.open = false;
         }
         if zoom_in || zoom_out {
             let delta = if zoom_in { 1.0 } else { -1.0 };
@@ -1893,6 +2088,13 @@ impl App {
                 }
                 Action::OpenHex(path) => self.open_hex(&path),
                 Action::OpenArrayGenerator => self.open_array_generator(ctx),
+                Action::OpenDebug => self.debug.open = true,
+                Action::DebugContinue => self.debug_continue(),
+                Action::DebugStepOver => self.debug_command("next"),
+                Action::DebugStepInto => self.debug_command("step"),
+                Action::DebugFinish => self.debug_command("finish"),
+                Action::DebugStop => self.debug_stop(),
+                Action::DebugSend(command) => self.debug_command(&command),
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
                         self.active = Some(index);
@@ -2022,6 +2224,10 @@ fn build_result_status(last: &LastBuild) -> (Color32, String) {
     }
 }
 
+fn gdb_source_path(path: &Path) -> String {
+    util::display_path(path).replace('\\', "/")
+}
+
 fn selected_char_range(ctx: &egui::Context, path: &Path) -> Option<(usize, usize)> {
     let editor_id = egui::Id::new(("simple_embedded_code_editor", path));
     let state = egui::text_edit::TextEditState::load(ctx, editor_id)?;
@@ -2058,6 +2264,12 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.build.poll();
+        if let Some(session) = &mut self.debug.session {
+            session.poll();
+            if self.debug.open {
+                ctx.request_repaint_after(Duration::from_millis(120));
+            }
+        }
         self.refresh_diagnostics();
         self.handle_close_request(&ctx);
         self.handle_shortcuts(&ctx);
@@ -2116,6 +2328,9 @@ impl eframe::App for App {
         }
         if self.array.open && !modal_open {
             self.show_array_generator(&ctx);
+        }
+        if self.debug.open && !modal_open {
+            self.show_debug_window(&ctx, &mut actions);
         }
 
         if self.settings_draft.is_none()
@@ -2352,6 +2567,22 @@ impl App {
                         };
                         if response.clicked() {
                             actions.push(Action::Run(TaskKind::Flash));
+                        }
+
+                        ui.add_space(6.0);
+                        let debug_tip = if self.debug.session.is_some() {
+                            "打开调试窗口 (F5 继续)"
+                        } else {
+                            "启动 gdb 调试（需在设置中配置调试程序）"
+                        };
+                        let response = ui
+                            .add_enabled_ui(has_project, |ui| {
+                                ui.add_sized([width, 30.0], theme::secondary_button("调试"))
+                            })
+                            .inner
+                            .on_hover_text(debug_tip);
+                        if response.clicked() {
+                            actions.push(Action::OpenDebug);
                         }
                     }
                 });

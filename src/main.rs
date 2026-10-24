@@ -5,6 +5,7 @@ mod arraygen;
 mod brackets;
 mod build;
 mod config;
+mod debugger;
 mod editor;
 mod file_tree;
 mod formatting;

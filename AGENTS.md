@@ -95,8 +95,9 @@ docs/                  README 截图和使用教程
 - `hexview.rs` 读取最多 32 MB 文件，按 16 字节一行显示偏移/十六进制/ASCII；文件树右键或 `Ctrl+Shift+H` 打开当前文件，可从窗口把字节转给数组生成器。
 - `arraygen.rs` 把选中文本或当前文件（最多 8 KB）生成 `const uint8_t` C 数组；工具栏“数组”或 `Ctrl+Shift+A` 打开，变量名会被清洗成合法标识符，支持复制。
 - `registers.rs` 优先用正则解析工程内 `.svd` 的 peripheral/baseAddress/register/addressOffset/description；没有可用 SVD 时回退扫描 `.h/.c` 中 `*_BASE` / `*_ADDR` / `*_ADDRESS` 宏。`Ctrl+Shift+R` 或工具栏“寄存器”打开，最多 2000 项并去重。它是只读浏览器，不读写芯片寄存器。
+- `debugger.rs` 启动本机 gdb CLI（非 MI），通过 stdin/stdout 转发命令并收集控制台输出；`DebugState` 保存会话、断点和日志。右侧“调试”或 `F5` 启动/继续，`F9` 切换断点，`F10` 下一步，`F11` 单步，`Shift+F11` 跳出，`Shift+F5` 停止。调试程序默认取设置路径，否则从 `build/`、`Debug/`、`Release/` 等目录挑最新的 ELF/AXF/EXE；gdb 架构必须与目标匹配（ARM 需 arm-none-eabi-gdb）。
 - `log.rs` 的 `parse_location` 解析 `file:line:col`；日志行带位置时可点击跳转。`LogStore` 维护最多 1000 条问题诊断，`App::refresh_diagnostics` 解析为本地路径并在行号栏右侧画红/黄竖条；输出面板可过滤全部/错误/警告。
-- 当前版本仍未内置 LSP、调试器或自动补全；用户已规划这些增强，后续在 `xiug` 分支分批接入，不要伪造未接通的能力。
+- 当前版本仍未内置 LSP 或自动补全；调试是基础 gdb 控制台，不是完整 IDE 调试前端。后续增强在 `xiug` 分支分批接入，不要伪造未接通的能力。
 
 ### 工程信息
 
@@ -158,10 +159,11 @@ docs/                  README 截图和使用教程
 
 ## 已知边界（当前版本）
 
-- 没有自定义工程格式、Keil 自动导入、芯片包、内存布局、调试器。Keil 工程可以通过手动命令或外部包装脚本接入。
-- 没有 LSP/补全/跳转定义。
+- 没有自定义工程格式、Keil 自动导入、芯片包或内存布局编辑器。Keil 工程可以通过手动命令或外部包装脚本接入。
+- 没有 LSP/自动补全/跳转定义；符号搜索、TODO、寄存器浏览器都是轻量索引，不是语义分析。
+- 调试只提供 gdb 控制台和基本执行控制，没有变量/调用栈/寄存器面板，也不会自动下载固件；需要用户提供与目标架构匹配的 gdb。
 - 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走用户配置的本地命令。
-- 仅读取 UTF-8（支持 BOM），不支持 GBK 等源码编码；构建输出在 Windows 上会尝试按 GBK 解码。
+- 源码支持 UTF-8（含 BOM）和 GBK；构建输出在 Windows 上会尝试按 GBK 解码。
 - 不支持文件系统外部修改的自动合并。
 - 长构建日志会横向裁剪，但完整内容可复制。
 

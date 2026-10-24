@@ -1954,6 +1954,200 @@ impl App {
         }
     }
 
+    pub(super) fn show_debug_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let mut open = self.debug.open;
+        let mut action = None;
+        let mut clear_log = false;
+        let mut send = false;
+        let running = self
+            .debug
+            .session
+            .as_mut()
+            .map(|session| session.is_running())
+            .unwrap_or(false);
+        let started = self
+            .debug
+            .session
+            .as_ref()
+            .is_some_and(|session| session.started);
+        let target = self
+            .debug
+            .target
+            .as_ref()
+            .map(|path| util::display_path(path))
+            .unwrap_or_else(|| "未选择调试程序".to_owned());
+        let log = self
+            .debug
+            .session
+            .as_ref()
+            .map(|session| session.log.clone())
+            .unwrap_or_else(|| self.debug.log.clone());
+        egui::Window::new("调试")
+            .id(Id::new("simple_embedded_debug"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([820.0, 520.0])
+            .min_height(420.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .inner_margin(Margin::same(12))
+                    .corner_radius(6),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(780.0);
+                ui.set_min_height(390.0);
+                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("调试").size(16.0).strong().color(theme::TEXT));
+                    let (status_color, status) = if self.debug.error.is_some() {
+                        (theme::ERROR, "错误")
+                    } else if self.debug.session.is_some() {
+                        if running {
+                            (theme::SUCCESS, "调试器运行中")
+                        } else {
+                            (theme::TEXT_FAINT, "调试器已停止")
+                        }
+                    } else {
+                        (theme::TEXT_FAINT, "未启动")
+                    };
+                    ui.label(RichText::new(status).size(11.0).color(status_color));
+                    ui.label(RichText::new(&target).size(10.5).color(theme::TEXT_FAINT));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("×", theme::TEXT_DIM))
+                            .on_hover_text("关闭窗口（不会停止调试器）")
+                            .clicked()
+                        {
+                            open = false;
+                        }
+                    });
+                });
+                if let Some(error) = &self.debug.error {
+                    ui.label(RichText::new(error).size(11.0).color(theme::ERROR));
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let start_label = if self.debug.session.is_none() {
+                        "启动"
+                    } else if started {
+                        "继续"
+                    } else {
+                        "运行"
+                    };
+                    if ui.add(theme::primary_button(start_label)).clicked() {
+                        action = Some(Action::DebugContinue);
+                    }
+                    if ui
+                        .add(theme::secondary_button("下一步"))
+                        .on_hover_text("F10")
+                        .clicked()
+                    {
+                        action = Some(Action::DebugStepOver);
+                    }
+                    if ui
+                        .add(theme::secondary_button("单步"))
+                        .on_hover_text("F11")
+                        .clicked()
+                    {
+                        action = Some(Action::DebugStepInto);
+                    }
+                    if ui
+                        .add(theme::secondary_button("跳出"))
+                        .on_hover_text("Shift+F11")
+                        .clicked()
+                    {
+                        action = Some(Action::DebugFinish);
+                    }
+                    if ui
+                        .add(theme::secondary_button("停止"))
+                        .on_hover_text("Shift+F5")
+                        .clicked()
+                    {
+                        action = Some(Action::DebugStop);
+                    }
+                    if ui.add(theme::secondary_button("清空")).clicked() {
+                        clear_log = true;
+                    }
+                    ui.label(
+                        RichText::new(format!("{} 个断点", self.debug.breakpoints.len()))
+                            .size(10.5)
+                            .color(theme::TEXT_FAINT),
+                    );
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let response = ui.add(
+                        TextEdit::singleline(&mut self.debug.input)
+                            .id(Id::new("simple_embedded_debug_input"))
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .desired_width(420.0)
+                            .hint_text(
+                                RichText::new("gdb 命令，例如 info locals")
+                                    .color(theme::TEXT_FAINT),
+                            ),
+                    );
+                    if (response.lost_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                        || ui.button("发送").clicked()
+                    {
+                        send = true;
+                    }
+                });
+                ui.separator();
+                ScrollArea::vertical()
+                    .id_salt("simple_embedded_debug_console")
+                    .stick_to_bottom(true)
+                    .max_height(330.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        if log.is_empty() {
+                            ui.label(
+                                RichText::new("启动 gdb 后，这里显示调试输出")
+                                    .size(11.0)
+                                    .color(theme::TEXT_FAINT),
+                            );
+                        }
+                        for line in &log {
+                            let color = if line.contains("Error")
+                                || line.contains("error")
+                                || line.starts_with("No ")
+                            {
+                                theme::ERROR
+                            } else if line.starts_with('[') {
+                                theme::INFO
+                            } else {
+                                theme::TEXT_DIM
+                            };
+                            ui.label(RichText::new(line).monospace().size(11.5).color(color));
+                        }
+                    });
+            });
+        self.debug.open = open;
+        if clear_log {
+            if let Some(session) = &mut self.debug.session {
+                session.log.clear();
+            } else {
+                self.debug.log.clear();
+            }
+        }
+        if send {
+            let command = self.debug.input.trim().to_owned();
+            if !command.is_empty() {
+                self.debug.input.clear();
+                action = Some(Action::DebugSend(command));
+            }
+        }
+        if let Some(action) = action {
+            actions.push(action);
+        }
+    }
+
     fn show_code_editor(&mut self, ui: &mut egui::Ui) {
         let Some(active) = self.active else {
             return;
@@ -1988,6 +2182,7 @@ impl App {
                 }
             })
             .unwrap_or_default();
+        let breakpoints = self.debug.breakpoints.clone();
         let Some(doc) = self.tabs.get_mut(active) else {
             return;
         };
@@ -2280,6 +2475,16 @@ impl App {
                             ),
                             CornerRadius::same(1),
                             theme::ACCENT,
+                        );
+                    }
+                    if breakpoints
+                        .iter()
+                        .any(|(path, line)| *line == line_no && same_path(path, &doc.path))
+                    {
+                        painter.circle_filled(
+                            egui::pos2(gutter_rect.left() + 13.0, top + row.size.y * 0.5),
+                            3.0,
+                            theme::ERROR,
                         );
                     }
                     if git_marks.contains(&line_no) {
@@ -3173,6 +3378,30 @@ impl App {
                         );
                     });
                     ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("调试程序")
+                                .size(11.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                        ui.add(
+                            TextEdit::singleline(&mut draft.debug_program)
+                                .desired_width(300.0)
+                                .hint_text("可执行文件，留空自动查找 build/*.elf/exe"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("gdb 路径")
+                                .size(11.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                        ui.add(
+                            TextEdit::singleline(&mut draft.gdb_path)
+                                .desired_width(300.0)
+                                .hint_text("留空自动查找 gdb"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
                         ui.checkbox(&mut draft.respect_gitignore, "遵循 .gitignore");
                         ui.label(
                             RichText::new("额外忽略规则")
@@ -3265,6 +3494,8 @@ impl App {
             self.settings.autosave_delay_ms = draft.autosave_delay_ms.clamp(500, 10_000);
             self.settings.format_on_save = draft.format_on_save;
             self.settings.clang_format_path = draft.clang_format_path.trim().to_owned();
+            self.settings.debug_program = draft.debug_program.trim().to_owned();
+            self.settings.gdb_path = draft.gdb_path.trim().to_owned();
             self.settings.auto_scroll_output = draft.auto_scroll_output;
             self.settings.show_hidden = draft.show_hidden;
             self.settings.respect_gitignore = draft.respect_gitignore;
