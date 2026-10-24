@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Align2, Color32, FontId, Sense, Shape, Stroke};
 
+use crate::ignore::IgnoreRules;
 use crate::theme;
 use crate::util::file_name;
 
@@ -26,15 +27,27 @@ pub struct FileTree {
     children: HashMap<PathBuf, Vec<Entry>>,
     expanded: HashSet<PathBuf>,
     show_hidden: bool,
+    respect_gitignore: bool,
+    extra_ignore: String,
+    ignore: IgnoreRules,
 }
 
 impl FileTree {
-    pub fn new(root: PathBuf, show_hidden: bool) -> Self {
+    pub fn new(
+        root: PathBuf,
+        show_hidden: bool,
+        respect_gitignore: bool,
+        extra_ignore: &str,
+    ) -> Self {
+        let ignore = IgnoreRules::load(&root, respect_gitignore, extra_ignore);
         let mut tree = Self {
             root,
             children: HashMap::new(),
             expanded: HashSet::new(),
             show_hidden,
+            respect_gitignore,
+            extra_ignore: extra_ignore.to_owned(),
+            ignore,
         };
         tree.expanded.insert(tree.root.clone());
         tree.warm_root();
@@ -43,7 +56,18 @@ impl FileTree {
 
     pub fn refresh(&mut self) {
         self.children.clear();
+        self.ignore = IgnoreRules::load(&self.root, self.respect_gitignore, &self.extra_ignore);
         self.warm_root();
+    }
+
+    pub fn set_ignore_rules(&mut self, respect_gitignore: bool, extra_ignore: &str) {
+        if self.respect_gitignore == respect_gitignore && self.extra_ignore == extra_ignore {
+            return;
+        }
+        self.respect_gitignore = respect_gitignore;
+        self.extra_ignore = extra_ignore.to_owned();
+        self.children.clear();
+        self.refresh();
     }
 
     /// Expand all parent folders so an already-open file becomes visible.
@@ -193,6 +217,10 @@ impl FileTree {
                         continue;
                     }
                     let is_dir = path.is_dir();
+                    let relative = path.strip_prefix(&self.root).unwrap_or(path.as_path());
+                    if self.ignore.is_ignored(relative, is_dir) {
+                        continue;
+                    }
                     entries.push(Entry { path, name, is_dir });
                 }
             }
@@ -350,7 +378,7 @@ mod tests {
         let file = nested.join("main.c");
         std::fs::write(&file, "int main(void) {}\n").unwrap();
 
-        let mut tree = FileTree::new(dir.path().to_path_buf(), false);
+        let mut tree = FileTree::new(dir.path().to_path_buf(), false, false, "");
         tree.reveal(&file);
 
         assert!(tree.expanded.contains(&dir.path().to_path_buf()));

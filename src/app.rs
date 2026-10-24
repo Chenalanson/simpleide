@@ -22,9 +22,11 @@ use crate::config::{
 use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::highlight::{self, Highlighter};
+use crate::ignore::IgnoreRules;
 use crate::log::{LogFilter, Severity};
 use crate::makefile;
 use crate::project_meta::ProjectMeta;
+use crate::search::{search_project, SearchHit, SearchOptions};
 use crate::theme;
 use crate::util::{self, format_duration, project_key, TextEncoding};
 
@@ -56,6 +58,8 @@ struct SettingsDraft {
     indent_width: u8,
     auto_scroll_output: bool,
     show_hidden: bool,
+    respect_gitignore: bool,
+    ignore_patterns: String,
     note: Option<String>,
     error: Option<String>,
 }
@@ -65,6 +69,20 @@ struct MetaDraft {
     library_dirs: String,
     defines: String,
     note: Option<String>,
+}
+
+#[derive(Default)]
+struct ProjectSearchState {
+    open: bool,
+    query: String,
+    case_sensitive: bool,
+    use_regex: bool,
+    results: Vec<SearchHit>,
+    error: Option<String>,
+    truncated: bool,
+    scanned_files: usize,
+    searched: bool,
+    focus_query: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -301,6 +319,7 @@ pub struct App {
     build_options_draft: Option<BuildOptions>,
     build_options_tab: BuildOptionsTab,
     find: FindState,
+    project_search: ProjectSearchState,
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
     diagnostics_revision: u64,
@@ -341,6 +360,7 @@ impl App {
             build_options_draft: None,
             build_options_tab: BuildOptionsTab::default(),
             find: FindState::default(),
+            project_search: ProjectSearchState::default(),
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
             diagnostics_revision: u64::MAX,
@@ -412,7 +432,12 @@ impl App {
         self.project_meta = ProjectMeta::detect(&root);
         self.project = Some(Project::new(root.clone()));
         self.build_config = config;
-        self.tree = Some(FileTree::new(root.clone(), self.settings.show_hidden));
+        self.tree = Some(FileTree::new(
+            root.clone(),
+            self.settings.show_hidden,
+            self.settings.respect_gitignore,
+            &self.settings.ignore_patterns,
+        ));
         self.tabs.clear();
         self.active = None;
         self.focus_editor = false;
@@ -719,6 +744,36 @@ impl App {
         self.focus_editor = true;
     }
 
+    fn run_project_search(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开一个工程文件夹", Severity::Warning);
+            return;
+        };
+        let ignore = IgnoreRules::load(
+            &root,
+            self.settings.respect_gitignore,
+            &self.settings.ignore_patterns,
+        );
+        let options = SearchOptions {
+            query: self.project_search.query.clone(),
+            case_sensitive: self.project_search.case_sensitive,
+            use_regex: self.project_search.use_regex,
+        };
+        self.project_search.searched = true;
+        match search_project(&root, &ignore, &options) {
+            Ok(outcome) => {
+                self.project_search.results = outcome.hits;
+                self.project_search.scanned_files = outcome.scanned_files;
+                self.project_search.truncated = outcome.truncated;
+                self.project_search.error = None;
+            }
+            Err(err) => {
+                self.project_search.results.clear();
+                self.project_search.error = Some(err);
+            }
+        }
+    }
+
     fn find_next(&mut self, ctx: &egui::Context, forward: bool) {
         let Some(active) = self.active else {
             return;
@@ -934,6 +989,8 @@ impl App {
             indent_width: self.settings.indent_width,
             auto_scroll_output: self.settings.auto_scroll_output,
             show_hidden: self.settings.show_hidden,
+            respect_gitignore: self.settings.respect_gitignore,
+            ignore_patterns: self.settings.ignore_patterns.clone(),
             note: None,
             error: None,
         });
@@ -1169,6 +1226,7 @@ impl App {
             find_replace,
             find_next,
             find_prev,
+            project_search_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -1186,10 +1244,11 @@ impl App {
                 !command && !input.modifiers.shift && input.key_pressed(egui::Key::F2),
                 !command && input.modifiers.shift && input.key_pressed(egui::Key::F2),
                 command && input.key_pressed(egui::Key::CloseBracket),
-                command && input.key_pressed(egui::Key::F),
-                command && input.key_pressed(egui::Key::H),
+                command && !input.modifiers.shift && input.key_pressed(egui::Key::F),
+                command && !input.modifiers.shift && input.key_pressed(egui::Key::H),
                 input.key_pressed(egui::Key::F3) && !input.modifiers.shift,
                 input.key_pressed(egui::Key::F3) && input.modifiers.shift,
+                command && input.modifiers.shift && input.key_pressed(egui::Key::F),
             )
         });
 
@@ -1240,8 +1299,21 @@ impl App {
         } else if find_prev {
             self.find_next(ctx, false);
         }
+        if project_search_open {
+            self.project_search.open = true;
+            self.project_search.focus_query = true;
+            if self.project_search.query.is_empty() && !self.find.query.is_empty() {
+                self.project_search.query = self.find.query.clone();
+                self.project_search.case_sensitive = self.find.case_sensitive;
+                self.project_search.use_regex = self.find.use_regex;
+            }
+        }
         if self.find.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.find.open = false;
+            self.focus_editor = true;
+        }
+        if self.project_search.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.project_search.open = false;
             self.focus_editor = true;
         }
         if zoom_in || zoom_out {
@@ -1503,6 +1575,14 @@ impl eframe::App for App {
         if self.build_options_draft.is_some() {
             self.show_build_options_modal(&ctx);
             actions.clear();
+        }
+        let modal_open = self.settings_draft.is_some()
+            || self.pending.is_some()
+            || self.meta_draft.is_some()
+            || self.meta_add.is_some()
+            || self.build_options_draft.is_some();
+        if self.project_search.open && !modal_open {
+            self.show_project_search(&ctx, &mut actions);
         }
 
         if self.settings_draft.is_none()

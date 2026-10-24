@@ -7,10 +7,12 @@ mod config;
 mod editor;
 mod file_tree;
 mod highlight;
+mod ignore;
 mod indent;
 mod log;
 mod makefile;
 mod project_meta;
+mod search;
 mod theme;
 mod util;
 

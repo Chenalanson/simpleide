@@ -869,6 +869,14 @@ impl App {
                         next = true;
                     }
                     if ui
+                        .add(small_flat_button("全工程", theme::TEXT_DIM))
+                        .on_hover_text("全工程搜索 (Ctrl+Shift+F)")
+                        .clicked()
+                    {
+                        self.project_search.open = true;
+                        self.project_search.focus_query = true;
+                    }
+                    if ui
                         .add(small_flat_button(
                             if self.find.replace_open {
                                 "隐藏替换"
@@ -929,6 +937,169 @@ impl App {
         }
         if replace_all {
             self.replace_all_matches(ui.ctx());
+        }
+    }
+
+    pub(super) fn show_project_search(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let root = self.project.as_ref().map(|project| project.root.clone());
+        let mut open = self.project_search.open;
+        let mut run = false;
+        let mut clicked = None;
+        egui::Window::new("全工程搜索")
+            .id(Id::new("simple_embedded_project_search"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([760.0, 480.0])
+            .min_height(420.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .inner_margin(Margin::same(12))
+                    .corner_radius(6),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(720.0);
+                ui.set_min_height(380.0);
+                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("全工程搜索")
+                            .size(16.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("×", theme::TEXT_DIM))
+                            .on_hover_text("关闭")
+                            .clicked()
+                        {
+                            open = false;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let query = ui.add(
+                        TextEdit::singleline(&mut self.project_search.query)
+                            .id(Id::new("simple_embedded_project_search_query"))
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .desired_width(300.0)
+                            .hint_text(RichText::new("搜索内容").color(theme::TEXT_FAINT)),
+                    );
+                    if self.project_search.focus_query {
+                        query.request_focus();
+                        self.project_search.focus_query = false;
+                    }
+                    if query.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                        run = true;
+                    }
+                    if ui.add(theme::primary_button("搜索")).clicked() {
+                        run = true;
+                    }
+                    if ui
+                        .selectable_label(
+                            self.project_search.case_sensitive,
+                            RichText::new("Aa").size(11.0).color(theme::TEXT_DIM),
+                        )
+                        .on_hover_text("区分大小写")
+                        .clicked()
+                    {
+                        self.project_search.case_sensitive = !self.project_search.case_sensitive;
+                    }
+                    if ui
+                        .selectable_label(
+                            self.project_search.use_regex,
+                            RichText::new(".*").size(11.0).color(theme::TEXT_DIM),
+                        )
+                        .on_hover_text("正则表达式")
+                        .clicked()
+                    {
+                        self.project_search.use_regex = !self.project_search.use_regex;
+                    }
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if let Some(error) = &self.project_search.error {
+                        ui.label(RichText::new(error).size(11.0).color(theme::ERROR));
+                    } else if self.project_search.searched {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} 个结果 · 扫描 {} 个文件",
+                                self.project_search.results.len(),
+                                self.project_search.scanned_files
+                            ))
+                            .size(11.0)
+                            .color(theme::TEXT_FAINT),
+                        );
+                        if self.project_search.truncated {
+                            ui.label(
+                                RichText::new("结果过多，已截断")
+                                    .size(11.0)
+                                    .color(theme::WARNING),
+                            );
+                        }
+                    } else {
+                        ui.label(
+                            RichText::new("输入内容后按 Enter 或点击搜索")
+                                .size(11.0)
+                                .color(theme::TEXT_FAINT),
+                        );
+                    }
+                });
+                ui.separator();
+                if self.project_search.results.is_empty() {
+                    if self.project_search.searched && self.project_search.error.is_none() {
+                        ui.label(
+                            RichText::new("没有匹配项")
+                                .size(11.5)
+                                .color(theme::TEXT_FAINT),
+                        );
+                    }
+                } else {
+                    ScrollArea::vertical()
+                        .id_salt("simple_embedded_project_search_results")
+                        .max_height(380.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for hit in &self.project_search.results {
+                                let path = root
+                                    .as_ref()
+                                    .map(|root| util::relative_display(root, &hit.path))
+                                    .unwrap_or_else(|| util::display_path(&hit.path));
+                                let preview = hit
+                                    .preview
+                                    .replace('\t', "    ")
+                                    .chars()
+                                    .take(160)
+                                    .collect::<String>();
+                                let label =
+                                    format!("{}:{}:{}    {}", path, hit.line, hit.column, preview);
+                                let response = ui.selectable_label(
+                                    false,
+                                    RichText::new(label).size(11.5).color(theme::TEXT_DIM),
+                                );
+                                if response.clicked() {
+                                    clicked = Some(hit.clone());
+                                }
+                            }
+                        });
+                }
+            });
+        self.project_search.open = open;
+        if run {
+            self.run_project_search();
+        }
+        if let Some(hit) = clicked {
+            actions.push(Action::OpenAt(
+                hit.path.to_string_lossy().into_owned(),
+                hit.line,
+                hit.column,
+            ));
         }
     }
 
@@ -2103,6 +2274,19 @@ impl App {
                                 .text("缩进宽度"),
                         );
                     });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut draft.respect_gitignore, "遵循 .gitignore");
+                        ui.label(
+                            RichText::new("额外忽略规则")
+                                .size(11.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                        ui.add(
+                            TextEdit::singleline(&mut draft.ignore_patterns)
+                                .desired_width(260.0)
+                                .hint_text("build/; *.tmp"),
+                        );
+                    });
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(format!(
@@ -2181,6 +2365,8 @@ impl App {
             self.settings.indent_width = draft.indent_width.clamp(1, 8);
             self.settings.auto_scroll_output = draft.auto_scroll_output;
             self.settings.show_hidden = draft.show_hidden;
+            self.settings.respect_gitignore = draft.respect_gitignore;
+            self.settings.ignore_patterns = draft.ignore_patterns.trim().to_owned();
             self.settings.save();
 
             if let Some(root) = &project_root {
@@ -2190,6 +2376,10 @@ impl App {
             }
             if let Some(tree) = &mut self.tree {
                 tree.set_show_hidden(draft.show_hidden);
+                tree.set_ignore_rules(
+                    self.settings.respect_gitignore,
+                    &self.settings.ignore_patterns,
+                );
             }
             self.build.auto_scroll = draft.auto_scroll_output;
             self.settings_draft = None;
