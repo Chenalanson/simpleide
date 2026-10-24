@@ -61,6 +61,48 @@ pub fn auto_indent(
     (new_text, cursor)
 }
 
+/// Normalize pasted line endings and align continuation lines to `indent`.
+pub fn adjust_pasted(text: &str, indent: &str) -> String {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let lines = normalized.split('\n').collect::<Vec<_>>();
+    if lines.len() <= 1 {
+        return normalized;
+    }
+    let common = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            line.chars()
+                .take_while(|ch| *ch == ' ' || *ch == '\t')
+                .collect::<String>()
+        })
+        .reduce(|a, b| {
+            let mut shared = String::new();
+            for (left, right) in a.chars().zip(b.chars()) {
+                if left != right {
+                    break;
+                }
+                shared.push(left);
+            }
+            shared
+        })
+        .unwrap_or_default();
+    let mut output = String::with_capacity(normalized.len() + indent.len() * lines.len());
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            output.push('\n');
+            if line.trim().is_empty() {
+                continue;
+            }
+            output.push_str(indent);
+            output.push_str(line.strip_prefix(&common).unwrap_or(line));
+        } else {
+            output.push_str(line);
+        }
+    }
+    output
+}
+
 /// Indent or unindent all lines touched by `start..=end`.
 pub fn change_lines(
     text: &str,
@@ -174,6 +216,18 @@ mod tests {
         let (new_text, cursor) = auto_indent(text, 3, 6, 4, true);
         assert_eq!(new_text, "abc\ndef");
         assert_eq!(cursor, 4);
+    }
+
+    #[test]
+    fn aligns_pasted_lines_to_current_indent() {
+        let adjusted = adjust_pasted("foo\r\nbar\r\n\r\nbaz", "    ");
+        assert_eq!(adjusted, "foo\n    bar\n\n    baz");
+    }
+
+    #[test]
+    fn preserves_relative_indentation_when_pasting() {
+        let adjusted = adjust_pasted("    foo\n        bar\n    baz", "\t");
+        assert_eq!(adjusted, "    foo\n\t    bar\n\tbaz");
     }
 
     #[test]

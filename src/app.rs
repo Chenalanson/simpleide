@@ -433,6 +433,7 @@ pub struct App {
     array: ArrayState,
     debug: DebugState,
     completion: CompletionState,
+    split_path: Option<PathBuf>,
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
     diagnostics_revision: u64,
@@ -487,6 +488,7 @@ impl App {
             array: ArrayState::default(),
             debug: DebugState::default(),
             completion: CompletionState::default(),
+            split_path: None,
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
             diagnostics_revision: u64::MAX,
@@ -572,6 +574,7 @@ impl App {
         ));
         self.tabs.clear();
         self.active = None;
+        self.split_path = None;
         self.focus_editor = false;
         self.git_line_marks.clear();
         self.git_line_key = None;
@@ -1619,6 +1622,14 @@ impl App {
     fn close_tab_now(&mut self, index: usize) {
         if index >= self.tabs.len() {
             return;
+        }
+        let closed_path = self.tabs[index].path.clone();
+        if self
+            .split_path
+            .as_ref()
+            .is_some_and(|path| same_path(path, &closed_path))
+        {
+            self.split_path = None;
         }
         self.tabs.remove(index);
         match self.active {

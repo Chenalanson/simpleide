@@ -580,7 +580,22 @@ impl App {
                     self.show_find_bar(ui);
                 }
                 ui.separator();
-                self.show_code_editor(ui);
+                let split_index = self
+                    .split_path
+                    .as_ref()
+                    .and_then(|path| self.tabs.iter().position(|doc| same_path(&doc.path, path)))
+                    .filter(|index| Some(*index) != self.active);
+                if let Some(index) = split_index {
+                    ui.columns(2, |columns| {
+                        self.show_code_editor(&mut columns[0]);
+                        self.show_split_preview(&mut columns[1], index);
+                    });
+                } else {
+                    if self.split_path.is_some() {
+                        self.split_path = None;
+                    }
+                    self.show_code_editor(ui);
+                }
             });
     }
 
@@ -717,6 +732,7 @@ impl App {
         let word_wrap = self.settings.word_wrap;
         let encoding = doc.encoding;
         let read_only = doc.read_only;
+        let split_on = self.split_path.is_some();
 
         Frame::new()
             .fill(theme::EDITOR_BG)
@@ -842,6 +858,28 @@ impl App {
                             .clicked()
                         {
                             actions.push(Action::OpenCompletion);
+                        }
+                        if ui
+                            .add(
+                                Button::new(RichText::new("分屏").size(12.0).color(if split_on {
+                                    theme::ACCENT
+                                } else {
+                                    theme::TEXT_DIM
+                                }))
+                                .frame(false),
+                            )
+                            .on_hover_text("并排显示另一个已打开文件（只读预览）")
+                            .clicked()
+                        {
+                            if split_on {
+                                self.split_path = None;
+                            } else if self.tabs.len() < 2 {
+                                self.set_toast("至少打开两个文件才能分屏", Severity::Info);
+                            } else {
+                                let active = self.active.unwrap_or(0);
+                                let next = (active + 1) % self.tabs.len();
+                                self.split_path = Some(self.tabs[next].path.clone());
+                            }
                         }
                         let read_only_color = if read_only {
                             theme::WARNING
@@ -2254,6 +2292,101 @@ impl App {
         }
     }
 
+    fn show_split_preview(&mut self, ui: &mut egui::Ui, index: usize) {
+        let Some(doc) = self.tabs.get(index) else {
+            return;
+        };
+        let name = doc.name.clone();
+        let dirty = doc.is_dirty();
+        let path = doc.path.clone();
+        let mut close_split = false;
+        Frame::new()
+            .fill(theme::PANEL)
+            .inner_margin(Margin::symmetric(10, 6))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("分屏预览 · {name}"))
+                            .size(11.5)
+                            .strong()
+                            .color(theme::TEXT_DIM),
+                    );
+                    if dirty {
+                        ui.label(RichText::new("●").size(10.0).color(theme::WARNING));
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("关闭分屏", theme::TEXT_FAINT))
+                            .clicked()
+                        {
+                            close_split = true;
+                        }
+                    });
+                });
+            });
+        ui.separator();
+        let font_size = self.settings.font_size;
+        let font_id = FontId::monospace(font_size);
+        let wrap_width = (ui.available_width() - 48.0).max(80.0);
+        let galley = highlight::layout_cached(
+            &self.highlighter,
+            ui,
+            doc.buffer.as_string(),
+            &highlight::LayoutSpec {
+                syntax_name: doc.syntax_name.as_deref(),
+                revision: doc.buffer.revision(),
+                wrap_width,
+                font_id: font_id.clone(),
+                decorations_key: 0,
+                search_ranges: &[],
+            },
+            &doc.layout_cache,
+        );
+        ScrollArea::both()
+            .id_salt(("simple_embedded_split_preview", &path))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let size = egui::vec2(galley.size().x + 48.0, galley.size().y + 8.0);
+                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(
+                    egui::Rect::from_min_size(rect.min, egui::vec2(42.0, rect.height())),
+                    CornerRadius::ZERO,
+                    theme::EDITOR_BG,
+                );
+                let mut line_no = 1usize;
+                let mut starts_line = true;
+                for row in &galley.rows {
+                    if starts_line {
+                        painter.text(
+                            egui::pos2(
+                                rect.left() + 34.0,
+                                rect.top() + row.pos.y + row.size.y * 0.5,
+                            ),
+                            Align2::RIGHT_CENTER,
+                            line_no.to_string(),
+                            FontId::monospace(font_size * 0.82),
+                            theme::TEXT_FAINT,
+                        );
+                    }
+                    if row.ends_with_newline {
+                        line_no += 1;
+                        starts_line = true;
+                    } else {
+                        starts_line = false;
+                    }
+                }
+                painter.galley(
+                    egui::pos2(rect.left() + 46.0, rect.top() + 4.0),
+                    galley.clone(),
+                    theme::TEXT,
+                );
+            });
+        if close_split {
+            self.split_path = None;
+        }
+    }
+
     fn show_code_editor(&mut self, ui: &mut egui::Ui) {
         let Some(active) = self.active else {
             return;
@@ -2296,6 +2429,30 @@ impl App {
         let scroll_id = Id::new(("simple_embedded_code_scroll", &doc.path));
         let read_only = doc.read_only;
         if !read_only && ui.memory(|memory| memory.has_focus(editor_id)) {
+            let pasted = ui.ctx().input(|input| {
+                input
+                    .events
+                    .iter()
+                    .filter_map(|event| {
+                        if let egui::Event::Paste(text) = event {
+                            Some(text.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            });
+            if let Some(text) = pasted.first() {
+                ui.ctx().input_mut(|input| {
+                    input
+                        .events
+                        .retain(|event| !matches!(event, egui::Event::Paste(_)))
+                });
+                apply_paste_indent(doc, ui.ctx(), editor_id, text);
+                self.find.dirty = true;
+                self.find
+                    .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+            }
             let shift_tab =
                 ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
             let tab = if shift_tab {
@@ -3637,6 +3794,39 @@ fn parse_meta_lines(text: &str) -> Vec<String> {
         }
     }
     lines
+}
+
+fn apply_paste_indent(doc: &mut Document, ctx: &egui::Context, editor_id: Id, pasted: &str) {
+    let mut state = egui::text_edit::TextEditState::load(ctx, editor_id).unwrap_or_default();
+    let (start, end) = state
+        .cursor
+        .char_range()
+        .map(|range| {
+            let first = range.primary.index.min(range.secondary.index);
+            let last = range.primary.index.max(range.secondary.index);
+            (first, last)
+        })
+        .unwrap_or((doc.cursor_index, doc.cursor_index));
+    let text = doc.buffer.as_string();
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut line_start = start.min(chars.len());
+    while line_start > 0 && chars[line_start - 1] != '\n' {
+        line_start -= 1;
+    }
+    let indent = chars[line_start..start.min(chars.len())]
+        .iter()
+        .take_while(|ch| **ch == ' ' || **ch == '\t')
+        .collect::<String>();
+    let adjusted = crate::indent::adjust_pasted(pasted, &indent);
+    let (new_text, cursor) = crate::navigation::replace_range_chars(text, start, end, &adjusted);
+    doc.buffer.set_text(new_text);
+    doc.update_cursor(cursor);
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::one(
+            egui::text::CCursor::new(cursor),
+        )));
+    state.store(ctx, editor_id);
 }
 
 fn apply_enter_indent(
