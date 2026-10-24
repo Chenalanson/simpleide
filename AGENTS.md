@@ -54,6 +54,20 @@ src/highlight.rs       syntect 高亮和 galley 缓存
 src/log.rs             ANSI SGR、错误分级、日志上限
 src/theme.rs           配色和按钮样式
 src/util.rs            路径、换行、系统集成辅助
+src/brackets.rs        注释/字符串感知的括号匹配
+src/indent.rs          缩进单元、行缩进/反缩进、回车和粘贴缩进
+src/ignore.rs          gitignore 风格匹配
+src/search.rs          全工程文本搜索
+src/symbols.rs         C/C++/汇编符号索引
+src/navigation.rs      标识符提取与补全替换
+src/todo.rs            TODO/FIXME 扫描
+src/git.rs             git 状态/修改行
+src/registers.rs       SVD / 头文件寄存器索引
+src/hexview.rs         十六进制模型
+src/arraygen.rs        C 数组生成
+src/formatting.rs      clang-format
+src/debugger.rs        gdb 会话
+src/column.rs          批量列编辑
 examples/blink/        可编译的演示固件
 docs/                  README 截图和使用教程
 ```
@@ -183,7 +197,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志裁剪、后台命令执行。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器、十六进制、数组生成、列编辑、gdb 路径检测。当前共 80 个测试。
 
 UI 改动后建议：
 
