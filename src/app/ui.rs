@@ -861,6 +861,18 @@ impl App {
                         }
                         if ui
                             .add(
+                                Button::new(
+                                    RichText::new("列编辑").size(12.0).color(theme::TEXT_DIM),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text("在选中行范围的指定列批量插入/删除/替换 (Alt+C)")
+                            .clicked()
+                        {
+                            actions.push(Action::OpenColumnEdit);
+                        }
+                        if ui
+                            .add(
                                 Button::new(RichText::new("分屏").size(12.0).color(if split_on {
                                     theme::ACCENT
                                 } else {
@@ -2384,6 +2396,133 @@ impl App {
             });
         if close_split {
             self.split_path = None;
+        }
+    }
+
+    pub(super) fn show_column_edit(&mut self, ctx: &egui::Context) {
+        use crate::column::ColumnOperation;
+
+        let mut open = self.column_edit.open;
+        let mut apply = false;
+        egui::Window::new("列编辑")
+            .id(Id::new("simple_embedded_column_edit"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .default_size([540.0, 260.0])
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .inner_margin(Margin::same(12))
+                    .corner_radius(6),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(500.0);
+                ui.set_min_height(190.0);
+                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("列编辑")
+                            .size(16.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.label(
+                        RichText::new(&self.column_edit.source_label)
+                            .size(11.0)
+                            .color(theme::ACCENT),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("×", theme::TEXT_DIM))
+                            .on_hover_text("关闭")
+                            .clicked()
+                        {
+                            open = false;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("列号")
+                            .size(11.5)
+                            .color(theme::TEXT_DIM),
+                    );
+                    ui.add(egui::DragValue::new(&mut self.column_edit.column).range(1..=999));
+                    ui.label(
+                        RichText::new("操作")
+                            .size(11.5)
+                            .color(theme::TEXT_DIM),
+                    );
+                    egui::ComboBox::from_id_salt("simple_embedded_column_operation")
+                        .selected_text(self.column_edit.operation.label())
+                        .width(90.0)
+                        .show_ui(ui, |ui| {
+                            for value in [
+                                ColumnOperation::Insert,
+                                ColumnOperation::Delete,
+                                ColumnOperation::Replace,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.column_edit.operation,
+                                    value,
+                                    value.label(),
+                                );
+                            }
+                        });
+                    if self.column_edit.operation != ColumnOperation::Insert {
+                        ui.label(
+                            RichText::new("字符数")
+                                .size(11.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut self.column_edit.count).range(1..=999),
+                        );
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("内容")
+                            .size(11.5)
+                            .color(theme::TEXT_DIM),
+                    );
+                    ui.add(
+                        TextEdit::singleline(&mut self.column_edit.insert)
+                            .id(Id::new("simple_embedded_column_insert"))
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .desired_width(340.0)
+                            .hint_text(
+                                RichText::new("插入/替换的文本")
+                                    .color(theme::TEXT_FAINT),
+                            ),
+                    );
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "会对选中的每一行在同一列执行操作；短行自动补空格。没有选区时作用于当前行。",
+                    )
+                    .size(10.5)
+                    .color(theme::TEXT_FAINT),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add(theme::primary_button("应用")).clicked() {
+                        apply = true;
+                    }
+                    if ui.add(theme::secondary_button("取消")).clicked() {
+                        open = false;
+                    }
+                });
+            });
+        self.column_edit.open = open;
+        if apply {
+            self.apply_column_edit(ctx);
         }
     }
 

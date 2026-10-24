@@ -136,6 +136,32 @@ struct HexState {
     error: Option<String>,
 }
 
+struct ColumnEditState {
+    open: bool,
+    line_start: usize,
+    line_end: usize,
+    column: usize,
+    count: usize,
+    operation: crate::column::ColumnOperation,
+    insert: String,
+    source_label: String,
+}
+
+impl Default for ColumnEditState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            line_start: 0,
+            line_end: 0,
+            column: 1,
+            count: 1,
+            operation: crate::column::ColumnOperation::Insert,
+            insert: String::new(),
+            source_label: String::new(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct CompletionState {
     open: bool,
@@ -384,6 +410,7 @@ enum Action {
     OpenHex(PathBuf),
     OpenArrayGenerator,
     OpenCompletion,
+    OpenColumnEdit,
     OpenDebug,
     DebugContinue,
     DebugStepOver,
@@ -433,6 +460,7 @@ pub struct App {
     array: ArrayState,
     debug: DebugState,
     completion: CompletionState,
+    column_edit: ColumnEditState,
     split_path: Option<PathBuf>,
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
@@ -488,6 +516,7 @@ impl App {
             array: ArrayState::default(),
             debug: DebugState::default(),
             completion: CompletionState::default(),
+            column_edit: ColumnEditState::default(),
             split_path: None,
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
@@ -944,6 +973,71 @@ impl App {
         self.project_search.use_regex = true;
         self.project_search.focus_query = false;
         self.run_project_search();
+    }
+
+    fn open_column_edit(&mut self, ctx: &egui::Context) {
+        let Some(doc) = self.active_document() else {
+            return;
+        };
+        let text = doc.buffer.as_string().to_owned();
+        let (start, end) =
+            selected_char_range(ctx, &doc.path).unwrap_or((doc.cursor_index, doc.cursor_index));
+        let first_line = crate::util::line_column_at_char(&text, start).0;
+        let end_for_line = if end > start { end - 1 } else { end };
+        let last_line = crate::util::line_column_at_char(&text, end_for_line).0;
+        let source_label = if end > start {
+            format!("第 {first_line}–{last_line} 行")
+        } else {
+            format!("当前行 {first_line}")
+        };
+        self.column_edit = ColumnEditState {
+            open: true,
+            line_start: start,
+            line_end: end,
+            column: 1,
+            count: 1,
+            operation: crate::column::ColumnOperation::Insert,
+            insert: String::new(),
+            source_label,
+        };
+    }
+
+    fn apply_column_edit(&mut self, ctx: &egui::Context) {
+        let state = (
+            self.column_edit.line_start,
+            self.column_edit.line_end,
+            self.column_edit.column,
+            self.column_edit.count,
+            self.column_edit.operation,
+            self.column_edit.insert.clone(),
+        );
+        let Some(index) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(index) else {
+            return;
+        };
+        if doc.read_only {
+            self.set_toast("只读文件不能进行列编辑", Severity::Warning);
+            return;
+        }
+        let (start, end, column, count, operation, insert) = state;
+        let (new_text, cursor) = crate::column::apply(
+            doc.buffer.as_string(),
+            start,
+            end,
+            column,
+            count,
+            operation,
+            &insert,
+        );
+        doc.buffer.set_text(new_text);
+        doc.update_cursor(cursor);
+        set_editor_cursor(ctx, &doc.path, cursor);
+        self.column_edit.open = false;
+        self.focus_editor = true;
+        self.find.dirty = true;
+        self.set_toast("列编辑已应用", Severity::Success);
     }
 
     fn open_completion(&mut self) {
@@ -1967,6 +2061,7 @@ impl App {
             definition_jump,
             references_jump,
             completion_open,
+            column_edit_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -2005,6 +2100,7 @@ impl App {
                 input.key_pressed(egui::Key::F12) && !input.modifiers.shift,
                 input.key_pressed(egui::Key::F12) && input.modifiers.shift,
                 command && input.key_pressed(egui::Key::Space),
+                input.modifiers.alt && input.key_pressed(egui::Key::C),
             )
         });
 
@@ -2111,6 +2207,9 @@ impl App {
         if completion_open {
             self.open_completion();
         }
+        if column_edit_open {
+            self.open_column_edit(ctx);
+        }
         if format_document {
             self.format_current_document();
         }
@@ -2151,6 +2250,10 @@ impl App {
         }
         if self.completion.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.completion.open = false;
+            self.focus_editor = true;
+        }
+        if self.column_edit.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.column_edit.open = false;
             self.focus_editor = true;
         }
         if zoom_in || zoom_out {
@@ -2246,6 +2349,7 @@ impl App {
                 Action::OpenHex(path) => self.open_hex(&path),
                 Action::OpenArrayGenerator => self.open_array_generator(ctx),
                 Action::OpenCompletion => self.open_completion(),
+                Action::OpenColumnEdit => self.open_column_edit(ctx),
                 Action::OpenDebug => self.debug.open = true,
                 Action::DebugContinue => self.debug_continue(),
                 Action::DebugStepOver => self.debug_command("next"),
@@ -2492,6 +2596,9 @@ impl eframe::App for App {
         }
         if self.completion.open && !modal_open {
             self.show_completion(&ctx);
+        }
+        if self.column_edit.open && !modal_open {
+            self.show_column_edit(&ctx);
         }
 
         if self.settings_draft.is_none()

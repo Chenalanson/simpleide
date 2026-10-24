@@ -4,6 +4,7 @@ mod app;
 mod arraygen;
 mod brackets;
 mod build;
+mod column;
 mod config;
 mod debugger;
 mod editor;
