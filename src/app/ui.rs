@@ -245,6 +245,20 @@ impl App {
                                                 {
                                                     actions.push(Action::OpenGitStatus);
                                                 }
+                                                if ui
+                                                    .add(
+                                                        Button::new(
+                                                            RichText::new("TODO")
+                                                                .size(12.0)
+                                                                .color(theme::TEXT_FAINT),
+                                                        )
+                                                        .frame(false),
+                                                    )
+                                                    .on_hover_text("扫描 TODO/FIXME (Ctrl+Shift+T)")
+                                                    .clicked()
+                                                {
+                                                    actions.push(Action::OpenTodos);
+                                                }
                                             },
                                         );
                                     }
@@ -1273,6 +1287,150 @@ impl App {
         }
         if let Some(path) = clicked {
             actions.push(Action::OpenAt(path.to_string_lossy().into_owned(), 1, 1));
+        }
+    }
+
+    pub(super) fn show_todos(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        use crate::todo::TodoKind;
+
+        let root = self.project.as_ref().map(|project| project.root.clone());
+        let mut open = self.todo.open;
+        let mut refresh = false;
+        let mut clicked = None;
+        let filtered = self
+            .todo
+            .items
+            .iter()
+            .filter(|item| self.todo.filter.is_none_or(|filter| filter == item.kind))
+            .cloned()
+            .collect::<Vec<_>>();
+        egui::Window::new("TODO")
+            .id(Id::new("simple_embedded_todo"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([700.0, 460.0])
+            .min_height(360.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .inner_margin(Margin::same(12))
+                    .corner_radius(6),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(660.0);
+                ui.set_min_height(330.0);
+                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("TODO / 注释")
+                            .size(16.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("×", theme::TEXT_DIM))
+                            .on_hover_text("关闭")
+                            .clicked()
+                        {
+                            open = false;
+                        }
+                        if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
+                            refresh = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("{} 条", filtered.len()))
+                            .size(11.0)
+                            .color(theme::TEXT_FAINT),
+                    );
+                    for (value, label) in [
+                        (None, "全部"),
+                        (Some(TodoKind::Todo), "TODO"),
+                        (Some(TodoKind::Fixme), "FIXME"),
+                        (Some(TodoKind::Hack), "HACK"),
+                        (Some(TodoKind::Note), "NOTE"),
+                    ] {
+                        let active = self.todo.filter == value;
+                        let color = if active {
+                            value.map_or(theme::ACCENT, TodoKind::color)
+                        } else {
+                            theme::TEXT_FAINT
+                        };
+                        if ui
+                            .selectable_label(active, RichText::new(label).size(11.0).color(color))
+                            .clicked()
+                        {
+                            self.todo.filter = value;
+                        }
+                    }
+                    if self.todo.truncated {
+                        ui.label(
+                            RichText::new("结果过多，已截断")
+                                .size(11.0)
+                                .color(theme::WARNING),
+                        );
+                    }
+                });
+                ui.separator();
+                if let Some(error) = &self.todo.error {
+                    ui.label(RichText::new(error).size(11.5).color(theme::ERROR));
+                } else if filtered.is_empty() {
+                    ui.label(
+                        RichText::new("没有找到 TODO / FIXME 注释")
+                            .size(11.5)
+                            .color(theme::TEXT_FAINT),
+                    );
+                } else {
+                    ScrollArea::vertical()
+                        .id_salt("simple_embedded_todo_list")
+                        .max_height(380.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for item in &filtered {
+                                let path = root
+                                    .as_ref()
+                                    .map(|root| util::relative_display(root, &item.path))
+                                    .unwrap_or_else(|| util::display_path(&item.path));
+                                let text = item.text.chars().take(180).collect::<String>();
+                                let label = format!(
+                                    "{:<5} {}:{}  {}",
+                                    item.kind.label(),
+                                    path,
+                                    item.line,
+                                    text
+                                );
+                                if ui
+                                    .selectable_label(
+                                        false,
+                                        RichText::new(label)
+                                            .size(11.5)
+                                            .monospace()
+                                            .color(item.kind.color()),
+                                    )
+                                    .clicked()
+                                {
+                                    clicked = Some(item.clone());
+                                }
+                            }
+                        });
+                }
+            });
+        self.todo.open = open;
+        if refresh {
+            self.refresh_todos();
+        }
+        if let Some(item) = clicked {
+            actions.push(Action::OpenAt(
+                item.path.to_string_lossy().into_owned(),
+                item.line,
+                1,
+            ));
         }
     }
 

@@ -92,6 +92,15 @@ struct ProjectSearchState {
     focus_query: bool,
 }
 
+#[derive(Default)]
+struct TodoState {
+    open: bool,
+    items: Vec<crate::todo::TodoItem>,
+    truncated: bool,
+    error: Option<String>,
+    filter: Option<crate::todo::TodoKind>,
+}
+
 #[derive(Clone, Debug)]
 struct Diagnostic {
     path: PathBuf,
@@ -295,6 +304,7 @@ enum Action {
     ToggleReadOnly,
     FormatDocument,
     OpenGitStatus,
+    OpenTodos,
     SelectTab(usize),
     CloseTab(usize),
     SaveActive,
@@ -330,6 +340,7 @@ pub struct App {
     build_options_tab: BuildOptionsTab,
     find: FindState,
     project_search: ProjectSearchState,
+    todo: TodoState,
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
     diagnostics_revision: u64,
@@ -377,6 +388,7 @@ impl App {
             build_options_tab: BuildOptionsTab::default(),
             find: FindState::default(),
             project_search: ProjectSearchState::default(),
+            todo: TodoState::default(),
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
             diagnostics_revision: u64::MAX,
@@ -704,6 +716,29 @@ impl App {
             Ok(true) => self.set_toast(format!("已格式化 {name}"), Severity::Success),
             Ok(false) => self.set_toast(format!("{name} 已经是格式化状态"), Severity::Info),
             Err(err) => self.set_toast(format!("格式化 {name} 失败：{err}"), Severity::Warning),
+        }
+    }
+
+    fn refresh_todos(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开一个工程文件夹", Severity::Warning);
+            return;
+        };
+        let ignore = IgnoreRules::load(
+            &root,
+            self.settings.respect_gitignore,
+            &self.settings.ignore_patterns,
+        );
+        match crate::todo::scan_project(&root, &ignore) {
+            Ok(outcome) => {
+                self.todo.items = outcome.items;
+                self.todo.truncated = outcome.truncated;
+                self.todo.error = None;
+            }
+            Err(err) => {
+                self.todo.items.clear();
+                self.todo.error = Some(err);
+            }
         }
     }
 
@@ -1447,6 +1482,7 @@ impl App {
             project_search_open,
             format_document,
             git_open,
+            todo_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -1471,6 +1507,7 @@ impl App {
                 command && input.modifiers.shift && input.key_pressed(egui::Key::F),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::I),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::G),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::T),
             )
         });
 
@@ -1534,6 +1571,10 @@ impl App {
             self.git_open = true;
             self.refresh_git_status();
         }
+        if todo_open {
+            self.todo.open = true;
+            self.refresh_todos();
+        }
         if format_document {
             self.format_current_document();
         }
@@ -1547,6 +1588,10 @@ impl App {
         }
         if self.git_open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.git_open = false;
+            self.focus_editor = true;
+        }
+        if self.todo.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.todo.open = false;
             self.focus_editor = true;
         }
         if zoom_in || zoom_out {
@@ -1626,6 +1671,10 @@ impl App {
                 Action::OpenGitStatus => {
                     self.git_open = true;
                     self.refresh_git_status();
+                }
+                Action::OpenTodos => {
+                    self.todo.open = true;
+                    self.refresh_todos();
                 }
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
@@ -1826,6 +1875,9 @@ impl eframe::App for App {
         }
         if self.git_open && !modal_open {
             self.show_git_status(&ctx, &mut actions);
+        }
+        if self.todo.open && !modal_open {
+            self.show_todos(&ctx, &mut actions);
         }
 
         if self.settings_draft.is_none()

@@ -90,6 +90,7 @@ docs/                  README 截图和使用教程
 - 每个 `Document` 有内存态 `read_only`；只读时编辑器不可交互，替换、编码切换、格式化与保存都会被拒绝。工具栏按钮切换，不持久化。
 - `formatting.rs` 调用 clang-format：优先 `Settings.clang_format_path`，否则查找 PATH 和常见 LLVM 目录；`format_on_save` 失败只提示，仍会保存原文。没有内置格式化器，不要伪造成功。
 - `git.rs` 通过本机 `git` 命令读取状态：`status --porcelain -z -uall --branch`，并用 `rev-parse --show-prefix` 把仓库根路径映射到工程子目录；`git diff HEAD -U0` 提供当前文件修改行。资源管理器显示 `M/U/A/D/R` 徽标，行号栏左侧黄色条表示修改行；`Ctrl+Shift+G` 打开只读状态窗口，不执行提交或网络操作。
+- `todo.rs` 扫描工程中的 `TODO` / `FIXME` / `HACK` / `NOTE`（大写单词边界），跳过忽略目录和 2 MB 以上文件，最多 500 条；`Ctrl+Shift+T` 或资源管理器 TODO 按钮打开窗口，支持类型过滤与点击跳转。
 - `log.rs` 的 `parse_location` 解析 `file:line:col`；日志行带位置时可点击跳转。`LogStore` 维护最多 1000 条问题诊断，`App::refresh_diagnostics` 解析为本地路径并在行号栏右侧画红/黄竖条；输出面板可过滤全部/错误/警告。
 - 当前版本仍未内置 LSP、调试器或自动补全；用户已规划这些增强，后续在 `xiug` 分支分批接入，不要伪造未接通的能力。
 

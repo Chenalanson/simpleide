@@ -16,6 +16,7 @@ mod makefile;
 mod project_meta;
 mod search;
 mod theme;
+mod todo;
 mod util;
 
 use std::path::PathBuf;
