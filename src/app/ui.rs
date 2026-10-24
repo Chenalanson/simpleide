@@ -152,16 +152,42 @@ impl App {
                             });
                     });
 
+                let mut resource_open = self.resource_open;
+                let mut info_open = self.info_open;
                 let available_height = ui.available_height();
-                let splitter_height = if has_project { 8.0 } else { 0.0 };
-                let content_height = (available_height - splitter_height).max(120.0);
-                let resource_height = if has_project {
-                    (content_height * self.left_split)
-                        .clamp(100.0, (content_height - 100.0).max(100.0))
+                let resource_header_height = 42.0;
+                let info_header_height = 34.0;
+                let (resource_height, info_height, show_splitter) = if !has_project {
+                    (
+                        if resource_open {
+                            available_height
+                        } else {
+                            resource_header_height
+                        },
+                        0.0,
+                        false,
+                    )
                 } else {
-                    available_height
+                    match (resource_open, info_open) {
+                        (true, true) => {
+                            let content_height = (available_height - 8.0).max(200.0);
+                            let resource_height = (content_height * self.left_split)
+                                .clamp(100.0, (content_height - 100.0).max(100.0));
+                            (resource_height, content_height - resource_height, true)
+                        }
+                        (true, false) => (
+                            (available_height - info_header_height).max(100.0),
+                            info_header_height,
+                            false,
+                        ),
+                        (false, true) => (
+                            resource_header_height,
+                            (available_height - resource_header_height).max(100.0),
+                            false,
+                        ),
+                        (false, false) => (resource_header_height, info_header_height, false),
+                    }
                 };
-                let info_height = (content_height - resource_height).max(100.0);
 
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), resource_height),
@@ -173,6 +199,9 @@ impl App {
                             .inner_margin(Margin::symmetric(11, 7))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
+                                    if section_chevron(ui, resource_open).clicked() {
+                                        resource_open = !resource_open;
+                                    }
                                     let (bar_rect, _) = ui
                                         .allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
                                     ui.painter().rect_filled(
@@ -180,12 +209,20 @@ impl App {
                                         CornerRadius::same(1),
                                         theme::ACCENT,
                                     );
-                                    ui.label(
-                                        RichText::new("资源管理器")
-                                            .size(12.0)
-                                            .strong()
-                                            .color(theme::TEXT_DIM),
-                                    );
+                                    if ui
+                                        .add(
+                                            Button::new(
+                                                RichText::new("资源管理器")
+                                                    .size(12.0)
+                                                    .strong()
+                                                    .color(theme::TEXT_DIM),
+                                            )
+                                            .frame(false),
+                                        )
+                                        .clicked()
+                                    {
+                                        resource_open = !resource_open;
+                                    }
                                     if has_project {
                                         ui.with_layout(
                                             Layout::right_to_left(Align::Center),
@@ -233,93 +270,96 @@ impl App {
                                 });
                             });
 
-                        light_separator(ui);
-                        let tree_height = (ui.available_height() - 2.0).max(80.0);
-                        ScrollArea::vertical()
-                            .id_salt("simple_embedded_file_tree")
-                            .max_height(tree_height)
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                Frame::new()
-                                    .inner_margin(Margin::symmetric(5, 4))
-                                    .show(ui, |ui| {
-                                        if has_project {
-                                            if let Some(tree) = self.tree.as_mut() {
-                                                let tree_actions =
-                                                    tree.show(ui, active_path.as_deref());
-                                                for tree_action in tree_actions {
-                                                    actions.push(match tree_action {
-                                                        TreeAction::OpenFile(path) => {
-                                                            Action::OpenFile(path)
-                                                        }
-                                                        TreeAction::Reveal(path) => {
-                                                            Action::Reveal(path)
-                                                        }
-                                                        TreeAction::OpenInVscode(path) => {
-                                                            Action::OpenVscode(path)
-                                                        }
-                                                    });
+                        if resource_open {
+                            light_separator(ui);
+                            let tree_height = (ui.available_height() - 2.0).max(80.0);
+                            ScrollArea::vertical()
+                                .id_salt("simple_embedded_file_tree")
+                                .max_height(tree_height)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    Frame::new().inner_margin(Margin::symmetric(5, 4)).show(
+                                        ui,
+                                        |ui| {
+                                            if has_project {
+                                                if let Some(tree) = self.tree.as_mut() {
+                                                    let tree_actions =
+                                                        tree.show(ui, active_path.as_deref());
+                                                    for tree_action in tree_actions {
+                                                        actions.push(match tree_action {
+                                                            TreeAction::OpenFile(path) => {
+                                                                Action::OpenFile(path)
+                                                            }
+                                                            TreeAction::Reveal(path) => {
+                                                                Action::Reveal(path)
+                                                            }
+                                                            TreeAction::OpenInVscode(path) => {
+                                                                Action::OpenVscode(path)
+                                                            }
+                                                        });
+                                                    }
                                                 }
+                                            } else {
+                                                ui.add_space(16.0);
+                                                ui.vertical_centered(|ui| {
+                                                    ui.label(
+                                                        RichText::new("工程文件会显示在这里")
+                                                            .size(11.0)
+                                                            .color(theme::TEXT_FAINT),
+                                                    );
+                                                });
                                             }
-                                        } else {
-                                            ui.add_space(16.0);
-                                            ui.vertical_centered(|ui| {
-                                                ui.label(
-                                                    RichText::new("工程文件会显示在这里")
-                                                        .size(11.0)
-                                                        .color(theme::TEXT_FAINT),
-                                                );
-                                            });
-                                        }
-                                        ui.add_space(8.0);
-                                    });
-                            });
+                                            ui.add_space(8.0);
+                                        },
+                                    );
+                                });
+                        }
                     },
                 );
 
                 if has_project {
-                    let (split_rect, split_response) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), splitter_height),
-                        Sense::drag(),
-                    );
-                    let split_response =
-                        split_response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-                    if split_response.dragged() {
-                        self.left_split = (self.left_split
-                            + split_response.drag_delta().y / content_height)
-                            .clamp(0.18, 0.82);
-                    }
-                    let line_color = if split_response.hovered() || split_response.dragged() {
-                        theme::ACCENT
-                    } else {
-                        Color32::from_rgb(150, 160, 175)
-                    };
-                    let line_y = split_rect.center().y;
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(split_rect.left(), line_y),
-                            egui::pos2(split_rect.right(), line_y),
-                        ],
-                        Stroke::new(1.0_f32, line_color),
-                    );
-                    if split_response.hovered() || split_response.dragged() {
-                        for offset in [-6.0_f32, 0.0, 6.0] {
-                            ui.painter().circle_filled(
-                                egui::pos2(split_rect.center().x + offset, line_y),
-                                1.2,
-                                line_color,
-                            );
+                    if show_splitter {
+                        let split_span = (resource_height + info_height).max(1.0);
+                        let (split_rect, split_response) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 8.0),
+                            Sense::drag(),
+                        );
+                        let split_response =
+                            split_response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                        if split_response.dragged() {
+                            self.left_split = (self.left_split
+                                + split_response.drag_delta().y / split_span)
+                                .clamp(0.18, 0.82);
                         }
+                        let line_color = if split_response.hovered() || split_response.dragged() {
+                            theme::ACCENT
+                        } else {
+                            Color32::from_rgb(150, 160, 175)
+                        };
+                        let line_y = split_rect.center().y;
+                        ui.painter().line_segment(
+                            [
+                                egui::pos2(split_rect.left(), line_y),
+                                egui::pos2(split_rect.right(), line_y),
+                            ],
+                            Stroke::new(1.0_f32, line_color),
+                        );
                     }
 
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), info_height),
                         Layout::top_down(Align::Min),
                         |ui| {
+                            if !show_splitter {
+                                light_separator(ui);
+                            }
                             Frame::new()
                                 .inner_margin(Margin::symmetric(11, 5))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
+                                        if section_chevron(ui, info_open).clicked() {
+                                            info_open = !info_open;
+                                        }
                                         let (bar_rect, _) = ui.allocate_exact_size(
                                             egui::vec2(3.0, 13.0),
                                             Sense::hover(),
@@ -329,28 +369,41 @@ impl App {
                                             CornerRadius::same(1),
                                             theme::ACCENT,
                                         );
-                                        ui.label(
-                                            RichText::new("工程信息")
-                                                .size(12.5)
-                                                .strong()
-                                                .color(theme::TEXT_DIM),
-                                        );
+                                        if ui
+                                            .add(
+                                                Button::new(
+                                                    RichText::new("工程信息")
+                                                        .size(12.5)
+                                                        .strong()
+                                                        .color(theme::TEXT_DIM),
+                                                )
+                                                .frame(false),
+                                            )
+                                            .clicked()
+                                        {
+                                            info_open = !info_open;
+                                        }
                                     });
                                 });
-                            light_separator(ui);
-                            Frame::new()
-                                .inner_margin(Margin::symmetric(11, 0))
-                                .show(ui, |ui| {
-                                    let height = (ui.available_height() - 2.0).max(80.0);
-                                    ScrollArea::vertical()
-                                        .id_salt("simple_embedded_project_meta")
-                                        .max_height(height)
-                                        .auto_shrink([false, false])
-                                        .show(ui, |ui| self.show_project_meta(ui, actions));
-                                });
+                            if info_open {
+                                light_separator(ui);
+                                Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
+                                    ui,
+                                    |ui| {
+                                        let height = (ui.available_height() - 2.0).max(80.0);
+                                        ScrollArea::vertical()
+                                            .id_salt("simple_embedded_project_meta")
+                                            .max_height(height)
+                                            .auto_shrink([false, false])
+                                            .show(ui, |ui| self.show_project_meta(ui, actions));
+                                    },
+                                );
+                            }
                         },
                     );
                 }
+                self.resource_open = resource_open;
+                self.info_open = info_open;
             });
     }
 
@@ -1685,6 +1738,12 @@ fn parse_meta_lines(text: &str) -> Vec<String> {
         }
     }
     lines
+}
+
+fn section_chevron(ui: &mut egui::Ui, open: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::click());
+    paint_chevron(ui.painter(), rect, open, theme::ACCENT);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 fn light_separator(ui: &mut egui::Ui) {

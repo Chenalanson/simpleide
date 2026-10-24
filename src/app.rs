@@ -145,6 +145,8 @@ pub struct App {
     build_options_draft: Option<BuildOptions>,
     build_options_tab: BuildOptionsTab,
     left_split: f32,
+    resource_open: bool,
+    info_open: bool,
     pending: Option<PendingDialog>,
     toast: Option<Toast>,
     allow_close: bool,
@@ -176,6 +178,8 @@ impl App {
             build_options_draft: None,
             build_options_tab: BuildOptionsTab::default(),
             left_split: 0.5,
+            resource_open: true,
+            info_open: true,
             pending: None,
             toast: None,
             allow_close: false,
@@ -1132,6 +1136,7 @@ impl App {
         let mut auto_scroll = self.settings.auto_scroll_output;
         let mut toggle_output = false;
         let (status_color, status_text) = self.build_status();
+        let full_height = ui.available_height().max(100.0);
 
         let mut panel = egui::Panel::bottom("simple_embedded_build_output");
         panel = if open {
@@ -1139,7 +1144,7 @@ impl App {
                 .resizable(true)
                 .default_size(214.0)
                 .min_size(100.0)
-                .max_size(520.0)
+                .max_size(full_height)
         } else {
             panel.resizable(false).exact_size(36.0)
         };
