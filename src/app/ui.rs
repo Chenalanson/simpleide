@@ -85,27 +85,6 @@ impl App {
                                                 },
                                             ),
                                         );
-                                        let links_width = 38.0;
-                                        let remaining = ui.available_width();
-                                        if remaining > links_width {
-                                            ui.add_space(remaining - links_width);
-                                        }
-                                        ui.vertical(|ui| {
-                                            if ui
-                                                .add(small_flat_button("配置", theme::ACCENT))
-                                                .on_hover_text("编辑构建环境")
-                                                .clicked()
-                                            {
-                                                actions.push(Action::OpenSettings);
-                                            }
-                                            if ui
-                                                .add(small_flat_button("更换", theme::TEXT_FAINT))
-                                                .on_hover_text("打开另一个工程文件夹 (Ctrl+O)")
-                                                .clicked()
-                                            {
-                                                actions.push(Action::OpenPicker);
-                                            }
-                                        });
                                     });
                                     if has_command {
                                         ui.add(
@@ -119,6 +98,35 @@ impl App {
                                         )
                                         .on_hover_text(&command);
                                     }
+                                    ui.add_space(6.0);
+                                    let spacing = ui.spacing().item_spacing.x;
+                                    let button_width =
+                                        ((ui.available_width() - spacing) / 2.0).max(0.0);
+                                    ui.horizontal(|ui| {
+                                        if ui
+                                            .add_sized(
+                                                [button_width, 28.0],
+                                                theme::secondary_button("更换"),
+                                            )
+                                            .on_hover_text("打开另一个工程文件夹 (Ctrl+O)")
+                                            .clicked()
+                                        {
+                                            actions.push(Action::OpenPicker);
+                                        }
+                                        let config = egui::Button::new(
+                                            RichText::new("配置").size(12.5).color(theme::ACCENT),
+                                        )
+                                        .fill(theme::SURFACE)
+                                        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                                        .corner_radius(6);
+                                        if ui
+                                            .add_sized([button_width, 28.0], config)
+                                            .on_hover_text("编辑构建环境")
+                                            .clicked()
+                                        {
+                                            actions.push(Action::OpenSettings);
+                                        }
+                                    });
                                 });
                         } else {
                             Frame::new()
@@ -154,8 +162,8 @@ impl App {
                         }
                     });
 
-                ui.add_space(10.0);
-                ui.separator();
+                ui.add_space(8.0);
+                light_separator(ui);
                 Frame::new()
                     .inner_margin(Margin::symmetric(11, 7))
                     .show(ui, |ui| {
@@ -217,9 +225,16 @@ impl App {
                         });
                     });
 
-                ui.separator();
+                light_separator(ui);
+                let info_height = if has_project {
+                    (ui.available_height() * 0.55).clamp(210.0, 300.0)
+                } else {
+                    0.0
+                };
+                let tree_height = (ui.available_height() - info_height - 26.0).max(120.0);
                 ScrollArea::vertical()
                     .id_salt("simple_embedded_file_tree")
+                    .max_height(tree_height)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         Frame::new()
@@ -253,7 +268,119 @@ impl App {
                                 ui.add_space(8.0);
                             });
                     });
+
+                if has_project {
+                    ui.add_space(5.0);
+                    light_separator(ui);
+                    Frame::new()
+                        .inner_margin(Margin::symmetric(11, 5))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let (bar_rect, _) =
+                                    ui.allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
+                                ui.painter().rect_filled(
+                                    bar_rect,
+                                    CornerRadius::same(1),
+                                    theme::ACCENT,
+                                );
+                                ui.label(
+                                    RichText::new("工程信息")
+                                        .size(12.5)
+                                        .strong()
+                                        .color(theme::TEXT_DIM),
+                                );
+                            });
+                        });
+                    light_separator(ui);
+                    Frame::new()
+                        .inner_margin(Margin::symmetric(11, 0))
+                        .show(ui, |ui| {
+                            ScrollArea::vertical()
+                                .id_salt("simple_embedded_project_meta")
+                                .max_height((info_height - 40.0).max(120.0))
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| self.show_project_meta(ui, actions));
+                        });
+                }
             });
+    }
+
+    fn show_project_meta(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let meta = &self.project_meta;
+        let toolchain = meta
+            .toolchain
+            .clone()
+            .unwrap_or_else(|| self.build_config.tool_name().to_owned());
+
+        ui.spacing_mut().item_spacing.y = 2.0;
+
+        meta_group(ui, "构建配置", true, |ui| {
+            meta_row(ui, "工具链", &toolchain);
+            if let Some(target) = &meta.target {
+                meta_row(ui, "工程目标", target);
+            }
+            meta_row(
+                ui,
+                "输出目录",
+                meta.output_dir.as_deref().unwrap_or("未检测"),
+            );
+            if let Some(device) = &meta.device {
+                meta_row(ui, "芯片型号", device);
+            }
+            if let Some(cpu) = &meta.cpu {
+                meta_row(ui, "CPU 类型", cpu);
+            }
+            if let Some(fpu) = &meta.fpu {
+                meta_row(ui, "硬件浮点", fpu);
+            }
+            if let Some(script) = &meta.linker_script {
+                meta_row(ui, "链接脚本", script);
+            }
+            if let Some(layout) = &meta.memory_layout {
+                meta_row(ui, "内存布局", layout);
+            }
+            if !self.build_config.build_command.trim().is_empty() {
+                meta_row(ui, "构建命令", &self.build_config.build_command);
+            }
+        });
+
+        meta_group(ui, "C/C++ 属性", true, |ui| {
+            meta_editable_list(
+                ui,
+                "包含目录",
+                self.effective_includes(),
+                MetaListField::Includes,
+                actions,
+            );
+            meta_editable_list(
+                ui,
+                "库搜索目录",
+                self.effective_library_dirs(),
+                MetaListField::LibraryDirs,
+                actions,
+            );
+            meta_editable_list(
+                ui,
+                "预处理器定义",
+                self.effective_defines(),
+                MetaListField::Defines,
+                actions,
+            );
+            if let Some(compiler) = &meta.compiler {
+                meta_row(ui, "编译器", compiler);
+            }
+            if let Some(optimization) = &meta.optimization {
+                meta_row(ui, "优化选项", optimization);
+            }
+            ui.add_space(2.0);
+            if ui
+                .add(small_flat_button("批量编辑", theme::TEXT_FAINT))
+                .on_hover_text("编辑包含目录、库搜索目录和预处理定义")
+                .clicked()
+            {
+                actions.push(Action::EditMeta);
+            }
+        });
     }
 
     pub(super) fn show_center(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -568,6 +695,254 @@ impl App {
 }
 
 impl App {
+    pub(super) fn show_meta_modal(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.meta_draft.take() else {
+            return;
+        };
+        let mut close = false;
+        let mut save = false;
+        let mut reset = false;
+
+        let modal = egui::Modal::new(Id::new("simple_embedded_meta_modal"))
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(20, 16)),
+            )
+            .backdrop_color(Color32::from_black_alpha(170));
+        modal.show(ctx, |ui| {
+            ui.set_width(520.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("编辑 C/C++ 属性")
+                        .size(18.0)
+                        .strong()
+                        .color(theme::TEXT),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add(
+                            Button::new(RichText::new("×").size(16.0).color(theme::TEXT_DIM))
+                                .frame(false),
+                        )
+                        .on_hover_text("取消")
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("保存在本机工程设置中，不会修改 Makefile 或 .uvprojx。")
+                    .size(10.5)
+                    .color(theme::TEXT_FAINT),
+            );
+            ui.add_space(10.0);
+
+            ui.label(
+                RichText::new("包含目录（每行一个）")
+                    .size(11.0)
+                    .color(theme::TEXT_DIM),
+            );
+            ui.add_space(3.0);
+            Frame::new()
+                .fill(theme::BG)
+                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .corner_radius(6)
+                .inner_margin(Margin::symmetric(6, 5))
+                .show(ui, |ui| {
+                    ui.add(
+                        TextEdit::multiline(&mut draft.includes)
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .hint_text("例如 ../Core/Inc")
+                            .desired_rows(5)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("库搜索目录（每行一个）")
+                    .size(11.0)
+                    .color(theme::TEXT_DIM),
+            );
+            ui.add_space(3.0);
+            Frame::new()
+                .fill(theme::BG)
+                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .corner_radius(6)
+                .inner_margin(Margin::symmetric(6, 5))
+                .show(ui, |ui| {
+                    ui.add(
+                        TextEdit::multiline(&mut draft.library_dirs)
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .hint_text("例如 lib")
+                            .desired_rows(3)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("预处理器定义（每行一个）")
+                    .size(11.0)
+                    .color(theme::TEXT_DIM),
+            );
+            ui.add_space(3.0);
+            Frame::new()
+                .fill(theme::BG)
+                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .corner_radius(6)
+                .inner_margin(Margin::symmetric(6, 5))
+                .show(ui, |ui| {
+                    ui.add(
+                        TextEdit::multiline(&mut draft.defines)
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .hint_text("例如 USE_HAL_DRIVER")
+                            .desired_rows(4)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+
+            if let Some(note) = &draft.note {
+                ui.add_space(8.0);
+                ui.label(RichText::new(note).size(10.5).color(theme::WARNING));
+            }
+
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add(theme::secondary_button("恢复自动检测"))
+                    .on_hover_text("清除手动覆盖，重新使用 Makefile / .uvprojx 中的值")
+                    .clicked()
+                {
+                    reset = true;
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(theme::primary_button("保存")).clicked() {
+                        save = true;
+                    }
+                    if ui.add(theme::secondary_button("取消")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+
+        if save {
+            self.save_meta_overrides(
+                parse_meta_lines(&draft.includes),
+                parse_meta_lines(&draft.library_dirs),
+                parse_meta_lines(&draft.defines),
+            );
+        } else if reset {
+            self.clear_meta_overrides();
+        } else if !close {
+            self.meta_draft = Some(draft);
+        }
+    }
+
+    pub(super) fn show_meta_add_modal(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.meta_add.take() else {
+            return;
+        };
+        let mut close = false;
+        let mut add = false;
+
+        let modal = egui::Modal::new(Id::new("simple_embedded_meta_add_modal"))
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(20, 16)),
+            )
+            .backdrop_color(Color32::from_black_alpha(150));
+        modal.show(ctx, |ui| {
+            ui.set_width(430.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("添加{}", draft.field.label()))
+                        .size(16.0)
+                        .strong()
+                        .color(theme::TEXT),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add(
+                            Button::new(RichText::new("×").size(16.0).color(theme::TEXT_DIM))
+                                .frame(false),
+                        )
+                        .on_hover_text("取消")
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(3.0);
+            ui.label(
+                RichText::new("保存在本机工程设置中，不会修改 Makefile 或 .uvprojx。")
+                    .size(10.5)
+                    .color(theme::TEXT_FAINT),
+            );
+            ui.add_space(10.0);
+            Frame::new()
+                .fill(theme::BG)
+                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .corner_radius(6)
+                .inner_margin(Margin::symmetric(7, 5))
+                .show(ui, |ui| {
+                    let response = ui.add(
+                        TextEdit::singleline(&mut draft.value)
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .hint_text(match draft.field {
+                                MetaListField::Includes => "例如 ../Core/Inc",
+                                MetaListField::LibraryDirs => "例如 lib",
+                                MetaListField::Defines => "例如 USE_HAL_DRIVER",
+                            })
+                            .desired_width(f32::INFINITY),
+                    );
+                    response.request_focus();
+                });
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(theme::primary_button("添加")).clicked() {
+                        add = true;
+                    }
+                    if ui.add(theme::secondary_button("取消")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+            if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                add = true;
+            }
+        });
+
+        if add {
+            if draft.value.trim().is_empty() {
+                self.meta_add = Some(draft);
+            } else {
+                self.add_meta_value(draft.field, &draft.value);
+            }
+        } else if !close {
+            self.meta_add = Some(draft);
+        }
+    }
+
     pub(super) fn show_settings_modal(&mut self, ctx: &egui::Context) {
         let Some(mut draft) = self.settings_draft.take() else {
             return;
@@ -923,6 +1298,164 @@ impl App {
             self.set_toast("设置已保存", Severity::Success);
         } else {
             self.settings_draft = Some(draft);
+        }
+    }
+}
+
+fn parse_meta_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if !lines.iter().any(|value| value == line) {
+            lines.push(line.to_owned());
+        }
+    }
+    lines
+}
+
+fn light_separator(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter()
+        .rect_filled(rect, CornerRadius::ZERO, Color32::from_rgb(200, 208, 220));
+}
+
+fn meta_group(
+    ui: &mut egui::Ui,
+    title: &str,
+    default_open: bool,
+    content: impl FnOnce(&mut egui::Ui),
+) {
+    let id = ui.make_persistent_id(("simple_embedded_meta_group", title));
+    let mut open = ui
+        .data_mut(|data| data.get_persisted::<bool>(id))
+        .unwrap_or(default_open);
+    let mut toggle = false;
+
+    ui.horizontal(|ui| {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::click());
+        paint_chevron(ui.painter(), rect, open, theme::ACCENT);
+        if response.clicked() {
+            toggle = true;
+        }
+        if ui
+            .add(
+                Button::new(
+                    RichText::new(title)
+                        .size(12.5)
+                        .strong()
+                        .color(theme::TEXT_DIM),
+                )
+                .frame(false),
+            )
+            .clicked()
+        {
+            toggle = true;
+        }
+    });
+
+    if toggle {
+        open = !open;
+        ui.data_mut(|data| data.insert_persisted(id, open));
+    }
+    if open {
+        ui.add_space(2.0);
+        ui.indent(id.with("body"), |ui| content(ui));
+        ui.add_space(3.0);
+    }
+}
+
+fn paint_chevron(painter: &egui::Painter, rect: egui::Rect, open: bool, color: Color32) {
+    let center = rect.center();
+    let stroke = Stroke::new(1.6_f32, color);
+    if open {
+        painter.line_segment(
+            [
+                egui::pos2(center.x - 4.0, center.y - 2.0),
+                egui::pos2(center.x, center.y + 2.0),
+            ],
+            stroke,
+        );
+        painter.line_segment(
+            [
+                egui::pos2(center.x, center.y + 2.0),
+                egui::pos2(center.x + 4.0, center.y - 2.0),
+            ],
+            stroke,
+        );
+    } else {
+        painter.line_segment(
+            [
+                egui::pos2(center.x - 2.0, center.y - 4.0),
+                egui::pos2(center.x + 2.0, center.y),
+            ],
+            stroke,
+        );
+        painter.line_segment(
+            [
+                egui::pos2(center.x + 2.0, center.y),
+                egui::pos2(center.x - 2.0, center.y + 4.0),
+            ],
+            stroke,
+        );
+    }
+}
+
+fn meta_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    if value.trim().is_empty() {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [70.0, 18.0],
+            Label::new(RichText::new(label).size(11.0).color(theme::TEXT_FAINT)),
+        );
+        let response =
+            ui.add(Label::new(RichText::new(value).size(11.5).color(theme::TEXT_DIM)).truncate());
+        response.on_hover_text(value);
+    });
+}
+
+fn meta_editable_list(
+    ui: &mut egui::Ui,
+    label: &str,
+    items: &[String],
+    field: MetaListField,
+    actions: &mut Vec<Action>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(11.0).color(theme::TEXT_FAINT));
+        let button_width = 22.0;
+        let remaining = ui.available_width();
+        if remaining > button_width {
+            ui.add_space(remaining - button_width);
+        }
+        let plus = Button::new(RichText::new("+").size(16.0).strong().color(theme::SUCCESS))
+            .frame(false)
+            .min_size(egui::vec2(20.0, 20.0));
+        if ui.add(plus).on_hover_text(format!("添加{label}")).clicked() {
+            actions.push(Action::AddMetaItem(field));
+        }
+    });
+
+    if items.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(RichText::new("未检测").size(11.0).color(theme::TEXT_FAINT));
+        });
+    } else {
+        for item in items {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                let response = ui.add(
+                    Label::new(
+                        RichText::new(format!("• {item}"))
+                            .monospace()
+                            .size(11.0)
+                            .color(theme::TEXT_DIM),
+                    )
+                    .truncate(),
+                );
+                response.on_hover_text(item);
+            });
         }
     }
 }

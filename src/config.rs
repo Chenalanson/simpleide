@@ -46,6 +46,12 @@ pub struct BuildConfig {
     pub remote_dir: String,
     /// Extra directories prepended to PATH for local build commands.
     pub extra_paths: Vec<String>,
+    /// User overrides for the includes shown in the project info tree.
+    pub meta_includes: Option<Vec<String>>,
+    /// User overrides for the library search directories shown in the project info tree.
+    pub meta_library_dirs: Option<Vec<String>>,
+    /// User overrides for the defines shown in the project info tree.
+    pub meta_defines: Option<Vec<String>>,
 }
 
 impl Default for BuildConfig {
@@ -60,6 +66,9 @@ impl Default for BuildConfig {
             ssh_port: 22,
             remote_dir: String::new(),
             extra_paths: Vec::new(),
+            meta_includes: None,
+            meta_library_dirs: None,
+            meta_defines: None,
         }
     }
 }

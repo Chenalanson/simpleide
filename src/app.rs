@@ -19,6 +19,7 @@ use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::highlight::{self, Highlighter};
 use crate::log::Severity;
+use crate::project_meta::ProjectMeta;
 use crate::theme;
 use crate::util::{self, format_duration, project_key};
 
@@ -49,6 +50,35 @@ struct SettingsDraft {
     error: Option<String>,
 }
 
+struct MetaDraft {
+    includes: String,
+    library_dirs: String,
+    defines: String,
+    note: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetaListField {
+    Includes,
+    LibraryDirs,
+    Defines,
+}
+
+impl MetaListField {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Includes => "包含目录",
+            Self::LibraryDirs => "库搜索目录",
+            Self::Defines => "预处理器定义",
+        }
+    }
+}
+
+struct MetaAddDraft {
+    field: MetaListField,
+    value: String,
+}
+
 enum PendingAction {
     OpenProject(PathBuf),
     CloseTab(usize),
@@ -77,6 +107,8 @@ enum Action {
     RefreshTree,
     ToggleHidden,
     OpenSettings,
+    EditMeta,
+    AddMetaItem(MetaListField),
     ClearLog,
     CopyLog,
     Reveal(PathBuf),
@@ -91,9 +123,12 @@ pub struct App {
     tabs: Vec<Document>,
     active: Option<usize>,
     tree: Option<FileTree>,
+    project_meta: ProjectMeta,
     build: BuildController,
     build_config: BuildConfig,
     settings_draft: Option<SettingsDraft>,
+    meta_draft: Option<MetaDraft>,
+    meta_add: Option<MetaAddDraft>,
     pending: Option<PendingDialog>,
     toast: Option<Toast>,
     allow_close: bool,
@@ -117,8 +152,11 @@ impl App {
             tabs: Vec::new(),
             active: None,
             tree: None,
+            project_meta: ProjectMeta::default(),
             build_config: BuildConfig::default(),
             settings_draft: None,
+            meta_draft: None,
+            meta_add: None,
             pending: None,
             toast: None,
             allow_close: false,
@@ -175,6 +213,7 @@ impl App {
         let tool_known = detected_tool(&root).is_some();
 
         let project_name = Project::new(root.clone()).name;
+        self.project_meta = ProjectMeta::detect(&root);
         self.project = Some(Project::new(root.clone()));
         self.build_config = config;
         self.tree = Some(FileTree::new(root.clone(), self.settings.show_hidden));
@@ -399,6 +438,108 @@ impl App {
         });
     }
 
+    fn effective_includes(&self) -> &[String] {
+        self.build_config
+            .meta_includes
+            .as_deref()
+            .unwrap_or(&self.project_meta.include_dirs)
+    }
+
+    fn effective_library_dirs(&self) -> &[String] {
+        self.build_config
+            .meta_library_dirs
+            .as_deref()
+            .unwrap_or(&self.project_meta.library_dirs)
+    }
+
+    fn effective_defines(&self) -> &[String] {
+        self.build_config
+            .meta_defines
+            .as_deref()
+            .unwrap_or(&self.project_meta.defines)
+    }
+
+    fn meta_values(&self, field: MetaListField) -> Vec<String> {
+        match field {
+            MetaListField::Includes => self.effective_includes().to_vec(),
+            MetaListField::LibraryDirs => self.effective_library_dirs().to_vec(),
+            MetaListField::Defines => self.effective_defines().to_vec(),
+        }
+    }
+
+    fn set_meta_values(&mut self, field: MetaListField, values: Vec<String>) {
+        match field {
+            MetaListField::Includes => self.build_config.meta_includes = Some(values),
+            MetaListField::LibraryDirs => self.build_config.meta_library_dirs = Some(values),
+            MetaListField::Defines => self.build_config.meta_defines = Some(values),
+        }
+    }
+
+    fn open_meta_editor(&mut self) {
+        if self.project.is_none() {
+            return;
+        }
+        self.meta_draft = Some(MetaDraft {
+            includes: self.effective_includes().join("\n"),
+            library_dirs: self.effective_library_dirs().join("\n"),
+            defines: self.effective_defines().join("\n"),
+            note: None,
+        });
+    }
+
+    fn open_meta_add(&mut self, field: MetaListField) {
+        if self.project.is_none() {
+            return;
+        }
+        self.meta_add = Some(MetaAddDraft {
+            field,
+            value: String::new(),
+        });
+    }
+
+    fn add_meta_value(&mut self, field: MetaListField, value: &str) {
+        let value = value.trim();
+        if value.is_empty() || self.project.is_none() {
+            return;
+        }
+        let mut values = self.meta_values(field);
+        if !values.iter().any(|existing| existing == value) {
+            values.push(value.to_owned());
+        }
+        self.set_meta_values(field, values);
+        self.persist_meta_overrides();
+        self.set_toast(format!("已添加{}", field.label()), Severity::Success);
+    }
+
+    fn save_meta_overrides(
+        &mut self,
+        includes: Vec<String>,
+        library_dirs: Vec<String>,
+        defines: Vec<String>,
+    ) {
+        self.build_config.meta_includes = Some(includes);
+        self.build_config.meta_library_dirs = Some(library_dirs);
+        self.build_config.meta_defines = Some(defines);
+        self.persist_meta_overrides();
+        self.set_toast("已保存 C/C++ 属性", Severity::Success);
+    }
+
+    fn clear_meta_overrides(&mut self) {
+        self.build_config.meta_includes = None;
+        self.build_config.meta_library_dirs = None;
+        self.build_config.meta_defines = None;
+        self.persist_meta_overrides();
+        self.set_toast("已恢复自动检测的 C/C++ 属性", Severity::Info);
+    }
+
+    fn persist_meta_overrides(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        self.settings.set_build_config(&root, &self.build_config);
+        self.settings.save();
+    }
+
     fn set_toast(&mut self, message: impl Into<String>, severity: Severity) {
         self.toast = Some(Toast {
             message: message.into(),
@@ -408,11 +549,16 @@ impl App {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        let modal_open = self.settings_draft.is_some() || self.pending.is_some();
+        let modal_open = self.settings_draft.is_some()
+            || self.pending.is_some()
+            || self.meta_draft.is_some()
+            || self.meta_add.is_some();
         if modal_open {
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 self.settings_draft = None;
                 self.pending = None;
+                self.meta_draft = None;
+                self.meta_add = None;
             }
             return;
         }
@@ -547,6 +693,9 @@ impl App {
                         tree.refresh();
                         self.set_toast("文件树已刷新", Severity::Info);
                     }
+                    if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
+                        self.project_meta = ProjectMeta::detect(&root);
+                    }
                 }
                 Action::ToggleHidden => {
                     self.settings.show_hidden = !self.settings.show_hidden;
@@ -556,6 +705,8 @@ impl App {
                     self.settings.save();
                 }
                 Action::OpenSettings => self.open_settings(),
+                Action::EditMeta => self.open_meta_editor(),
+                Action::AddMetaItem(field) => self.open_meta_add(field),
                 Action::ClearLog => {
                     self.build.log.clear();
                 }
@@ -683,8 +834,20 @@ impl eframe::App for App {
             self.show_pending_modal(&ctx);
             actions.clear();
         }
+        if self.meta_draft.is_some() {
+            self.show_meta_modal(&ctx);
+            actions.clear();
+        }
+        if self.meta_add.is_some() {
+            self.show_meta_add_modal(&ctx);
+            actions.clear();
+        }
 
-        if self.settings_draft.is_none() && self.pending.is_none() {
+        if self.settings_draft.is_none()
+            && self.pending.is_none()
+            && self.meta_draft.is_none()
+            && self.meta_add.is_none()
+        {
             self.apply_actions(&ctx, actions);
         }
 

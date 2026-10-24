@@ -17,6 +17,7 @@
 - 打开任意文件夹作为工程，不做 `Makefile` / `Cargo.toml` / `CMakeLists.txt` 之外的项目配置
 - 深色标题栏与界面配色一致，构建 / 清理 / 重构建 / 烧录集中在右侧操作栏
 - 左侧构建卡片显示工程名（加粗）、完整路径、构建模式和命令，可配置或更换工程
+- 工程信息树：分组左侧箭头可折叠；从 Makefile 或 Keil `.uvprojx` 读取 CPU、浮点、链接脚本、内存布局、包含目录、库搜索目录和宏定义；列表右侧 `+` 可添加，修改保存在本机设置
 - 左侧目录树：展开/折叠、隐藏文件、刷新、点击打开文件；右键可在资源管理器或 VS Code 中打开
 - 多文件 Tab、脏标记、关闭前提示保存
 - 文本编辑：`Ctrl+S` 保存、Tab 缩进、撤销/重做、复制粘贴等由 egui 文本编辑控件提供
@@ -136,6 +137,7 @@ src/
   app/ui.rs      工程卡片、文件树、Tab、编辑器、空状态、设置/确认弹窗
   build.rs       子进程、stdout/stderr、停止、日志事件
   config.rs      自动检测、每工程设置、SSH 命令
+  project_meta.rs Makefile / Keil 工程元数据提取
   editor.rs      String 文档 + egui TextBuffer 适配 + 保存
   file_tree.rs   惰性目录树
   highlight.rs   syntect 高亮 + galley 缓存

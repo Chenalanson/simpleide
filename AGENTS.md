@@ -47,6 +47,7 @@ src/app.rs             App 状态、快捷键、打开/保存、右侧操作栏�
 src/app/ui.rs          app 的子模块：文件树、Tab、编辑器、空工程/空标签占位、设置/确认弹窗
 src/build.rs           子进程、stdout/stderr、停止、构建事件与结果
 src/config.rs          自动检测、每工程配置、SSH 命令构造、设置读写
+src/project_meta.rs    Makefile / Keil .uvprojx 工程元数据提取
 src/editor.rs          EditorBuffer（String + revision）和 Document
 src/file_tree.rs       惰性目录树
 src/highlight.rs       syntect 高亮和 galley 缓存
@@ -78,6 +79,13 @@ docs/                  README 截图和使用教程
 - 支持 UTF-8，文件上限 16 MB，二进制文件拒绝打开。
 - 打开文件/切换 Tab 时，`focus_editor` 会请求焦点并清掉跨 Tab 的旧选区。
 - 不要引入 LSP、调试器或自动补全；这不在项目中。
+
+### 工程信息
+
+- `project_meta.rs` 在打开工程时读取 Makefile 或 Keil `.uvprojx`，提取目标名、芯片、CPU、浮点、链接脚本、内存布局、包含目录、宏定义等。
+- 左栏先显示资源管理器，再显示“工程信息”；分割线紧贴“工程信息”标题上下，只保留“构建配置”和“C/C++ 属性”两个分组。两个分组标题左侧各有折叠箭头，展开状态存在 egui 内存中。数据按工程缓存，刷新文件树时重新读取。
+- 包含目录、库搜索目录和预处理器定义支持在左栏编辑：每个列表右侧有绿色 `+`，批量编辑仍可用。覆盖值存 `BuildConfig.meta_includes` / `meta_library_dirs` / `meta_defines`（`None` 表示自动检测），只影响工程信息展示，不修改 Makefile/.uvprojx，也不写工程目录。
+- 没有可解析的工程文件时只依赖 `BuildConfig`，不要为空字段编造值。
 
 ### 文件树
 
