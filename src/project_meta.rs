@@ -207,7 +207,7 @@ impl ProjectMeta {
     }
 }
 
-fn find_makefile(root: &Path) -> Option<PathBuf> {
+pub(crate) fn find_makefile(root: &Path) -> Option<PathBuf> {
     for name in ["Makefile", "makefile", "GNUmakefile"] {
         let path = root.join(name);
         if path.is_file() {

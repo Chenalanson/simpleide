@@ -22,6 +22,7 @@ use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::highlight::{self, Highlighter};
 use crate::log::Severity;
+use crate::makefile;
 use crate::project_meta::ProjectMeta;
 use crate::theme;
 use crate::util::{self, format_duration, project_key};
@@ -231,7 +232,13 @@ impl App {
 
         self.build.reset();
 
-        let config = self.settings.build_config_for(&root);
+        let mut config = self.settings.build_config_for(&root);
+        if let Some(makefile) = makefile::find_makefile(&root) {
+            let fallback = config.build_options.clone();
+            if let Some(options) = makefile::read_options(&makefile, &fallback) {
+                config.build_options = options;
+            }
+        }
         let key = project_key(&root);
         if !self.settings.build_configs.contains_key(&key) {
             self.settings.set_build_config(&root, &config);
@@ -533,8 +540,12 @@ impl App {
             values.push(value.to_owned());
         }
         self.set_meta_values(field, values);
-        self.persist_meta_overrides();
-        self.set_toast(format!("已添加{}", field.label()), Severity::Success);
+        let result = self.persist_meta_overrides();
+        self.notify_sync(
+            &format!("已添加{}", field.label()),
+            result,
+            Severity::Success,
+        );
     }
 
     fn save_meta_overrides(
@@ -546,40 +557,105 @@ impl App {
         self.build_config.meta_includes = Some(includes);
         self.build_config.meta_library_dirs = Some(library_dirs);
         self.build_config.meta_defines = Some(defines);
-        self.persist_meta_overrides();
-        self.set_toast("已保存 C/C++ 属性", Severity::Success);
+        let result = self.persist_meta_overrides();
+        self.notify_sync("已保存 C/C++ 属性", result, Severity::Success);
     }
 
     fn clear_meta_overrides(&mut self) {
         self.build_config.meta_includes = None;
         self.build_config.meta_library_dirs = None;
         self.build_config.meta_defines = None;
-        self.persist_meta_overrides();
-        self.set_toast("已恢复自动检测的 C/C++ 属性", Severity::Info);
+        let result = self.persist_meta_overrides();
+        self.notify_sync("已恢复自动检测的 C/C++ 属性", result, Severity::Info);
     }
 
-    fn persist_meta_overrides(&mut self) {
+    fn persist_meta_overrides(&mut self) -> Result<bool, String> {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
-            return;
+            return Ok(false);
         };
+        let includes = self.effective_includes().to_vec();
+        let library_dirs = self.effective_library_dirs().to_vec();
+        let defines = self.effective_defines().to_vec();
+
         self.settings.set_build_config(&root, &self.build_config);
         self.settings.save();
+
+        let Some(makefile_path) = makefile::find_makefile(&root) else {
+            return Ok(false);
+        };
+        if self
+            .tabs
+            .iter()
+            .any(|document| same_path(&document.path, &makefile_path))
+        {
+            return Err("Makefile 已在编辑器中打开，请先关闭后再同步".to_owned());
+        }
+        let synced = makefile::sync_lists(&root, &includes, &library_dirs, &defines)?.is_some();
+        if synced {
+            self.project_meta = ProjectMeta::detect(&root);
+        }
+        Ok(synced)
     }
 
     fn open_build_options(&mut self) {
-        if self.project.is_some() {
-            self.build_options_draft = Some(self.build_config.build_options.clone());
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        let mut options = self.build_config.build_options.clone();
+        if let Some(makefile) = makefile::find_makefile(&root) {
+            if let Some(parsed) = makefile::read_options(&makefile, &options) {
+                options = parsed;
+            }
         }
+        self.build_config.build_options = options.clone();
+        self.build_options_draft = Some(options);
     }
 
     fn save_build_options(&mut self, options: BuildOptions) {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             return;
         };
-        self.build_config.build_options = options;
+        let fallback = self.build_config.build_options.clone();
+        let before = makefile::find_makefile(&root)
+            .and_then(|path| makefile::read_options(&path, &fallback))
+            .unwrap_or_else(|| fallback.clone());
+        self.build_config.build_options = options.clone();
         self.settings.set_build_config(&root, &self.build_config);
         self.settings.save();
-        self.set_toast("已保存构建选项", Severity::Success);
+
+        let result = self.sync_makefile_options(&root, &before, &options);
+        self.notify_sync("已保存构建选项", result, Severity::Success);
+        self.project_meta = ProjectMeta::detect(&root);
+    }
+
+    fn sync_makefile_options(
+        &self,
+        root: &Path,
+        before: &BuildOptions,
+        after: &BuildOptions,
+    ) -> Result<bool, String> {
+        let Some(makefile) = makefile::find_makefile(root) else {
+            return Ok(false);
+        };
+        if self
+            .tabs
+            .iter()
+            .any(|document| same_path(&document.path, &makefile))
+        {
+            return Err("Makefile 已在编辑器中打开，请先关闭后再同步".to_owned());
+        }
+        Ok(makefile::sync_options(root, before, after)?.is_some())
+    }
+
+    fn notify_sync(&mut self, message: &str, result: Result<bool, String>, severity: Severity) {
+        match result {
+            Ok(true) => self.set_toast(format!("{message}，已同步到 Makefile"), severity),
+            Ok(false) => self.set_toast(message.to_owned(), severity),
+            Err(err) => self.set_toast(
+                format!("{message}，但同步 Makefile 失败：{err}"),
+                Severity::Warning,
+            ),
+        }
     }
 
     fn set_toast(&mut self, message: impl Into<String>, severity: Severity) {

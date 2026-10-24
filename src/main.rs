@@ -7,6 +7,7 @@ mod editor;
 mod file_tree;
 mod highlight;
 mod log;
+mod makefile;
 mod project_meta;
 mod theme;
 mod util;

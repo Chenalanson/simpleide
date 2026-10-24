@@ -78,7 +78,45 @@ impl FileTree {
         let mut actions = Vec::new();
         ui.spacing_mut().item_spacing.y = 1.0;
         let root = self.root.clone();
-        self.show_dir(ui, &root, 0, active, &mut actions);
+        let root_name = {
+            let name = file_name(&root);
+            if name.is_empty() {
+                crate::util::display_path(&root)
+            } else {
+                name
+            }
+        };
+        let expanded = self.expanded.contains(&root);
+        let row = row(ui, &root_name, true, expanded, 0, false, true);
+
+        if row.response.clicked() {
+            if expanded {
+                self.expanded.remove(&root);
+            } else {
+                self.expanded.insert(root.clone());
+                let _ = self.children_for(&root);
+            }
+        }
+
+        let mut context_action = None;
+        row.response.context_menu(|ui| {
+            if ui.button("在资源管理器中显示").clicked() {
+                context_action = Some(TreeAction::Reveal(root.clone()));
+                ui.close();
+            }
+            if ui.button("用 VS Code 打开").clicked() {
+                context_action = Some(TreeAction::OpenInVscode(root.clone()));
+                ui.close();
+            }
+        });
+        if let Some(action) = context_action {
+            actions.push(action);
+        }
+        row.response.on_hover_text(crate::util::display_path(&root));
+
+        if expanded {
+            self.show_dir(ui, &root, 1, active, &mut actions);
+        }
         actions
     }
 

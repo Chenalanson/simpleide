@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::config::autodetect;
+use crate::makefile;
 use eframe::egui::{
     self, Align, Align2, Button, Color32, FontId, Frame, Id, Label, Layout, Margin, RichText,
     ScrollArea, Sense, Stroke, TextEdit,
@@ -154,46 +155,9 @@ impl App {
 
                 let mut resource_open = self.resource_open;
                 let mut info_open = self.info_open;
-                let available_height = ui.available_height();
-                let resource_header_height = 42.0;
-                let info_header_height = 34.0;
-                let info_inline = has_project && resource_open && !info_open;
-                let (resource_height, info_height, show_splitter) = if !has_project {
-                    (
-                        if resource_open {
-                            available_height
-                        } else {
-                            resource_header_height
-                        },
-                        0.0,
-                        false,
-                    )
-                } else if info_inline {
-                    (available_height, 0.0, false)
-                } else {
-                    match (resource_open, info_open) {
-                        (true, true) => {
-                            let content_height = (available_height - 8.0).max(200.0);
-                            let resource_height = (content_height * self.left_split)
-                                .clamp(100.0, (content_height - 100.0).max(100.0));
-                            (resource_height, content_height - resource_height, true)
-                        }
-                        (true, false) => (
-                            (available_height - info_header_height).max(100.0),
-                            info_header_height,
-                            false,
-                        ),
-                        (false, true) => (
-                            resource_header_height,
-                            (available_height - resource_header_height).max(100.0),
-                            false,
-                        ),
-                        (false, false) => (resource_header_height, info_header_height, false),
-                    }
-                };
 
                 ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), resource_height),
+                    egui::vec2(ui.available_width(), ui.available_height()),
                     Layout::top_down(Align::Min),
                     |ui| {
                         ui.add_space(8.0);
@@ -275,11 +239,20 @@ impl App {
 
                         if resource_open {
                             light_separator(ui);
-                            let tree_height = (ui.available_height() - 2.0).max(80.0);
-                            ScrollArea::vertical()
+                            let tree_budget = if has_project {
+                                (ui.available_height() - 50.0).max(80.0)
+                            } else {
+                                ui.available_height().max(80.0)
+                            };
+                            let tree_cap = if has_project && info_open {
+                                (tree_budget * self.left_split).clamp(80.0, tree_budget.max(80.0))
+                            } else {
+                                tree_budget
+                            };
+                            let tree_output = ScrollArea::vertical()
                                 .id_salt("simple_embedded_file_tree")
-                                .max_height(tree_height)
-                                .auto_shrink([false, false])
+                                .max_height(tree_cap)
+                                .auto_shrink([false, true])
                                 .show(ui, |ui| {
                                     Frame::new().inner_margin(Margin::symmetric(5, 4)).show(
                                         ui,
@@ -313,61 +286,60 @@ impl App {
                                                 });
                                             }
                                             ui.add_space(8.0);
-                                            if info_inline {
-                                                ui.add_space(4.0);
-                                                light_separator(ui);
-                                                info_header_row(ui, &mut info_open);
-                                            }
                                         },
                                     );
                                 });
-                        }
-                    },
-                );
 
-                if has_project && !info_inline {
-                    if show_splitter {
-                        let split_span = (resource_height + info_height).max(1.0);
-                        let (split_rect, split_response) = ui.allocate_exact_size(
-                            egui::vec2(ui.available_width(), 8.0),
-                            Sense::drag(),
-                        );
-                        let split_response =
-                            split_response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-                        if split_response.dragged() {
-                            self.left_split = (self.left_split
-                                + split_response.drag_delta().y / split_span)
-                                .clamp(0.18, 0.82);
-                            self.settings.left_split = self.left_split;
-                        }
-                        if split_response.drag_stopped() {
-                            self.settings.save();
-                        }
-                        let line_color = if split_response.hovered() || split_response.dragged() {
-                            theme::ACCENT
-                        } else {
-                            Color32::from_rgb(150, 160, 175)
-                        };
-                        let line_y = split_rect.center().y;
-                        ui.painter().line_segment(
-                            [
-                                egui::pos2(split_rect.left(), line_y),
-                                egui::pos2(split_rect.right(), line_y),
-                            ],
-                            Stroke::new(1.0_f32, line_color),
-                        );
-                    }
-
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), info_height),
-                        Layout::top_down(Align::Min),
-                        |ui| {
-                            if !show_splitter {
-                                light_separator(ui);
+                            if has_project {
+                                let clipped = tree_output.content_size.y
+                                    > tree_output.inner_rect.height() + 0.5;
+                                let can_resize = info_open && clipped;
+                                let (split_rect, split_response) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 8.0),
+                                    if can_resize {
+                                        Sense::drag()
+                                    } else {
+                                        Sense::hover()
+                                    },
+                                );
+                                let split_response = if can_resize {
+                                    split_response.on_hover_cursor(egui::CursorIcon::ResizeVertical)
+                                } else {
+                                    split_response
+                                };
+                                if split_response.dragged() {
+                                    self.left_split = (self.left_split
+                                        + split_response.drag_delta().y / tree_budget)
+                                        .clamp(0.18, 0.82);
+                                    self.settings.left_split = self.left_split;
+                                }
+                                if split_response.drag_stopped() {
+                                    self.settings.save();
+                                }
+                                let line_color = if can_resize
+                                    && (split_response.hovered() || split_response.dragged())
+                                {
+                                    theme::ACCENT
+                                } else {
+                                    Color32::from_rgb(150, 160, 175)
+                                };
+                                let line_y = split_rect.center().y;
+                                ui.painter().line_segment(
+                                    [
+                                        egui::pos2(split_rect.left(), line_y),
+                                        egui::pos2(split_rect.right(), line_y),
+                                    ],
+                                    Stroke::new(1.0_f32, line_color),
+                                );
                             }
+                        } else if has_project {
+                            light_separator(ui);
+                        }
+
+                        if has_project {
                             info_header_row(ui, &mut info_open);
+                            light_separator(ui);
                             if info_open {
-                                light_separator(ui);
                                 Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
                                     ui,
                                     |ui| {
@@ -380,9 +352,9 @@ impl App {
                                     },
                                 );
                             }
-                        },
-                    );
-                }
+                        }
+                    },
+                );
                 if self.resource_open != resource_open || self.info_open != info_open {
                     self.resource_open = resource_open;
                     self.info_open = info_open;
@@ -789,6 +761,20 @@ impl App {
         let highlighter = Arc::clone(&self.highlighter);
         let editor_id = Id::new(("simple_embedded_code_editor", &doc.path));
         let scroll_id = Id::new(("simple_embedded_code_scroll", &doc.path));
+        let line_count = doc
+            .buffer
+            .as_string()
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + 1;
+        let gutter_font = FontId::monospace((font_size - 1.0).max(9.0));
+        let digit_width = ui
+            .ctx()
+            .fonts_mut(|fonts| fonts.glyph_width(&gutter_font, '0'));
+        let digits = line_count.to_string().len().max(2) as f32;
+        let gutter_width = (digits * digit_width + 20.0).clamp(34.0, 96.0);
+        let text_margin_left = (gutter_width + 12.0).round() as i8;
 
         let mut layouter = move |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
             let effective_wrap = if word_wrap { wrap_width } else { f32::INFINITY };
@@ -807,7 +793,8 @@ impl App {
         };
 
         let mut response: Option<egui::Response> = None;
-        ScrollArea::both()
+        let mut gutter: Option<(Arc<egui::Galley>, egui::Pos2)> = None;
+        let scroll_output = ScrollArea::both()
             .id_salt(scroll_id)
             .auto_shrink([false, false])
             .max_height(ui.available_height())
@@ -823,8 +810,12 @@ impl App {
                         f32::INFINITY
                     })
                     .desired_rows(rows)
-                    .margin(Margin::symmetric(14, 8))
-                    .frame(Frame::NONE)
+                    .frame(Frame::new().inner_margin(Margin {
+                        left: text_margin_left,
+                        right: 14,
+                        top: 8,
+                        bottom: 8,
+                    }))
                     .layouter(&mut layouter)
                     .hint_text("开始输入代码…")
                     .show(ui);
@@ -843,8 +834,56 @@ impl App {
                         state.store(ui.ctx(), output.response.response.id);
                     }
                 }
+                gutter = Some((Arc::clone(&output.galley), output.galley_pos));
                 response = Some(output.response.response);
             });
+
+        if let Some((galley, galley_pos)) = gutter {
+            let viewport = scroll_output.inner_rect;
+            let gutter_rect = egui::Rect::from_min_max(
+                egui::pos2(viewport.left(), viewport.top()),
+                egui::pos2(
+                    (viewport.left() + gutter_width).min(viewport.right()),
+                    viewport.bottom(),
+                ),
+            );
+            let painter = ui.painter().with_clip_rect(viewport);
+            painter.rect_filled(gutter_rect, CornerRadius::ZERO, theme::EDITOR_BG);
+            painter.line_segment(
+                [
+                    egui::pos2(gutter_rect.right(), gutter_rect.top()),
+                    egui::pos2(gutter_rect.right(), gutter_rect.bottom()),
+                ],
+                Stroke::new(1.0_f32, theme::BORDER_SOFT),
+            );
+
+            let mut line_no = 1usize;
+            let mut starts_line = true;
+            for row in &galley.rows {
+                let top = galley_pos.y + row.pos.y;
+                let bottom = top + row.size.y;
+                if starts_line && bottom >= viewport.top() && top <= viewport.bottom() {
+                    let color = if line_no == doc.cursor_line {
+                        theme::TEXT
+                    } else {
+                        theme::TEXT_FAINT
+                    };
+                    painter.text(
+                        egui::pos2(gutter_rect.right() - 9.0, top + row.size.y * 0.5),
+                        Align2::RIGHT_CENTER,
+                        line_no.to_string(),
+                        gutter_font.clone(),
+                        color,
+                    );
+                }
+                if row.ends_with_newline {
+                    line_no += 1;
+                    starts_line = true;
+                } else {
+                    starts_line = false;
+                }
+            }
+        }
 
         if focus_editor {
             if let Some(response) = response {
@@ -859,6 +898,10 @@ impl App {
         let Some(mut draft) = self.build_options_draft.take() else {
             return;
         };
+        let has_makefile = self
+            .project
+            .as_ref()
+            .is_some_and(|project| makefile::find_makefile(&project.root).is_some());
         let mut close = false;
         let mut save = false;
         let mut tab = self.build_options_tab;
@@ -902,7 +945,7 @@ impl App {
             ui.add_space(2.0);
             ui.label(
                 RichText::new(
-                    "这些选项不会修改 Makefile 或 .uvprojx；实际参与编译需要按工具链接入。",
+                    "Make 工程保存时会按差异同步到 Makefile；Keil 工程只保存到本机设置，不修改 .uvprojx。",
                 )
                 .size(10.5)
                 .color(theme::TEXT_FAINT),
@@ -965,7 +1008,7 @@ impl App {
                                 "代码优化级别",
                                 "simple_embedded_optimization",
                                 &mut draft.optimization,
-                                &["-O0", "-O1", "-O2", "-O3", "-Os", "-Oz"],
+                                &["-O0", "-O1", "-O2", "-O3", "-Og", "-Os", "-Oz"],
                             );
                             combo_row(
                                 ui,
@@ -1089,6 +1132,14 @@ impl App {
                 });
 
             ui.add_space(12.0);
+            if has_makefile {
+                ui.label(
+                    RichText::new("保存后会同步 GCC 支持的选项到 Makefile（修改前自动备份）")
+                        .size(10.5)
+                        .color(theme::TEXT_FAINT),
+                );
+                ui.add_space(4.0);
+            }
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.add(theme::primary_button("保存")).clicked() {
@@ -1113,6 +1164,10 @@ impl App {
         let Some(mut draft) = self.meta_draft.take() else {
             return;
         };
+        let has_makefile = self
+            .project
+            .as_ref()
+            .is_some_and(|project| makefile::find_makefile(&project.root).is_some());
         let mut close = false;
         let mut save = false;
         let mut reset = false;
@@ -1230,6 +1285,16 @@ impl App {
             if let Some(note) = &draft.note {
                 ui.add_space(8.0);
                 ui.label(RichText::new(note).size(10.5).color(theme::WARNING));
+            }
+            if has_makefile {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(
+                        "保存后会同步包含目录 / 库目录 / 宏定义到 Makefile（修改前自动备份）",
+                    )
+                    .size(10.5)
+                    .color(theme::TEXT_FAINT),
+                );
             }
 
             ui.add_space(12.0);
