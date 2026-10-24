@@ -752,6 +752,7 @@ impl App {
         let font_size = self.settings.font_size;
         let word_wrap = self.settings.word_wrap;
         let relative_line_numbers = self.settings.relative_line_numbers;
+        let show_whitespace = self.settings.show_whitespace;
         let ruler_column = self.settings.ruler_column;
         let focus_editor = std::mem::take(&mut self.focus_editor);
         let font_id = FontId::monospace(font_size);
@@ -892,6 +893,57 @@ impl App {
                             ),
                             CornerRadius::ZERO,
                             theme::ACCENT,
+                        );
+                    }
+                }
+            }
+            if show_whitespace {
+                let color = Color32::from_rgba_unmultiplied(145, 157, 174, 120);
+                for row in &galley.rows {
+                    let row_top = galley_pos.y + row.pos.y;
+                    if row_top + row.size.y < viewport.top() || row_top > viewport.bottom() {
+                        continue;
+                    }
+                    let center_y = row_top + row.size.y * 0.5;
+                    for glyph in &row.glyphs {
+                        let x = galley_pos.x + row.pos.x + glyph.pos.x;
+                        match glyph.chr {
+                            ' ' => {
+                                painter.circle_filled(
+                                    egui::pos2(x + glyph.advance_width * 0.5, center_y),
+                                    1.2,
+                                    color,
+                                );
+                            }
+                            '\t' => {
+                                let y = center_y + 2.0;
+                                let end = x + glyph.advance_width - 2.0;
+                                painter.line_segment(
+                                    [egui::pos2(x + 2.0, y), egui::pos2(end, y)],
+                                    Stroke::new(1.0_f32, color),
+                                );
+                                painter.line_segment(
+                                    [egui::pos2(end - 3.0, y - 2.0), egui::pos2(end, y)],
+                                    Stroke::new(1.0_f32, color),
+                                );
+                                painter.line_segment(
+                                    [egui::pos2(end - 3.0, y + 2.0), egui::pos2(end, y)],
+                                    Stroke::new(1.0_f32, color),
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    if row.ends_with_newline {
+                        let x = galley_pos.x + row.pos.x + row.size.x + 4.0;
+                        let y = center_y - 1.0;
+                        painter.line_segment(
+                            [egui::pos2(x, y - 3.0), egui::pos2(x, y + 2.0)],
+                            Stroke::new(1.0_f32, color),
+                        );
+                        painter.line_segment(
+                            [egui::pos2(x - 4.0, y - 1.0), egui::pos2(x, y + 2.0)],
+                            Stroke::new(1.0_f32, color),
                         );
                     }
                 }
@@ -1758,6 +1810,7 @@ impl App {
                     });
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut draft.relative_line_numbers, "相对行号");
+                        ui.checkbox(&mut draft.show_whitespace, "显示空白字符");
                         ui.label(
                             RichText::new("换行标尺")
                                 .size(11.5)
@@ -1843,6 +1896,7 @@ impl App {
             self.settings.font_size = draft.font_size.clamp(10.0, 28.0);
             self.settings.word_wrap = draft.word_wrap;
             self.settings.relative_line_numbers = draft.relative_line_numbers;
+            self.settings.show_whitespace = draft.show_whitespace;
             self.settings.ruler_column = if matches!(draft.ruler_column, 80 | 120) {
                 draft.ruler_column
             } else {
