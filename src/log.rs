@@ -9,6 +9,7 @@ use crate::theme;
 const MAX_LINES: usize = 20_000;
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_LINE_CHARS: usize = 12_000;
+const MAX_DIAGNOSTICS: usize = 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
@@ -43,23 +44,71 @@ pub struct LogSpan {
     pub color: Option<Color32>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceLocation {
+    pub path: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct LogDiagnostic {
+    pub location: SourceLocation,
+    pub severity: Severity,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogFilter {
+    All,
+    Errors,
+    Warnings,
+}
+
+impl LogFilter {
+    pub fn matches(self, severity: Severity) -> bool {
+        match self {
+            Self::All => true,
+            Self::Errors => severity == Severity::Error,
+            Self::Warnings => severity == Severity::Warning,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LogLine {
     pub spans: Vec<LogSpan>,
     pub severity: Severity,
     pub plain: String,
+    pub location: Option<SourceLocation>,
 }
 
 #[derive(Default)]
 pub struct LogStore {
     lines: VecDeque<LogLine>,
     bytes: usize,
+    diagnostics: Vec<LogDiagnostic>,
+    diagnostics_revision: u64,
 }
 
 impl LogStore {
     pub fn clear(&mut self) {
         self.lines.clear();
         self.bytes = 0;
+        self.diagnostics.clear();
+        self.diagnostics_revision = self.diagnostics_revision.wrapping_add(1);
+    }
+
+    pub fn clear_diagnostics(&mut self) {
+        self.diagnostics.clear();
+        self.diagnostics_revision = self.diagnostics_revision.wrapping_add(1);
+    }
+
+    pub fn diagnostics(&self) -> &[LogDiagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn diagnostics_revision(&self) -> u64 {
+        self.diagnostics_revision
     }
 
     pub fn len(&self) -> usize {
@@ -78,10 +127,24 @@ impl LogStore {
         let raw = truncate_line(raw);
         let (segments, plain) = parse_ansi(&raw);
         let severity = classify(&plain);
+        let location = parse_location(&plain);
+        if severity.is_problem() {
+            if let Some(location) = &location {
+                self.diagnostics.push(LogDiagnostic {
+                    location: location.clone(),
+                    severity,
+                });
+                if self.diagnostics.len() > MAX_DIAGNOSTICS {
+                    self.diagnostics.remove(0);
+                }
+                self.diagnostics_revision = self.diagnostics_revision.wrapping_add(1);
+            }
+        }
         self.push_line(LogLine {
             spans: segments,
             severity,
             plain,
+            location,
         });
     }
 
@@ -97,6 +160,7 @@ impl LogStore {
             }],
             severity,
             plain: text,
+            location: None,
         });
     }
 
@@ -105,6 +169,7 @@ impl LogStore {
             spans: Vec::new(),
             severity: Severity::Normal,
             plain: String::new(),
+            location: None,
         });
     }
 
@@ -135,6 +200,47 @@ impl LogStore {
             .filter(|line| line.severity.is_problem())
             .count()
     }
+}
+
+pub fn parse_location(line: &str) -> Option<SourceLocation> {
+    let trimmed = line.trim_start();
+    let parts = trimmed.split(':').collect::<Vec<_>>();
+    for index in 1..parts.len() {
+        let candidate = parts[index].trim();
+        if candidate.is_empty() || !candidate.chars().all(|ch| ch.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(line_no) = candidate.parse::<usize>() else {
+            continue;
+        };
+        if line_no == 0 {
+            continue;
+        }
+        let path = parts[..index].join(":");
+        if !looks_like_path(&path) {
+            continue;
+        }
+        let column = parts
+            .get(index + 1)
+            .and_then(|part| part.trim().parse::<usize>().ok())
+            .filter(|column| *column > 0)
+            .unwrap_or(1);
+        return Some(SourceLocation {
+            path: path.trim_matches('"').to_owned(),
+            line: line_no,
+            column,
+        });
+    }
+    None
+}
+
+fn looks_like_path(path: &str) -> bool {
+    let path = path.trim();
+    !path.is_empty()
+        && (path.contains('.')
+            || path.contains('/')
+            || path.contains('\\')
+            || matches!(path, "Makefile" | "makefile" | "GNUmakefile"))
 }
 
 fn truncate_line(raw: &str) -> String {
@@ -404,6 +510,33 @@ mod tests {
             classify("Finished release [optimized] target(s)"),
             Severity::Normal
         );
+    }
+
+    #[test]
+    fn parses_compiler_locations() {
+        let location = parse_location("Core/Src/main.c:12:5: error: expected ';'").unwrap();
+        assert_eq!(location.path, "Core/Src/main.c");
+        assert_eq!(location.line, 12);
+        assert_eq!(location.column, 5);
+
+        let location = parse_location(r"D:\proj\main.c:7: warning: unused").unwrap();
+        assert_eq!(location.path, r"D:\proj\main.c");
+        assert_eq!(location.line, 7);
+        assert_eq!(location.column, 1);
+
+        assert_eq!(parse_location("ld: undefined reference to `foo'"), None);
+    }
+
+    #[test]
+    fn collects_diagnostics_only_for_problem_lines() {
+        let mut store = LogStore::default();
+        store.push_raw("Core/Src/main.c:4:2: error: bad");
+        store.push_raw("Core/Src/main.c:5:1: warning: maybe");
+        store.push_raw("finished");
+        assert_eq!(store.diagnostics().len(), 2);
+        assert_eq!(store.line_at(0).unwrap().location.as_ref().unwrap().line, 4);
+        store.clear_diagnostics();
+        assert!(store.diagnostics().is_empty());
     }
 
     #[test]

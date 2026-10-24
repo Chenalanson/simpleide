@@ -920,6 +920,17 @@ impl App {
             self.find
                 .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
         }
+        let markers = self
+            .tabs
+            .get(active)
+            .map(|doc| {
+                self.diagnostics
+                    .iter()
+                    .filter(|diagnostic| same_path(&diagnostic.path, &doc.path))
+                    .map(|diagnostic| (diagnostic.line, diagnostic.severity))
+                    .collect::<BTreeMap<usize, Severity>>()
+            })
+            .unwrap_or_default();
         let Some(doc) = self.tabs.get_mut(active) else {
             return;
         };
@@ -1174,6 +1185,21 @@ impl App {
                             ),
                             CornerRadius::same(1),
                             theme::ACCENT,
+                        );
+                    }
+                    if let Some(severity) = markers.get(&line_no) {
+                        let color = if *severity == Severity::Error {
+                            theme::ERROR
+                        } else {
+                            theme::WARNING
+                        };
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                egui::pos2(gutter_rect.right() - 3.0, top + 3.0),
+                                egui::vec2(2.0, (row.size.y - 6.0).max(4.0)),
+                            ),
+                            CornerRadius::same(1),
+                            color,
                         );
                     }
                 }

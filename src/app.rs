@@ -2,6 +2,7 @@
 
 mod ui;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +22,7 @@ use crate::config::{
 use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::highlight::{self, Highlighter};
-use crate::log::Severity;
+use crate::log::{LogFilter, Severity};
 use crate::makefile;
 use crate::project_meta::ProjectMeta;
 use crate::theme;
@@ -62,6 +63,13 @@ struct MetaDraft {
     library_dirs: String,
     defines: String,
     note: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct Diagnostic {
+    path: PathBuf,
+    line: usize,
+    severity: Severity,
 }
 
 #[derive(Clone, Debug)]
@@ -255,6 +263,7 @@ struct Toast {
 enum Action {
     OpenPicker,
     OpenFile(PathBuf),
+    OpenAt(String, usize, usize),
     SelectTab(usize),
     CloseTab(usize),
     SaveActive,
@@ -289,6 +298,9 @@ pub struct App {
     build_options_draft: Option<BuildOptions>,
     build_options_tab: BuildOptionsTab,
     find: FindState,
+    log_filter: LogFilter,
+    diagnostics: Vec<Diagnostic>,
+    diagnostics_revision: u64,
     left_split: f32,
     resource_open: bool,
     info_open: bool,
@@ -326,6 +338,9 @@ impl App {
             build_options_draft: None,
             build_options_tab: BuildOptionsTab::default(),
             find: FindState::default(),
+            log_filter: LogFilter::All,
+            diagnostics: Vec::new(),
+            diagnostics_revision: u64::MAX,
             left_split,
             resource_open,
             info_open,
@@ -477,6 +492,81 @@ impl App {
                 Severity::Error,
             ),
         }
+    }
+
+    fn refresh_diagnostics(&mut self) {
+        let revision = self.build.log.diagnostics_revision();
+        if revision == self.diagnostics_revision {
+            return;
+        }
+        self.diagnostics_revision = revision;
+        self.diagnostics.clear();
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        let entries = self
+            .build
+            .log
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.location.path.clone(),
+                    diagnostic.location.line,
+                    diagnostic.severity,
+                )
+            })
+            .collect::<Vec<_>>();
+        for (path, line, severity) in entries {
+            let path = PathBuf::from(path);
+            let path = if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            };
+            let path = std::fs::canonicalize(&path).unwrap_or(path);
+            self.diagnostics.push(Diagnostic {
+                path,
+                line,
+                severity,
+            });
+        }
+    }
+
+    fn open_at(&mut self, ctx: &egui::Context, path: &str, line: usize, column: usize) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        let path = PathBuf::from(path);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        };
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        self.open_file(path.clone());
+        let Some(index) = self.tabs.iter().position(|doc| same_path(&doc.path, &path)) else {
+            return;
+        };
+        self.active = Some(index);
+        let Some(doc) = self.tabs.get_mut(index) else {
+            return;
+        };
+        let text = doc.buffer.as_string();
+        let start = crate::util::char_index_at_line(text, line);
+        let line_len = text
+            .lines()
+            .nth(line.saturating_sub(1))
+            .map(|value| value.chars().count())
+            .unwrap_or(0);
+        let char_index = start + column.saturating_sub(1).min(line_len);
+        doc.update_cursor(char_index);
+        set_editor_cursor(ctx, &doc.path, char_index);
+        self.focus_editor = true;
+        self.set_toast(
+            format!("已跳转到 {} 第 {} 行", util::display_path(&path), line),
+            Severity::Info,
+        );
     }
 
     fn save_active(&mut self) -> bool {
@@ -781,6 +871,7 @@ impl App {
             self.open_settings();
             return;
         }
+        self.build.log.clear_diagnostics();
 
         match self.save_all_dirty() {
             Ok(saved) if saved > 0 => {
@@ -1203,6 +1294,7 @@ impl App {
             match action {
                 Action::OpenPicker => self.pick_project_folder(),
                 Action::OpenFile(path) => self.open_file(path),
+                Action::OpenAt(path, line, column) => self.open_at(ctx, &path, line, column),
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
                         self.active = Some(index);
@@ -1358,6 +1450,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.build.poll();
+        self.refresh_diagnostics();
         self.handle_close_request(&ctx);
         self.handle_shortcuts(&ctx);
         self.handle_dropped_files(&ctx);
@@ -1729,6 +1822,36 @@ impl App {
                                 );
                             }
 
+                            ui.add_space(6.0);
+                            for (filter, label) in [
+                                (LogFilter::All, "全部"),
+                                (LogFilter::Errors, "错误"),
+                                (LogFilter::Warnings, "警告"),
+                            ] {
+                                let active = self.log_filter == filter;
+                                let color = if active {
+                                    theme::ACCENT
+                                } else {
+                                    theme::TEXT_FAINT
+                                };
+                                if ui
+                                    .add_sized(
+                                        [38.0, 18.0],
+                                        Button::new(RichText::new(label).size(11.0).color(color))
+                                            .fill(if active {
+                                                theme::ACCENT_SOFT
+                                            } else {
+                                                Color32::TRANSPARENT
+                                            })
+                                            .frame(active)
+                                            .corner_radius(3),
+                                    )
+                                    .clicked()
+                                {
+                                    self.log_filter = filter;
+                                }
+                            }
+
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 let auto = ui.checkbox(
                                     &mut auto_scroll,
@@ -1782,19 +1905,43 @@ impl App {
                             if !self.build.log.is_empty() {
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 let row_height = 18.0;
-                                let mut scroll = ScrollArea::vertical()
-                                    .id_salt("simple_embedded_build_log")
-                                    .auto_shrink([false, false]);
-                                if auto_scroll {
-                                    scroll = scroll.stick_to_bottom(true);
-                                }
-                                scroll.show_rows(
-                                    ui,
-                                    row_height,
-                                    self.build.log.len(),
-                                    |ui, range| {
+                                let filter = self.log_filter;
+                                let visible = if filter == LogFilter::All {
+                                    None
+                                } else {
+                                    Some(
+                                        (0..self.build.log.len())
+                                            .filter(|index| {
+                                                self.build.log.line_at(*index).is_some_and(|line| {
+                                                    filter.matches(line.severity)
+                                                })
+                                            })
+                                            .collect::<Vec<_>>(),
+                                    )
+                                };
+                                let row_count = visible
+                                    .as_ref()
+                                    .map_or(self.build.log.len(), |indices| indices.len());
+                                if row_count == 0 {
+                                    ui.label(
+                                        RichText::new("没有符合过滤条件的日志")
+                                            .size(11.0)
+                                            .color(theme::TEXT_FAINT),
+                                    );
+                                } else {
+                                    let mut scroll = ScrollArea::vertical()
+                                        .id_salt("simple_embedded_build_log")
+                                        .auto_shrink([false, false]);
+                                    if auto_scroll {
+                                        scroll = scroll.stick_to_bottom(true);
+                                    }
+                                    scroll.show_rows(ui, row_height, row_count, |ui, range| {
                                         for index in range {
-                                            let Some(line) = self.build.log.line_at(index) else {
+                                            let real_index = visible
+                                                .as_ref()
+                                                .map_or(index, |indices| indices[index]);
+                                            let Some(line) = self.build.log.line_at(real_index)
+                                            else {
                                                 continue;
                                             };
                                             let severity_color = line.severity.color();
@@ -1834,10 +1981,31 @@ impl App {
                                             }
                                             let galley =
                                                 ui.fonts_mut(|fonts| fonts.layout_job(job));
+                                            let location = line.location.clone();
+                                            let sense = if location.is_some() {
+                                                Sense::click()
+                                            } else {
+                                                Sense::hover()
+                                            };
                                             let (rect, response) = ui.allocate_exact_size(
                                                 egui::vec2(ui.available_width(), row_height),
-                                                Sense::hover(),
+                                                sense,
                                             );
+                                            let response = if location.is_some() {
+                                                response
+                                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                            } else {
+                                                response
+                                            };
+                                            if let Some(location) = location {
+                                                if response.clicked() {
+                                                    actions.push(Action::OpenAt(
+                                                        location.path.clone(),
+                                                        location.line,
+                                                        location.column,
+                                                    ));
+                                                }
+                                            }
                                             let painter = ui.painter_at(rect);
                                             match line.severity {
                                                 Severity::Error => {
@@ -1887,8 +2055,8 @@ impl App {
                                                 response.on_hover_text(&line.plain);
                                             }
                                         }
-                                    },
-                                );
+                                    });
+                                }
                             }
                         });
                 }
