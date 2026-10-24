@@ -101,6 +101,15 @@ struct TodoState {
     filter: Option<crate::todo::TodoKind>,
 }
 
+#[derive(Default)]
+struct SymbolState {
+    open: bool,
+    items: Vec<crate::symbols::Symbol>,
+    truncated: bool,
+    error: Option<String>,
+    query: String,
+}
+
 #[derive(Clone, Debug)]
 struct Diagnostic {
     path: PathBuf,
@@ -305,6 +314,7 @@ enum Action {
     FormatDocument,
     OpenGitStatus,
     OpenTodos,
+    OpenSymbols,
     SelectTab(usize),
     CloseTab(usize),
     SaveActive,
@@ -341,6 +351,7 @@ pub struct App {
     find: FindState,
     project_search: ProjectSearchState,
     todo: TodoState,
+    symbols: SymbolState,
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
     diagnostics_revision: u64,
@@ -389,6 +400,7 @@ impl App {
             find: FindState::default(),
             project_search: ProjectSearchState::default(),
             todo: TodoState::default(),
+            symbols: SymbolState::default(),
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
             diagnostics_revision: u64::MAX,
@@ -738,6 +750,29 @@ impl App {
             Err(err) => {
                 self.todo.items.clear();
                 self.todo.error = Some(err);
+            }
+        }
+    }
+
+    fn refresh_symbols(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开一个工程文件夹", Severity::Warning);
+            return;
+        };
+        let ignore = IgnoreRules::load(
+            &root,
+            self.settings.respect_gitignore,
+            &self.settings.ignore_patterns,
+        );
+        match crate::symbols::scan_project(&root, &ignore) {
+            Ok(outcome) => {
+                self.symbols.items = outcome.symbols;
+                self.symbols.truncated = outcome.truncated;
+                self.symbols.error = None;
+            }
+            Err(err) => {
+                self.symbols.items.clear();
+                self.symbols.error = Some(err);
             }
         }
     }
@@ -1483,11 +1518,12 @@ impl App {
             format_document,
             git_open,
             todo_open,
+            symbols_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
-                command && input.key_pressed(egui::Key::O),
-                command && input.key_pressed(egui::Key::S),
+                command && !input.modifiers.shift && input.key_pressed(egui::Key::O),
+                command && !input.modifiers.shift && input.key_pressed(egui::Key::S),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::S),
                 command && !input.modifiers.shift && input.key_pressed(egui::Key::B),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::B),
@@ -1508,6 +1544,7 @@ impl App {
                 command && input.modifiers.shift && input.key_pressed(egui::Key::I),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::G),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::T),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::O),
             )
         });
 
@@ -1575,6 +1612,10 @@ impl App {
             self.todo.open = true;
             self.refresh_todos();
         }
+        if symbols_open {
+            self.symbols.open = true;
+            self.refresh_symbols();
+        }
         if format_document {
             self.format_current_document();
         }
@@ -1592,6 +1633,10 @@ impl App {
         }
         if self.todo.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.todo.open = false;
+            self.focus_editor = true;
+        }
+        if self.symbols.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.symbols.open = false;
             self.focus_editor = true;
         }
         if zoom_in || zoom_out {
@@ -1675,6 +1720,10 @@ impl App {
                 Action::OpenTodos => {
                     self.todo.open = true;
                     self.refresh_todos();
+                }
+                Action::OpenSymbols => {
+                    self.symbols.open = true;
+                    self.refresh_symbols();
                 }
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
@@ -1878,6 +1927,9 @@ impl eframe::App for App {
         }
         if self.todo.open && !modal_open {
             self.show_todos(&ctx, &mut actions);
+        }
+        if self.symbols.open && !modal_open {
+            self.show_symbols(&ctx, &mut actions);
         }
 
         if self.settings_draft.is_none()

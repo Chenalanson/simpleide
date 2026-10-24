@@ -792,6 +792,18 @@ impl App {
                         {
                             actions.push(Action::FormatDocument);
                         }
+                        if ui
+                            .add(
+                                Button::new(
+                                    RichText::new("符号").size(12.0).color(theme::TEXT_DIM),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text("工程符号搜索 (Ctrl+Shift+O)")
+                            .clicked()
+                        {
+                            actions.push(Action::OpenSymbols);
+                        }
                         let read_only_color = if read_only {
                             theme::WARNING
                         } else {
@@ -1430,6 +1442,146 @@ impl App {
                 item.path.to_string_lossy().into_owned(),
                 item.line,
                 1,
+            ));
+        }
+    }
+
+    pub(super) fn show_symbols(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let root = self.project.as_ref().map(|project| project.root.clone());
+        let mut open = self.symbols.open;
+        let mut refresh = false;
+        let mut clicked = None;
+        let query = self.symbols.query.trim().to_lowercase();
+        let filtered = self
+            .symbols
+            .items
+            .iter()
+            .filter(|symbol| {
+                query.is_empty()
+                    || symbol.name.to_lowercase().contains(&query)
+                    || symbol
+                        .path
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .contains(&query)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        egui::Window::new("符号搜索")
+            .id(Id::new("simple_embedded_symbols"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([700.0, 460.0])
+            .min_height(360.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .inner_margin(Margin::same(12))
+                    .corner_radius(6),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(660.0);
+                ui.set_min_height(330.0);
+                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("符号搜索")
+                            .size(16.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("×", theme::TEXT_DIM))
+                            .on_hover_text("关闭")
+                            .clicked()
+                        {
+                            open = false;
+                        }
+                        if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
+                            refresh = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add(
+                        TextEdit::singleline(&mut self.symbols.query)
+                            .id(Id::new("simple_embedded_symbol_filter"))
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .desired_width(300.0)
+                            .hint_text(RichText::new("按名称或路径过滤").color(theme::TEXT_FAINT)),
+                    );
+                    ui.label(
+                        RichText::new(format!("{} 个符号", filtered.len()))
+                            .size(11.0)
+                            .color(theme::TEXT_FAINT),
+                    );
+                    if self.symbols.truncated {
+                        ui.label(
+                            RichText::new("索引过多，已截断")
+                                .size(11.0)
+                                .color(theme::WARNING),
+                        );
+                    }
+                });
+                ui.separator();
+                if let Some(error) = &self.symbols.error {
+                    ui.label(RichText::new(error).size(11.5).color(theme::ERROR));
+                } else if filtered.is_empty() {
+                    ui.label(
+                        RichText::new("没有匹配的符号")
+                            .size(11.5)
+                            .color(theme::TEXT_FAINT),
+                    );
+                } else {
+                    ScrollArea::vertical()
+                        .id_salt("simple_embedded_symbol_list")
+                        .max_height(380.0)
+                        .auto_shrink([false, false])
+                        .show_rows(ui, 20.0, filtered.len(), |ui, range| {
+                            for index in range {
+                                let symbol = &filtered[index];
+                                let path = root
+                                    .as_ref()
+                                    .map(|root| util::relative_display(root, &symbol.path))
+                                    .unwrap_or_else(|| util::display_path(&symbol.path));
+                                let label = format!(
+                                    "{:<6} {:<28} {}:{}",
+                                    symbol.kind.label(),
+                                    symbol.name,
+                                    path,
+                                    symbol.line
+                                );
+                                if ui
+                                    .selectable_label(
+                                        false,
+                                        RichText::new(label)
+                                            .size(11.5)
+                                            .monospace()
+                                            .color(symbol.kind.color()),
+                                    )
+                                    .clicked()
+                                {
+                                    clicked = Some(symbol.clone());
+                                }
+                            }
+                        });
+                }
+            });
+        self.symbols.open = open;
+        if refresh {
+            self.refresh_symbols();
+        }
+        if let Some(symbol) = clicked {
+            actions.push(Action::OpenAt(
+                symbol.path.to_string_lossy().into_owned(),
+                symbol.line,
+                symbol.column,
             ));
         }
     }

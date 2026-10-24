@@ -15,6 +15,7 @@ mod log;
 mod makefile;
 mod project_meta;
 mod search;
+mod symbols;
 mod theme;
 mod todo;
 mod util;
