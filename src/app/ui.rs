@@ -819,6 +819,18 @@ impl App {
                         {
                             actions.push(Action::OpenArrayGenerator);
                         }
+                        if ui
+                            .add(
+                                Button::new(
+                                    RichText::new("寄存器").size(12.0).color(theme::TEXT_DIM),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text("外设寄存器浏览 (Ctrl+Shift+R)")
+                            .clicked()
+                        {
+                            actions.push(Action::OpenRegisters);
+                        }
                         let read_only_color = if read_only {
                             theme::WARNING
                         } else {
@@ -1798,6 +1810,147 @@ impl App {
         self.array.open = open;
         if copied {
             self.set_toast("C 数组已复制到剪贴板", Severity::Success);
+        }
+    }
+
+    pub(super) fn show_registers(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let mut open = self.registers.open;
+        let mut refresh = false;
+        let mut clicked = None;
+        let query = self.registers.query.trim().to_lowercase();
+        let filtered = self
+            .registers
+            .items
+            .iter()
+            .filter(|item| {
+                query.is_empty()
+                    || item.name.to_lowercase().contains(&query)
+                    || item.description.to_lowercase().contains(&query)
+                    || format!("{:08X}", item.address)
+                        .to_lowercase()
+                        .contains(&query)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        egui::Window::new("寄存器")
+            .id(Id::new("simple_embedded_registers"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([780.0, 460.0])
+            .min_height(360.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .inner_margin(Margin::same(12))
+                    .corner_radius(6),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(740.0);
+                ui.set_min_height(330.0);
+                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("寄存器")
+                            .size(16.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    if !self.registers.source.is_empty() {
+                        ui.label(
+                            RichText::new(&self.registers.source)
+                                .size(11.0)
+                                .color(theme::ACCENT),
+                        );
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("×", theme::TEXT_DIM))
+                            .on_hover_text("关闭")
+                            .clicked()
+                        {
+                            open = false;
+                        }
+                        if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
+                            refresh = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add(
+                        TextEdit::singleline(&mut self.registers.query)
+                            .id(Id::new("simple_embedded_register_filter"))
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .desired_width(300.0)
+                            .hint_text(
+                                RichText::new("按名称、地址或说明过滤").color(theme::TEXT_FAINT),
+                            ),
+                    );
+                    ui.label(
+                        RichText::new(format!("{} 项", filtered.len()))
+                            .size(11.0)
+                            .color(theme::TEXT_FAINT),
+                    );
+                    if self.registers.truncated {
+                        ui.label(
+                            RichText::new("结果过多，已截断")
+                                .size(11.0)
+                                .color(theme::WARNING),
+                        );
+                    }
+                });
+                ui.separator();
+                if let Some(error) = &self.registers.error {
+                    ui.label(RichText::new(error).size(11.5).color(theme::ERROR));
+                } else if filtered.is_empty() {
+                    ui.label(
+                        RichText::new("未找到 SVD 文件或 *_BASE / *_ADDR 寄存器宏")
+                            .size(11.5)
+                            .color(theme::TEXT_FAINT),
+                    );
+                } else {
+                    ScrollArea::vertical()
+                        .id_salt("simple_embedded_register_list")
+                        .max_height(380.0)
+                        .auto_shrink([false, false])
+                        .show_rows(ui, 20.0, filtered.len(), |ui, range| {
+                            for index in range {
+                                let item = &filtered[index];
+                                let label = format!(
+                                    "0x{:08X}  {:<28} {}",
+                                    item.address, item.name, item.description
+                                );
+                                if ui
+                                    .selectable_label(
+                                        false,
+                                        RichText::new(label)
+                                            .size(11.5)
+                                            .monospace()
+                                            .color(theme::ACCENT),
+                                    )
+                                    .on_hover_text(util::display_path(&item.path))
+                                    .clicked()
+                                {
+                                    clicked = Some(item.clone());
+                                }
+                            }
+                        });
+                }
+            });
+        self.registers.open = open;
+        if refresh {
+            self.refresh_registers();
+        }
+        if let Some(item) = clicked {
+            actions.push(Action::OpenAt(
+                item.path.to_string_lossy().into_owned(),
+                item.line,
+                1,
+            ));
         }
     }
 

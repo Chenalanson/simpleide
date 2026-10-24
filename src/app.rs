@@ -135,6 +135,16 @@ struct HexState {
 }
 
 #[derive(Default)]
+struct RegisterState {
+    open: bool,
+    items: Vec<crate::registers::RegisterItem>,
+    source: String,
+    truncated: bool,
+    error: Option<String>,
+    query: String,
+}
+
+#[derive(Default)]
 struct SymbolState {
     open: bool,
     items: Vec<crate::symbols::Symbol>,
@@ -348,6 +358,7 @@ enum Action {
     OpenGitStatus,
     OpenTodos,
     OpenSymbols,
+    OpenRegisters,
     OpenHex(PathBuf),
     OpenArrayGenerator,
     SelectTab(usize),
@@ -387,6 +398,7 @@ pub struct App {
     project_search: ProjectSearchState,
     todo: TodoState,
     symbols: SymbolState,
+    registers: RegisterState,
     hex: HexState,
     array: ArrayState,
     log_filter: LogFilter,
@@ -438,6 +450,7 @@ impl App {
             project_search: ProjectSearchState::default(),
             todo: TodoState::default(),
             symbols: SymbolState::default(),
+            registers: RegisterState::default(),
             hex: HexState::default(),
             array: ArrayState::default(),
             log_filter: LogFilter::All,
@@ -808,6 +821,30 @@ impl App {
             source_label,
             truncated,
         };
+    }
+
+    fn refresh_registers(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开一个工程文件夹", Severity::Warning);
+            return;
+        };
+        let ignore = IgnoreRules::load(
+            &root,
+            self.settings.respect_gitignore,
+            &self.settings.ignore_patterns,
+        );
+        match crate::registers::scan_project(&root, &ignore) {
+            Ok(index) => {
+                self.registers.items = index.items;
+                self.registers.source = index.source;
+                self.registers.truncated = index.truncated;
+                self.registers.error = None;
+            }
+            Err(err) => {
+                self.registers.items.clear();
+                self.registers.error = Some(err);
+            }
+        }
     }
 
     fn open_hex(&mut self, path: &Path) {
@@ -1615,6 +1652,7 @@ impl App {
             symbols_open,
             hex_open,
             array_open,
+            registers_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -1643,6 +1681,7 @@ impl App {
                 command && input.modifiers.shift && input.key_pressed(egui::Key::O),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::H),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::A),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::R),
             )
         });
 
@@ -1723,6 +1762,10 @@ impl App {
         if array_open {
             self.open_array_generator(ctx);
         }
+        if registers_open {
+            self.registers.open = true;
+            self.refresh_registers();
+        }
         if format_document {
             self.format_current_document();
         }
@@ -1748,6 +1791,10 @@ impl App {
         }
         if self.hex.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.hex.open = false;
+            self.focus_editor = true;
+        }
+        if self.registers.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.registers.open = false;
             self.focus_editor = true;
         }
         if self.array.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -1839,6 +1886,10 @@ impl App {
                 Action::OpenSymbols => {
                     self.symbols.open = true;
                     self.refresh_symbols();
+                }
+                Action::OpenRegisters => {
+                    self.registers.open = true;
+                    self.refresh_registers();
                 }
                 Action::OpenHex(path) => self.open_hex(&path),
                 Action::OpenArrayGenerator => self.open_array_generator(ctx),
@@ -2059,6 +2110,9 @@ impl eframe::App for App {
         }
         if self.hex.open && !modal_open {
             self.show_hex_viewer(&ctx);
+        }
+        if self.registers.open && !modal_open {
+            self.show_registers(&ctx, &mut actions);
         }
         if self.array.open && !modal_open {
             self.show_array_generator(&ctx);

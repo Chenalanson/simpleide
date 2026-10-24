@@ -94,6 +94,7 @@ docs/                  README 截图和使用教程
 - `symbols.rs` 用轻量正则索引 C/C++ 函数、struct/union/enum/class、宏和汇编标签，最多 2000 条；`Ctrl+Shift+O` 或工具栏“符号”打开过滤窗口。它不是完整的 C++ 解析器或 LSP，复杂声明可能漏检，不要宣称语义级准确。
 - `hexview.rs` 读取最多 32 MB 文件，按 16 字节一行显示偏移/十六进制/ASCII；文件树右键或 `Ctrl+Shift+H` 打开当前文件，可从窗口把字节转给数组生成器。
 - `arraygen.rs` 把选中文本或当前文件（最多 8 KB）生成 `const uint8_t` C 数组；工具栏“数组”或 `Ctrl+Shift+A` 打开，变量名会被清洗成合法标识符，支持复制。
+- `registers.rs` 优先用正则解析工程内 `.svd` 的 peripheral/baseAddress/register/addressOffset/description；没有可用 SVD 时回退扫描 `.h/.c` 中 `*_BASE` / `*_ADDR` / `*_ADDRESS` 宏。`Ctrl+Shift+R` 或工具栏“寄存器”打开，最多 2000 项并去重。它是只读浏览器，不读写芯片寄存器。
 - `log.rs` 的 `parse_location` 解析 `file:line:col`；日志行带位置时可点击跳转。`LogStore` 维护最多 1000 条问题诊断，`App::refresh_diagnostics` 解析为本地路径并在行号栏右侧画红/黄竖条；输出面板可过滤全部/错误/警告。
 - 当前版本仍未内置 LSP、调试器或自动补全；用户已规划这些增强，后续在 `xiug` 分支分批接入，不要伪造未接通的能力。
 

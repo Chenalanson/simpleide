@@ -34,6 +34,7 @@
 - TODO / FIXME / HACK / NOTE 工程扫描，类型过滤与点击跳转
 - 工程符号搜索：C/C++ 函数、结构体、宏与汇编标签
 - 十六进制查看器，以及从选中内容 / 文件 / 二进制数据生成 C 数组
+- 外设寄存器浏览器：SVD 解析 / CMSIS 头文件宏回退
 - Tab / Shift+Tab 缩进、选中行整块缩进、回车自动缩进，可配置空格或 Tab 与缩进宽度
 - Build / Clean / Rebuild / Flash 在后台线程执行，UI 不冻结
 - 实时抓取 stdout/stderr，解析 ANSI 颜色，按 `error` / `warning` 自动标红/标黄；错误行可点击跳转，行号栏显示红/黄诊断条，日志可过滤错误/警告

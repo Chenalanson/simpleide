@@ -16,6 +16,7 @@ mod indent;
 mod log;
 mod makefile;
 mod project_meta;
+mod registers;
 mod search;
 mod symbols;
 mod theme;
