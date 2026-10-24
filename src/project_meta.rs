@@ -15,6 +15,8 @@ pub struct ProjectMeta {
     pub include_dirs: Vec<String>,
     pub library_dirs: Vec<String>,
     pub defines: Vec<String>,
+    pub flash_driver: Option<String>,
+    pub artifact: Option<String>,
     pub compiler: Option<String>,
     pub optimization: Option<String>,
 }
@@ -105,6 +107,8 @@ impl ProjectMeta {
             include_dirs,
             library_dirs,
             defines,
+            flash_driver: None,
+            artifact: None,
             compiler,
             optimization,
         }
@@ -130,6 +134,27 @@ impl ProjectMeta {
         let linker_script =
             first_nonempty(&xml, "ScatterFile").or_else(|| Some("自动生成".to_owned()));
         let output_dir = first_nonempty(&xml, "OutputDirectory");
+        let output_name = first_nonempty(&xml, "OutputName");
+        let create_hex = first_nonempty(&xml, "CreateHexFile").as_deref() == Some("1");
+        let artifact = output_name.map(|name| {
+            if create_hex {
+                format!("{name}.hex")
+            } else {
+                format!("{name}.axf")
+            }
+        });
+        let flash_driver = first_nonempty(&xml, "Flash2").map(|value| {
+            let upper = value.to_ascii_uppercase();
+            if upper.contains("JLINK") {
+                "J-Link".to_owned()
+            } else if upper.contains("STLINK") || upper.contains("ST-LINK") {
+                "ST-Link".to_owned()
+            } else if upper.contains("UL2") {
+                "ULINK2".to_owned()
+            } else {
+                value
+            }
+        });
         let include_dirs = first_nonempty(&xml, "IncludePath")
             .map(|value| split_list(&value, ';'))
             .unwrap_or_default();
@@ -174,6 +199,8 @@ impl ProjectMeta {
             include_dirs,
             library_dirs,
             defines,
+            flash_driver,
+            artifact,
             compiler,
             optimization,
         }

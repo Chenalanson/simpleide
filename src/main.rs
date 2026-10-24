@@ -24,7 +24,7 @@ fn main() -> eframe::Result<()> {
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1360.0, 850.0])
         .with_min_inner_size([1000.0, 640.0])
-        .with_title("Simple embedded")
+        .with_title("Simple embedded · 作者 smallYYY")
         .with_icon(Arc::new(app_icon(128)));
 
     let native_options = eframe::NativeOptions {

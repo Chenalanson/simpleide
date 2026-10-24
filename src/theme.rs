@@ -72,6 +72,7 @@ pub fn install(ctx: &egui::Context) {
         style.spacing.button_padding = egui::vec2(10.0, 5.0);
         style.spacing.interact_size.y = 28.0;
         style.spacing.scroll.bar_width = 9.0;
+        style.interaction.resize_grab_radius_side = 7.0;
         style.animation_time = 0.12;
 
         style.text_styles.insert(
@@ -115,11 +116,4 @@ pub fn secondary_button(text: impl Into<String>) -> egui::Button<'static> {
         .stroke(Stroke::new(1.0_f32, BORDER))
         .corner_radius(6)
         .min_size(egui::vec2(0.0, 28.0))
-}
-
-pub fn ghost_button(text: impl Into<String>) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text.into()).color(TEXT_DIM).size(13.5))
-        .fill(Color32::TRANSPARENT)
-        .stroke(Stroke::NONE)
-        .corner_radius(5)
 }

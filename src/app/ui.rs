@@ -34,273 +34,322 @@ impl App {
                 Frame::new()
                     .inner_margin(Margin::symmetric(12, 0))
                     .show(ui, |ui| {
-                        if let Some((name, path)) = &project_info {
-                            Frame::new()
-                                .fill(theme::PANEL_RAISED)
-                                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
-                                .corner_radius(6)
-                                .inner_margin(Margin::symmetric(9, 7))
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            RichText::new(name)
-                                                .size(14.0)
-                                                .strong()
-                                                .color(theme::TEXT),
-                                        );
-                                        ui.add_space(8.0);
-                                        let response = ui.add(
-                                            Label::new(
-                                                RichText::new(path)
-                                                    .size(11.5)
-                                                    .color(theme::TEXT_FAINT),
-                                            )
-                                            .truncate(),
-                                        );
-                                        response.on_hover_text(path);
-                                    });
-                                    ui.add_space(3.0);
-                                    ui.horizontal(|ui| {
-                                        colored_dot(
-                                            ui,
-                                            if has_command {
-                                                theme::SUCCESS
-                                            } else {
-                                                theme::WARNING
-                                            },
-                                            5.0,
-                                        );
-                                        ui.label(
-                                            RichText::new(if has_command {
-                                                mode.clone()
-                                            } else {
-                                                "尚未配置构建".to_owned()
-                                            })
-                                            .size(12.0)
-                                            .color(
-                                                if has_command {
-                                                    theme::TEXT_DIM
-                                                } else {
-                                                    theme::WARNING
-                                                },
-                                            ),
-                                        );
-                                    });
-                                    if has_command {
-                                        ui.add(
-                                            Label::new(
-                                                RichText::new(format!("$ {command}"))
-                                                    .monospace()
-                                                    .size(12.0)
-                                                    .color(theme::TEXT_FAINT),
-                                            )
-                                            .truncate(),
+                        let card_name = project_info
+                            .as_ref()
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or("未导入工程");
+                        let card_path = project_info
+                            .as_ref()
+                            .map(|(_, path)| path.as_str())
+                            .unwrap_or("选择工程文件夹");
+                        Frame::new()
+                            .fill(theme::PANEL_RAISED)
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                            .corner_radius(6)
+                            .inner_margin(Margin::symmetric(9, 7))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(card_name).size(14.0).strong().color(
+                                        if has_project {
+                                            theme::TEXT
+                                        } else {
+                                            theme::TEXT_DIM
+                                        },
+                                    ));
+                                    ui.add_space(8.0);
+                                    let response = ui.add(
+                                        Label::new(
+                                            RichText::new(card_path)
+                                                .size(11.5)
+                                                .color(theme::TEXT_FAINT),
                                         )
-                                        .on_hover_text(&command);
+                                        .truncate(),
+                                    );
+                                    response.on_hover_text(card_path);
+                                });
+                                ui.add_space(3.0);
+                                let (dot_color, builder_text, builder_color) = if has_project {
+                                    if has_command {
+                                        (theme::SUCCESS, mode.clone(), theme::TEXT_DIM)
+                                    } else {
+                                        (theme::WARNING, "尚未配置构建".to_owned(), theme::WARNING)
                                     }
-                                    ui.add_space(6.0);
-                                    let spacing = ui.spacing().item_spacing.x;
-                                    let button_width =
-                                        ((ui.available_width() - spacing) / 2.0).max(0.0);
-                                    ui.horizontal(|ui| {
-                                        if ui
-                                            .add_sized(
-                                                [button_width, 28.0],
-                                                theme::secondary_button("更换"),
-                                            )
-                                            .on_hover_text("打开另一个工程文件夹 (Ctrl+O)")
-                                            .clicked()
-                                        {
-                                            actions.push(Action::OpenPicker);
-                                        }
-                                        let config = egui::Button::new(
-                                            RichText::new("配置").size(12.5).color(theme::ACCENT),
+                                } else {
+                                    (theme::WARNING, "构建器 · 未配置".to_owned(), theme::WARNING)
+                                };
+                                ui.horizontal(|ui| {
+                                    colored_dot(ui, dot_color, 5.0);
+                                    ui.label(
+                                        RichText::new(builder_text).size(12.0).color(builder_color),
+                                    );
+                                });
+                                if has_project && has_command {
+                                    ui.add(
+                                        Label::new(
+                                            RichText::new(format!("$ {command}"))
+                                                .monospace()
+                                                .size(12.0)
+                                                .color(theme::TEXT_FAINT),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(&command);
+                                } else if !has_project {
+                                    ui.label(
+                                        RichText::new("$ 未配置")
+                                            .monospace()
+                                            .size(12.0)
+                                            .color(theme::TEXT_FAINT),
+                                    );
+                                }
+                                ui.add_space(6.0);
+                                let spacing = ui.spacing().item_spacing.x;
+                                let button_width =
+                                    ((ui.available_width() - spacing) / 2.0).max(0.0);
+                                ui.horizontal(|ui| {
+                                    let left_text = if has_project { "更换" } else { "导入" };
+                                    let left = if has_project {
+                                        theme::secondary_button(left_text)
+                                    } else {
+                                        egui::Button::new(
+                                            RichText::new(left_text)
+                                                .size(12.5)
+                                                .color(theme::ACCENT),
                                         )
                                         .fill(theme::SURFACE)
                                         .stroke(Stroke::new(1.0_f32, theme::BORDER))
-                                        .corner_radius(6);
-                                        if ui
-                                            .add_sized([button_width, 28.0], config)
-                                            .on_hover_text("编辑构建环境")
-                                            .clicked()
-                                        {
-                                            actions.push(Action::OpenSettings);
-                                        }
-                                    });
-                                });
-                        } else {
-                            Frame::new()
-                                .fill(theme::PANEL_RAISED)
-                                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
-                                .corner_radius(7)
-                                .inner_margin(Margin::symmetric(12, 12))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        RichText::new("导入工程")
-                                            .size(12.5)
-                                            .strong()
-                                            .color(theme::TEXT),
-                                    );
-                                    ui.add_space(3.0);
-                                    ui.label(
-                                        RichText::new("选择一个已有的工程文件夹")
-                                            .size(11.0)
-                                            .color(theme::TEXT_FAINT),
-                                    );
-                                    ui.add_space(8.0);
+                                        .corner_radius(6)
+                                    };
                                     if ui
-                                        .add_sized(
-                                            [ui.available_width(), 30.0],
-                                            theme::primary_button("选择工程文件夹"),
-                                        )
-                                        .on_hover_text("打开文件夹选择器 (Ctrl+O)")
+                                        .add_sized([button_width, 28.0], left)
+                                        .on_hover_text(if has_project {
+                                            "打开另一个工程文件夹 (Ctrl+O)"
+                                        } else {
+                                            "导入工程文件夹 (Ctrl+O)"
+                                        })
                                         .clicked()
                                     {
                                         actions.push(Action::OpenPicker);
                                     }
-                                });
-                        }
-                    });
-
-                ui.add_space(8.0);
-                light_separator(ui);
-                Frame::new()
-                    .inner_margin(Margin::symmetric(11, 7))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let (bar_rect, _) =
-                                ui.allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
-                            ui.painter().rect_filled(
-                                bar_rect,
-                                CornerRadius::same(1),
-                                theme::ACCENT,
-                            );
-                            ui.label(
-                                RichText::new("资源管理器")
-                                    .size(12.0)
-                                    .strong()
-                                    .color(theme::TEXT_DIM),
-                            );
-                            if has_project {
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if ui
-                                        .add(
-                                            Button::new(
-                                                RichText::new("刷新")
-                                                    .size(12.0)
-                                                    .color(theme::TEXT_FAINT),
-                                            )
-                                            .frame(false),
+                                    let config = if has_project {
+                                        egui::Button::new(
+                                            RichText::new("配置").size(12.5).color(theme::ACCENT),
                                         )
-                                        .on_hover_text("重新读取目录")
-                                        .clicked()
-                                    {
-                                        actions.push(Action::RefreshTree);
-                                    }
-                                    let hidden_color = if show_hidden {
-                                        theme::ACCENT
+                                        .fill(theme::SURFACE)
+                                        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                                        .corner_radius(6)
                                     } else {
-                                        theme::TEXT_FAINT
+                                        theme::secondary_button("配置")
                                     };
                                     if ui
-                                        .add(
-                                            Button::new(
-                                                RichText::new("隐藏文件")
-                                                    .size(12.0)
-                                                    .color(hidden_color),
-                                            )
-                                            .frame(false),
-                                        )
-                                        .on_hover_text(if show_hidden {
-                                            "当前显示以 . 开头的文件，点击隐藏"
-                                        } else {
-                                            "显示以 . 开头的文件"
-                                        })
+                                        .add_sized([button_width, 28.0], config)
+                                        .on_hover_text("编辑构建环境")
                                         .clicked()
                                     {
-                                        actions.push(Action::ToggleHidden);
+                                        actions.push(Action::OpenSettings);
                                     }
                                 });
-                            }
-                        });
+                            });
                     });
 
-                light_separator(ui);
-                let info_height = if has_project {
-                    (ui.available_height() * 0.55).clamp(210.0, 300.0)
+                let available_height = ui.available_height();
+                let splitter_height = if has_project { 8.0 } else { 0.0 };
+                let content_height = (available_height - splitter_height).max(120.0);
+                let resource_height = if has_project {
+                    (content_height * self.left_split)
+                        .clamp(100.0, (content_height - 100.0).max(100.0))
                 } else {
-                    0.0
+                    available_height
                 };
-                let tree_height = (ui.available_height() - info_height - 26.0).max(120.0);
-                ScrollArea::vertical()
-                    .id_salt("simple_embedded_file_tree")
-                    .max_height(tree_height)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                let info_height = (content_height - resource_height).max(100.0);
+
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), resource_height),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        ui.add_space(8.0);
+                        light_separator(ui);
                         Frame::new()
-                            .inner_margin(Margin::symmetric(5, 4))
+                            .inner_margin(Margin::symmetric(11, 7))
                             .show(ui, |ui| {
-                                if has_project {
-                                    if let Some(tree) = self.tree.as_mut() {
-                                        let tree_actions = tree.show(ui, active_path.as_deref());
-                                        for tree_action in tree_actions {
-                                            actions.push(match tree_action {
-                                                TreeAction::OpenFile(path) => {
-                                                    Action::OpenFile(path)
+                                ui.horizontal(|ui| {
+                                    let (bar_rect, _) = ui
+                                        .allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
+                                    ui.painter().rect_filled(
+                                        bar_rect,
+                                        CornerRadius::same(1),
+                                        theme::ACCENT,
+                                    );
+                                    ui.label(
+                                        RichText::new("资源管理器")
+                                            .size(12.0)
+                                            .strong()
+                                            .color(theme::TEXT_DIM),
+                                    );
+                                    if has_project {
+                                        ui.with_layout(
+                                            Layout::right_to_left(Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .add(
+                                                        Button::new(
+                                                            RichText::new("刷新")
+                                                                .size(12.0)
+                                                                .color(theme::TEXT_FAINT),
+                                                        )
+                                                        .frame(false),
+                                                    )
+                                                    .on_hover_text("重新读取目录")
+                                                    .clicked()
+                                                {
+                                                    actions.push(Action::RefreshTree);
                                                 }
-                                                TreeAction::Reveal(path) => Action::Reveal(path),
-                                                TreeAction::OpenInVscode(path) => {
-                                                    Action::OpenVscode(path)
+                                                let hidden_color = if show_hidden {
+                                                    theme::ACCENT
+                                                } else {
+                                                    theme::TEXT_FAINT
+                                                };
+                                                if ui
+                                                    .add(
+                                                        Button::new(
+                                                            RichText::new("隐藏文件")
+                                                                .size(12.0)
+                                                                .color(hidden_color),
+                                                        )
+                                                        .frame(false),
+                                                    )
+                                                    .on_hover_text(if show_hidden {
+                                                        "当前显示以 . 开头的文件，点击隐藏"
+                                                    } else {
+                                                        "显示以 . 开头的文件"
+                                                    })
+                                                    .clicked()
+                                                {
+                                                    actions.push(Action::ToggleHidden);
                                                 }
+                                            },
+                                        );
+                                    }
+                                });
+                            });
+
+                        light_separator(ui);
+                        let tree_height = (ui.available_height() - 2.0).max(80.0);
+                        ScrollArea::vertical()
+                            .id_salt("simple_embedded_file_tree")
+                            .max_height(tree_height)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                Frame::new()
+                                    .inner_margin(Margin::symmetric(5, 4))
+                                    .show(ui, |ui| {
+                                        if has_project {
+                                            if let Some(tree) = self.tree.as_mut() {
+                                                let tree_actions =
+                                                    tree.show(ui, active_path.as_deref());
+                                                for tree_action in tree_actions {
+                                                    actions.push(match tree_action {
+                                                        TreeAction::OpenFile(path) => {
+                                                            Action::OpenFile(path)
+                                                        }
+                                                        TreeAction::Reveal(path) => {
+                                                            Action::Reveal(path)
+                                                        }
+                                                        TreeAction::OpenInVscode(path) => {
+                                                            Action::OpenVscode(path)
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                        } else {
+                                            ui.add_space(16.0);
+                                            ui.vertical_centered(|ui| {
+                                                ui.label(
+                                                    RichText::new("工程文件会显示在这里")
+                                                        .size(11.0)
+                                                        .color(theme::TEXT_FAINT),
+                                                );
                                             });
                                         }
-                                    }
-                                } else {
-                                    ui.add_space(16.0);
-                                    ui.vertical_centered(|ui| {
-                                        ui.label(
-                                            RichText::new("工程文件会显示在这里")
-                                                .size(11.0)
-                                                .color(theme::TEXT_FAINT),
-                                        );
+                                        ui.add_space(8.0);
                                     });
-                                }
-                                ui.add_space(8.0);
                             });
-                    });
+                    },
+                );
 
                 if has_project {
-                    ui.add_space(5.0);
-                    light_separator(ui);
-                    Frame::new()
-                        .inner_margin(Margin::symmetric(11, 5))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let (bar_rect, _) =
-                                    ui.allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
-                                ui.painter().rect_filled(
-                                    bar_rect,
-                                    CornerRadius::same(1),
-                                    theme::ACCENT,
-                                );
-                                ui.label(
-                                    RichText::new("工程信息")
-                                        .size(12.5)
-                                        .strong()
-                                        .color(theme::TEXT_DIM),
-                                );
-                            });
-                        });
-                    light_separator(ui);
-                    Frame::new()
-                        .inner_margin(Margin::symmetric(11, 0))
-                        .show(ui, |ui| {
-                            ScrollArea::vertical()
-                                .id_salt("simple_embedded_project_meta")
-                                .max_height((info_height - 40.0).max(120.0))
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| self.show_project_meta(ui, actions));
-                        });
+                    let (split_rect, split_response) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), splitter_height),
+                        Sense::drag(),
+                    );
+                    let split_response =
+                        split_response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                    if split_response.dragged() {
+                        self.left_split = (self.left_split
+                            + split_response.drag_delta().y / content_height)
+                            .clamp(0.18, 0.82);
+                    }
+                    let line_color = if split_response.hovered() || split_response.dragged() {
+                        theme::ACCENT
+                    } else {
+                        Color32::from_rgb(150, 160, 175)
+                    };
+                    let line_y = split_rect.center().y;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(split_rect.left(), line_y),
+                            egui::pos2(split_rect.right(), line_y),
+                        ],
+                        Stroke::new(1.0_f32, line_color),
+                    );
+                    if split_response.hovered() || split_response.dragged() {
+                        for offset in [-6.0_f32, 0.0, 6.0] {
+                            ui.painter().circle_filled(
+                                egui::pos2(split_rect.center().x + offset, line_y),
+                                1.2,
+                                line_color,
+                            );
+                        }
+                    }
+
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), info_height),
+                        Layout::top_down(Align::Min),
+                        |ui| {
+                            Frame::new()
+                                .inner_margin(Margin::symmetric(11, 5))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        let (bar_rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(3.0, 13.0),
+                                            Sense::hover(),
+                                        );
+                                        ui.painter().rect_filled(
+                                            bar_rect,
+                                            CornerRadius::same(1),
+                                            theme::ACCENT,
+                                        );
+                                        ui.label(
+                                            RichText::new("工程信息")
+                                                .size(12.5)
+                                                .strong()
+                                                .color(theme::TEXT_DIM),
+                                        );
+                                    });
+                                });
+                            light_separator(ui);
+                            Frame::new()
+                                .inner_margin(Margin::symmetric(11, 0))
+                                .show(ui, |ui| {
+                                    let height = (ui.available_height() - 2.0).max(80.0);
+                                    ScrollArea::vertical()
+                                        .id_salt("simple_embedded_project_meta")
+                                        .max_height(height)
+                                        .auto_shrink([false, false])
+                                        .show(ui, |ui| self.show_project_meta(ui, actions));
+                                });
+                        },
+                    );
                 }
             });
     }
@@ -341,6 +390,78 @@ impl App {
             }
             if !self.build_config.build_command.trim().is_empty() {
                 meta_row(ui, "构建命令", &self.build_config.build_command);
+            }
+            let option_lines = self.build_config.build_options.summary_lines();
+            let mut edit_clicked = false;
+            let row_height = 22.0 + option_lines.len().saturating_sub(1) as f32 * 17.0;
+            let row = ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), row_height),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_sized(
+                            [70.0, 18.0],
+                            Label::new(
+                                RichText::new("构建选项")
+                                    .size(11.0)
+                                    .color(theme::TEXT_FAINT),
+                            ),
+                        );
+                        if let Some(first) = option_lines.first() {
+                            let response = ui.add(
+                                Label::new(RichText::new(first).size(11.5).color(theme::TEXT_DIM))
+                                    .truncate(),
+                            );
+                            response.on_hover_text(first);
+                        }
+                        let remaining = ui.available_width();
+                        if remaining > 60.0 {
+                            ui.add_space(remaining - 60.0);
+                        }
+                        if ui
+                            .add(small_flat_button("编辑", theme::ACCENT))
+                            .on_hover_text("编辑构建选项")
+                            .clicked()
+                        {
+                            edit_clicked = true;
+                        }
+                    });
+                    for line in option_lines.iter().skip(1) {
+                        ui.horizontal(|ui| {
+                            ui.add_space(78.0);
+                            let response = ui.add(
+                                Label::new(RichText::new(line).size(11.5).color(theme::TEXT_DIM))
+                                    .truncate(),
+                            );
+                            response.on_hover_text(line);
+                        });
+                    }
+                },
+            );
+            let response = row
+                .response
+                .interact(Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if edit_clicked || response.clicked() {
+                actions.push(Action::EditBuildOptions);
+            }
+        });
+
+        meta_group(ui, "烧录配置", true, |ui| {
+            let flash = self.build_config.flash_command.trim();
+            meta_row(
+                ui,
+                "烧录命令",
+                if flash.is_empty() { "未配置" } else { flash },
+            );
+            if let Some(device) = &meta.device {
+                meta_row(ui, "芯片名称", device);
+            }
+            if let Some(driver) = &meta.flash_driver {
+                meta_row(ui, "烧录驱动", driver);
+            }
+            if let Some(artifact) = &meta.artifact {
+                meta_row(ui, "程序文件", artifact);
             }
         });
 
@@ -695,6 +816,260 @@ impl App {
 }
 
 impl App {
+    pub(super) fn show_build_options_modal(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.build_options_draft.take() else {
+            return;
+        };
+        let mut close = false;
+        let mut save = false;
+        let mut tab = self.build_options_tab;
+
+        let modal = egui::Modal::new(Id::new("simple_embedded_build_options_modal"))
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(20, 16)),
+            )
+            .backdrop_color(Color32::from_black_alpha(170));
+        modal.show(ctx, |ui| {
+            ui.set_width(640.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("构建选项")
+                        .size(18.0)
+                        .strong()
+                        .color(theme::TEXT),
+                );
+                ui.label(
+                    RichText::new("保存在本机工程设置")
+                        .size(10.5)
+                        .color(theme::TEXT_FAINT),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add(
+                            Button::new(RichText::new("×").size(16.0).color(theme::TEXT_DIM))
+                                .frame(false),
+                        )
+                        .on_hover_text("取消")
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new(
+                    "这些选项不会修改 Makefile 或 .uvprojx；实际参与编译需要按工具链接入。",
+                )
+                .size(10.5)
+                .color(theme::TEXT_FAINT),
+            );
+            ui.add_space(10.0);
+
+            ui.horizontal(|ui| {
+                option_tab(ui, &mut tab, BuildOptionsTab::Global, "全局选项");
+                option_tab(ui, &mut tab, BuildOptionsTab::Compiler, "C/C++ 编译器");
+                option_tab(ui, &mut tab, BuildOptionsTab::Assembler, "汇编器");
+                option_tab(ui, &mut tab, BuildOptionsTab::Linker, "链接器");
+            });
+            ui.add_space(10.0);
+
+            ScrollArea::vertical()
+                .id_salt("simple_embedded_build_options_scroll")
+                .max_height(430.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    match tab {
+                        BuildOptionsTab::Global => {
+                            ui.checkbox(
+                                &mut draft.use_microlib,
+                                RichText::new("Use MicroLIB")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.checkbox(
+                                &mut draft.big_endian,
+                                RichText::new("Big Endian")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            combo_row(
+                                ui,
+                                "输出调试信息",
+                                "simple_embedded_debug_info",
+                                &mut draft.debug_info,
+                                &["enable", "disable"],
+                            );
+                        }
+                        BuildOptionsTab::Compiler => {
+                            combo_row(
+                                ui,
+                                "C 标准",
+                                "simple_embedded_c_standard",
+                                &mut draft.c_standard,
+                                &["c90", "c99", "c11", "gnu90", "gnu99", "gnu11"],
+                            );
+                            combo_row(
+                                ui,
+                                "C++ 标准",
+                                "simple_embedded_cpp_standard",
+                                &mut draft.cpp_standard,
+                                &["c++98", "c++03", "c++11", "c++14", "c++17", "gnu++17"],
+                            );
+                            combo_row(
+                                ui,
+                                "代码优化级别",
+                                "simple_embedded_optimization",
+                                &mut draft.optimization,
+                                &["-O0", "-O1", "-O2", "-O3", "-Os", "-Oz"],
+                            );
+                            combo_row(
+                                ui,
+                                "警告等级",
+                                "simple_embedded_warning",
+                                &mut draft.warning,
+                                &["-Wall -Wextra", "-Wall", "-Wextra", "-w", "ac5-like"],
+                            );
+                            ui.add_space(2.0);
+                            ui.checkbox(
+                                &mut draft.lto,
+                                RichText::new("Link Time Optimization (LTO)")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.checkbox(
+                                &mut draft.function_sections,
+                                RichText::new("One ELF Section per Function")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.checkbox(
+                                &mut draft.split_load_store,
+                                RichText::new("Split Load and Store Multiple")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.checkbox(
+                                &mut draft.plain_char_signed,
+                                RichText::new("Plain Char is Signed")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.checkbox(
+                                &mut draft.short_enums,
+                                RichText::new("enum/wchar is short type")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.checkbox(
+                                &mut draft.rtti,
+                                RichText::new("use RTTI").size(11.5).color(theme::TEXT_DIM),
+                            );
+                        }
+                        BuildOptionsTab::Assembler => {
+                            option_list_editor(ui, "预处理器定义", &mut draft.assembler_defines);
+                            combo_row(
+                                ui,
+                                "汇编器类型",
+                                "simple_embedded_assembler_type",
+                                &mut draft.assembler_type,
+                                &["arm-auto (auto detect)", "armasm", "gas", "auto"],
+                            );
+                            ui.label(
+                                RichText::new("汇编器附加选项")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            Frame::new()
+                                .fill(theme::BG)
+                                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                                .corner_radius(6)
+                                .inner_margin(Margin::symmetric(6, 5))
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        TextEdit::multiline(&mut draft.assembler_options)
+                                            .font(FontId::monospace(12.0))
+                                            .text_color(theme::TEXT)
+                                            .background_color(theme::BG)
+                                            .hint_text("汇编器附加选项")
+                                            .desired_rows(3)
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                });
+                        }
+                        BuildOptionsTab::Linker => {
+                            combo_row(
+                                ui,
+                                "输出格式",
+                                "simple_embedded_linker_output",
+                                &mut draft.linker_output_format,
+                                &["AXF", "ELF", "Intel HEX", "BIN"],
+                            );
+                            ui.checkbox(
+                                &mut draft.linker_no_binary,
+                                RichText::new("不生成 Hex/Bin/S19 等二进制文件")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            option_list_editor(
+                                ui,
+                                "不生成指定的二进制文件",
+                                &mut draft.linker_binary_excludes,
+                            );
+                            option_text_row(ui, "X/O Base", &mut draft.linker_xo_base);
+                            option_text_row(ui, "R/O Base", &mut draft.linker_ro_base);
+                            option_text_row(ui, "R/W Base", &mut draft.linker_rw_base);
+                            ui.label(
+                                RichText::new("链接器附加选项")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            Frame::new()
+                                .fill(theme::BG)
+                                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                                .corner_radius(6)
+                                .inner_margin(Margin::symmetric(6, 5))
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        TextEdit::multiline(&mut draft.linker_options)
+                                            .font(FontId::monospace(12.0))
+                                            .text_color(theme::TEXT)
+                                            .background_color(theme::BG)
+                                            .hint_text("例如 --diag_suppress=L6329")
+                                            .desired_rows(3)
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                });
+                        }
+                    }
+                });
+
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(theme::primary_button("保存")).clicked() {
+                        save = true;
+                    }
+                    if ui.add(theme::secondary_button("取消")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+
+        self.build_options_tab = tab;
+        if save {
+            self.save_build_options(draft);
+        } else if !close {
+            self.build_options_draft = Some(draft);
+        }
+    }
+
     pub(super) fn show_meta_modal(&mut self, ctx: &egui::Context) {
         let Some(mut draft) = self.meta_draft.take() else {
             return;
@@ -1316,6 +1691,133 @@ fn light_separator(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), Sense::hover());
     ui.painter()
         .rect_filled(rect, CornerRadius::ZERO, Color32::from_rgb(200, 208, 220));
+}
+
+fn option_tab(
+    ui: &mut egui::Ui,
+    selected: &mut BuildOptionsTab,
+    tab: BuildOptionsTab,
+    label: &str,
+) {
+    let active = *selected == tab;
+    let button = Button::new(RichText::new(label).size(11.5).strong().color(if active {
+        theme::ON_ACCENT
+    } else {
+        theme::TEXT_DIM
+    }))
+    .fill(if active {
+        theme::ACCENT
+    } else {
+        theme::SURFACE
+    })
+    .stroke(Stroke::new(
+        1.0_f32,
+        if active { theme::ACCENT } else { theme::BORDER },
+    ))
+    .corner_radius(5)
+    .min_size(egui::vec2(128.0, 30.0));
+    if ui.add(button).clicked() {
+        *selected = tab;
+    }
+}
+
+fn option_list_editor(ui: &mut egui::Ui, label: &str, items: &mut Vec<String>) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(11.5).color(theme::TEXT_DIM));
+        let add = Button::new(
+            RichText::new("添加")
+                .size(11.5)
+                .strong()
+                .color(theme::ON_ACCENT),
+        )
+        .fill(theme::SUCCESS)
+        .stroke(Stroke::NONE)
+        .corner_radius(5)
+        .min_size(egui::vec2(48.0, 24.0));
+        if ui.add(add).clicked() {
+            items.push(String::new());
+        }
+    });
+
+    let mut remove = None;
+    for (index, item) in items.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            Frame::new()
+                .fill(theme::BG)
+                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .corner_radius(5)
+                .inner_margin(Margin::symmetric(6, 3))
+                .show(ui, |ui| {
+                    ui.add(
+                        TextEdit::singleline(item)
+                            .font(FontId::monospace(11.5))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .desired_width(470.0),
+                    );
+                });
+            let delete = Button::new(RichText::new("删除").size(11.0).strong().color(theme::TEXT))
+                .fill(theme::ERROR.gamma_multiply(0.75))
+                .stroke(Stroke::NONE)
+                .corner_radius(5)
+                .min_size(egui::vec2(46.0, 24.0));
+            if ui.add(delete).clicked() {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        items.remove(index);
+    }
+    if items.is_empty() {
+        ui.label(RichText::new("未添加").size(10.5).color(theme::TEXT_FAINT));
+    }
+}
+
+fn option_text_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [120.0, 24.0],
+            Label::new(RichText::new(label).size(11.5).color(theme::TEXT_DIM)),
+        );
+        Frame::new()
+            .fill(theme::BG)
+            .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+            .corner_radius(5)
+            .inner_margin(Margin::symmetric(6, 3))
+            .show(ui, |ui| {
+                ui.add(
+                    TextEdit::singleline(value)
+                        .font(FontId::monospace(11.5))
+                        .text_color(theme::TEXT)
+                        .background_color(theme::BG)
+                        .desired_width(330.0),
+                );
+            });
+    });
+}
+
+fn combo_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    id_source: &str,
+    value: &mut String,
+    options: &[&str],
+) {
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [120.0, 26.0],
+            Label::new(RichText::new(label).size(11.5).color(theme::TEXT_DIM)),
+        );
+        egui::ComboBox::from_id_salt(id_source)
+            .selected_text(RichText::new(value.as_str()).size(11.5))
+            .width(190.0)
+            .show_ui(ui, |ui| {
+                for option in options {
+                    ui.selectable_value(value, (*option).to_owned(), *option);
+                }
+            });
+    });
 }
 
 fn meta_group(

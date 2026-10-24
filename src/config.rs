@@ -13,6 +13,7 @@ use crate::build::{RunSpec, TaskKind};
 use crate::util::{display_path, project_key, shell_quote_posix};
 
 pub const APP_NAME: &str = "Simple embedded";
+pub const APP_AUTHOR: &str = "smallYYY";
 const APP_DATA_DIR: &str = "SimpleEmbedded";
 const LEGACY_APP_DATA_DIR: &str = "MiniEIDE";
 const MAX_RECENT_PROJECTS: usize = 8;
@@ -35,6 +36,108 @@ impl BuildTarget {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+pub struct BuildOptions {
+    pub c_standard: String,
+    pub cpp_standard: String,
+    pub optimization: String,
+    pub warning: String,
+    pub lto: bool,
+    pub function_sections: bool,
+    pub split_load_store: bool,
+    pub plain_char_signed: bool,
+    pub short_enums: bool,
+    pub rtti: bool,
+    pub use_microlib: bool,
+    pub big_endian: bool,
+    pub debug_info: String,
+    pub assembler_defines: Vec<String>,
+    pub assembler_type: String,
+    pub assembler_options: String,
+    pub linker_output_format: String,
+    pub linker_no_binary: bool,
+    pub linker_binary_excludes: Vec<String>,
+    pub linker_xo_base: String,
+    pub linker_ro_base: String,
+    pub linker_rw_base: String,
+    pub linker_options: String,
+}
+
+impl Default for BuildOptions {
+    fn default() -> Self {
+        Self {
+            c_standard: "c99".to_owned(),
+            cpp_standard: "c++03".to_owned(),
+            optimization: "-O2".to_owned(),
+            warning: "-Wall -Wextra".to_owned(),
+            lto: false,
+            function_sections: true,
+            split_load_store: false,
+            plain_char_signed: false,
+            short_enums: false,
+            rtti: false,
+            use_microlib: false,
+            big_endian: false,
+            debug_info: "enable".to_owned(),
+            assembler_defines: Vec::new(),
+            assembler_type: "arm-auto (auto detect)".to_owned(),
+            assembler_options: String::new(),
+            linker_output_format: "AXF".to_owned(),
+            linker_no_binary: false,
+            linker_binary_excludes: Vec::new(),
+            linker_xo_base: String::new(),
+            linker_ro_base: String::new(),
+            linker_rw_base: String::new(),
+            linker_options: String::new(),
+        }
+    }
+}
+
+impl BuildOptions {
+    pub fn summary_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            self.c_standard.clone(),
+            self.cpp_standard.clone(),
+            self.optimization.clone(),
+            self.warning.clone(),
+        ];
+        if self.lto {
+            lines.push("LTO".to_owned());
+        }
+        if self.function_sections {
+            lines.push("function-sections".to_owned());
+        }
+        if self.split_load_store {
+            lines.push("split-load-store".to_owned());
+        }
+        if self.plain_char_signed {
+            lines.push("plain-char-signed".to_owned());
+        }
+        if self.short_enums {
+            lines.push("short-enums".to_owned());
+        }
+        if self.rtti {
+            lines.push("RTTI".to_owned());
+        }
+        if self.use_microlib {
+            lines.push("MicroLIB".to_owned());
+        }
+        if self.big_endian {
+            lines.push("Big Endian".to_owned());
+        }
+        if self.assembler_type != "arm-auto (auto detect)" {
+            lines.push(self.assembler_type.clone());
+        }
+        if self.linker_no_binary {
+            lines.push("不生成二进制文件".to_owned());
+        }
+        lines.push(self.linker_output_format.clone());
+        lines.retain(|line| !line.trim().is_empty());
+        lines
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BuildConfig {
     pub target: BuildTarget,
     pub build_command: String,
@@ -52,6 +155,8 @@ pub struct BuildConfig {
     pub meta_library_dirs: Option<Vec<String>>,
     /// User overrides for the defines shown in the project info tree.
     pub meta_defines: Option<Vec<String>>,
+    /// Compiler options edited in the project info tree.
+    pub build_options: BuildOptions,
 }
 
 impl Default for BuildConfig {
@@ -69,6 +174,7 @@ impl Default for BuildConfig {
             meta_includes: None,
             meta_library_dirs: None,
             meta_defines: None,
+            build_options: BuildOptions::default(),
         }
     }
 }

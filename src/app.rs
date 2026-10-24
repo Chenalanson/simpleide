@@ -14,7 +14,10 @@ use eframe::egui::{
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::build::{BuildController, BuildOutcome, LastBuild, TaskKind};
-use crate::config::{detected_tool, settings_path, BuildConfig, BuildTarget, Settings, APP_NAME};
+use crate::config::{
+    detected_tool, settings_path, BuildConfig, BuildOptions, BuildTarget, Settings, APP_AUTHOR,
+    APP_NAME,
+};
 use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::highlight::{self, Highlighter};
@@ -79,6 +82,15 @@ struct MetaAddDraft {
     value: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum BuildOptionsTab {
+    #[default]
+    Global,
+    Compiler,
+    Assembler,
+    Linker,
+}
+
 enum PendingAction {
     OpenProject(PathBuf),
     CloseTab(usize),
@@ -109,6 +121,7 @@ enum Action {
     OpenSettings,
     EditMeta,
     AddMetaItem(MetaListField),
+    EditBuildOptions,
     ClearLog,
     CopyLog,
     Reveal(PathBuf),
@@ -129,6 +142,9 @@ pub struct App {
     settings_draft: Option<SettingsDraft>,
     meta_draft: Option<MetaDraft>,
     meta_add: Option<MetaAddDraft>,
+    build_options_draft: Option<BuildOptions>,
+    build_options_tab: BuildOptionsTab,
+    left_split: f32,
     pending: Option<PendingDialog>,
     toast: Option<Toast>,
     allow_close: bool,
@@ -157,6 +173,9 @@ impl App {
             settings_draft: None,
             meta_draft: None,
             meta_add: None,
+            build_options_draft: None,
+            build_options_tab: BuildOptionsTab::default(),
+            left_split: 0.5,
             pending: None,
             toast: None,
             allow_close: false,
@@ -540,6 +559,22 @@ impl App {
         self.settings.save();
     }
 
+    fn open_build_options(&mut self) {
+        if self.project.is_some() {
+            self.build_options_draft = Some(self.build_config.build_options.clone());
+        }
+    }
+
+    fn save_build_options(&mut self, options: BuildOptions) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        self.build_config.build_options = options;
+        self.settings.set_build_config(&root, &self.build_config);
+        self.settings.save();
+        self.set_toast("已保存构建选项", Severity::Success);
+    }
+
     fn set_toast(&mut self, message: impl Into<String>, severity: Severity) {
         self.toast = Some(Toast {
             message: message.into(),
@@ -552,13 +587,15 @@ impl App {
         let modal_open = self.settings_draft.is_some()
             || self.pending.is_some()
             || self.meta_draft.is_some()
-            || self.meta_add.is_some();
+            || self.meta_add.is_some()
+            || self.build_options_draft.is_some();
         if modal_open {
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 self.settings_draft = None;
                 self.pending = None;
                 self.meta_draft = None;
                 self.meta_add = None;
+                self.build_options_draft = None;
             }
             return;
         }
@@ -707,6 +744,7 @@ impl App {
                 Action::OpenSettings => self.open_settings(),
                 Action::EditMeta => self.open_meta_editor(),
                 Action::AddMetaItem(field) => self.open_meta_add(field),
+                Action::EditBuildOptions => self.open_build_options(),
                 Action::ClearLog => {
                     self.build.log.clear();
                 }
@@ -752,12 +790,13 @@ impl App {
     }
 
     fn sync_title(&mut self, ctx: &egui::Context) {
-        let title = if let Some(doc) = self.active_document() {
+        let base = if let Some(doc) = self.active_document() {
             let dirty = if doc.is_dirty() { " ●" } else { "" };
             format!("{}{dirty} — {APP_NAME}", doc.name)
         } else {
             APP_NAME.to_owned()
         };
+        let title = format!("{base} · 作者 {APP_AUTHOR}");
         if title != self.last_title {
             self.last_title = title.clone();
             ctx.send_viewport_cmd(ViewportCommand::Title(title));
@@ -822,8 +861,8 @@ impl eframe::App for App {
         let mut actions = Vec::new();
 
         self.show_action_rail(ui, &mut actions);
-        self.show_output_panel(ui, &mut actions);
         self.show_side_panel(ui, &mut actions);
+        self.show_output_panel(ui, &mut actions);
         self.show_center(ui, &mut actions);
 
         if self.settings_draft.is_some() {
@@ -842,11 +881,16 @@ impl eframe::App for App {
             self.show_meta_add_modal(&ctx);
             actions.clear();
         }
+        if self.build_options_draft.is_some() {
+            self.show_build_options_modal(&ctx);
+            actions.clear();
+        }
 
         if self.settings_draft.is_none()
             && self.pending.is_none()
             && self.meta_draft.is_none()
             && self.meta_add.is_none()
+            && self.build_options_draft.is_none()
         {
             self.apply_actions(&ctx, actions);
         }
@@ -1075,15 +1119,6 @@ impl App {
                         if response.clicked() {
                             actions.push(Action::Run(TaskKind::Flash));
                         }
-                    }
-
-                    ui.add_space((ui.available_height() - 30.0).max(0.0));
-                    if ui
-                        .add_sized([width, 30.0], theme::ghost_button("设置"))
-                        .on_hover_text("构建环境与编辑器设置 (Ctrl+,)")
-                        .clicked()
-                    {
-                        actions.push(Action::OpenSettings);
                     }
                 });
             });
