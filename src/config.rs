@@ -528,6 +528,8 @@ pub struct Settings {
     pub relative_line_numbers: bool,
     pub show_whitespace: bool,
     pub ruler_column: u16,
+    pub use_spaces: bool,
+    pub indent_width: u8,
     pub auto_scroll_output: bool,
     pub output_open: bool,
     pub output_height: f32,
@@ -548,6 +550,8 @@ impl Default for Settings {
             relative_line_numbers: false,
             show_whitespace: false,
             ruler_column: 0,
+            use_spaces: true,
+            indent_width: 4,
             auto_scroll_output: true,
             output_open: true,
             output_height: 214.0,
@@ -619,6 +623,7 @@ impl Settings {
         if !matches!(self.ruler_column, 80 | 120) {
             self.ruler_column = 0;
         }
+        self.indent_width = self.indent_width.clamp(1, 8);
         if !self.output_height.is_finite() || self.output_height <= 0.0 {
             self.output_height = 214.0;
         }

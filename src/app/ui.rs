@@ -954,6 +954,44 @@ impl App {
         let Some(doc) = self.tabs.get_mut(active) else {
             return;
         };
+        let editor_id = Id::new(("simple_embedded_code_editor", &doc.path));
+        let scroll_id = Id::new(("simple_embedded_code_scroll", &doc.path));
+        if ui.memory(|memory| memory.has_focus(editor_id)) {
+            let shift_tab =
+                ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
+            let tab = if shift_tab {
+                false
+            } else {
+                ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+            };
+            if tab || shift_tab {
+                apply_tab_indent(
+                    doc,
+                    ui.ctx(),
+                    editor_id,
+                    shift_tab,
+                    self.settings.indent_width as usize,
+                    self.settings.use_spaces,
+                );
+                self.find.dirty = true;
+                self.find
+                    .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+            }
+            let enter =
+                ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            if enter {
+                apply_enter_indent(
+                    doc,
+                    ui.ctx(),
+                    editor_id,
+                    self.settings.indent_width as usize,
+                    self.settings.use_spaces,
+                );
+                self.find.dirty = true;
+                self.find
+                    .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+            }
+        }
         let search_ranges = if self.find.open {
             self.find.decorations()
         } else {
@@ -977,8 +1015,6 @@ impl App {
         let revision = doc.buffer.revision_handle();
         let syntax_name = doc.syntax_name.clone();
         let highlighter = Arc::clone(&self.highlighter);
-        let editor_id = Id::new(("simple_embedded_code_editor", &doc.path));
-        let scroll_id = Id::new(("simple_embedded_code_scroll", &doc.path));
         let line_count = doc
             .buffer
             .as_string()
@@ -2060,6 +2096,13 @@ impl App {
                                 ui.selectable_value(&mut draft.ruler_column, 120, "120 列");
                             });
                     });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut draft.use_spaces, "空格缩进");
+                        ui.add(
+                            egui::Slider::new(&mut draft.indent_width, 1..=8)
+                                .text("缩进宽度"),
+                        );
+                    });
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(format!(
@@ -2134,6 +2177,8 @@ impl App {
             } else {
                 0
             };
+            self.settings.use_spaces = draft.use_spaces;
+            self.settings.indent_width = draft.indent_width.clamp(1, 8);
             self.settings.auto_scroll_output = draft.auto_scroll_output;
             self.settings.show_hidden = draft.show_hidden;
             self.settings.save();
@@ -2163,6 +2208,82 @@ fn parse_meta_lines(text: &str) -> Vec<String> {
         }
     }
     lines
+}
+
+fn apply_enter_indent(
+    doc: &mut Document,
+    ctx: &egui::Context,
+    editor_id: Id,
+    width: usize,
+    use_spaces: bool,
+) {
+    let mut state = egui::text_edit::TextEditState::load(ctx, editor_id).unwrap_or_default();
+    let (start, end) = state
+        .cursor
+        .char_range()
+        .map(|range| {
+            let first = range.primary.index.min(range.secondary.index);
+            let last = range.primary.index.max(range.secondary.index);
+            (first, last)
+        })
+        .unwrap_or((doc.cursor_index, doc.cursor_index));
+    let (new_text, cursor) =
+        crate::indent::auto_indent(doc.buffer.as_string(), start, end, width, use_spaces);
+    doc.buffer.set_text(new_text);
+    doc.update_cursor(cursor);
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::one(
+            egui::text::CCursor::new(cursor),
+        )));
+    state.store(ctx, editor_id);
+}
+
+fn apply_tab_indent(
+    doc: &mut Document,
+    ctx: &egui::Context,
+    editor_id: Id,
+    unindent: bool,
+    width: usize,
+    use_spaces: bool,
+) {
+    let mut state = egui::text_edit::TextEditState::load(ctx, editor_id).unwrap_or_default();
+    let (start, end) = state
+        .cursor
+        .char_range()
+        .map(|range| {
+            let first = range.primary.index.min(range.secondary.index);
+            let last = range.primary.index.max(range.secondary.index);
+            (first, last)
+        })
+        .unwrap_or((doc.cursor_index, doc.cursor_index));
+    let text = doc.buffer.as_string();
+    if start == end && !unindent {
+        let (new_text, cursor) = crate::indent::insert_at_cursor(text, start, width, use_spaces);
+        doc.buffer.set_text(new_text);
+        doc.update_cursor(cursor);
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(
+                egui::text::CCursor::new(cursor),
+            )));
+        state.store(ctx, editor_id);
+    } else {
+        let (new_text, selection_start, selection_end) =
+            crate::indent::change_lines(text, start, end, width, use_spaces, unindent);
+        doc.buffer.set_text(new_text);
+        doc.update_cursor(selection_start);
+        let range = if start == end {
+            egui::text::CCursorRange::one(egui::text::CCursor::new(selection_start))
+        } else {
+            egui::text::CCursorRange::two(
+                egui::text::CCursor::new(selection_start),
+                egui::text::CCursor::new(selection_end),
+            )
+        };
+        state.cursor.set_char_range(Some(range));
+        state.store(ctx, editor_id);
+    }
 }
 
 fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool) {
