@@ -75,8 +75,9 @@ docs/                  README 截图和使用教程
 
 - egui `TextEdit` 要求 `TextBuffer::as_str()` 返回连续切片，所以不要直接接 ropey。`EditorBuffer` 用 `String` + `Rc<Cell<u64>>` revision，所有插入/删除都会递增 revision。
 - 高亮缓存键是 `(revision, wrap_width, font_size)`；修改文本后 `layout_cached` 会自动重建。换字号、换自动换行宽度也由键覆盖。
-- 文档打开时会规范化到内部 LF，保存时恢复原 CRLF/LF 和 UTF-8 BOM。
-- 支持 UTF-8，文件上限 16 MB，二进制文件拒绝打开。
+- 文档打开时会规范化到内部 LF，保存时恢复原 CRLF/LF 和 BOM。
+- `util::read_text_file` 先按 UTF-8 读取，失败后回退 GBK；`LoadedText.encoding` / `Document.encoding` 记录编码，保存时用 `write_text_file` 按编码写回。工具栏可切换 UTF-8 / GBK。
+- 文件上限 16 MB，二进制文件拒绝打开。
 - 打开文件/切换 Tab 时，`focus_editor` 会请求焦点并清掉跨 Tab 的旧选区。
 - 左侧行号与当前行高亮；`Settings.relative_line_numbers` 切换相对行号，`Settings.ruler_column` 可选 80/120 列标尺，`Settings.show_whitespace` 显示空格/Tab/换行标记。
 - 书签按 `Document.bookmarks` 保存在内存中；`Ctrl+F2` 切换，`F2` / `Shift+F2` 前后跳转，书签行在行号栏左侧显示强调色竖条。

@@ -26,7 +26,7 @@ use crate::log::{LogFilter, Severity};
 use crate::makefile;
 use crate::project_meta::ProjectMeta;
 use crate::theme;
-use crate::util::{self, format_duration, project_key};
+use crate::util::{self, format_duration, project_key, TextEncoding};
 
 struct Project {
     root: PathBuf,
@@ -264,6 +264,7 @@ enum Action {
     OpenPicker,
     OpenFile(PathBuf),
     OpenAt(String, usize, usize),
+    SetEncoding(TextEncoding),
     SelectTab(usize),
     CloseTab(usize),
     SaveActive,
@@ -567,6 +568,21 @@ impl App {
             format!("已跳转到 {} 第 {} 行", util::display_path(&path), line),
             Severity::Info,
         );
+    }
+
+    fn set_encoding(&mut self, encoding: TextEncoding) {
+        let Some(index) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(index) else {
+            return;
+        };
+        if doc.encoding == encoding {
+            return;
+        }
+        doc.encoding = encoding;
+        doc.buffer.mark_dirty();
+        self.set_toast(format!("保存时将使用 {}", encoding.label()), Severity::Info);
     }
 
     fn save_active(&mut self) -> bool {
@@ -1295,6 +1311,7 @@ impl App {
                 Action::OpenPicker => self.pick_project_folder(),
                 Action::OpenFile(path) => self.open_file(path),
                 Action::OpenAt(path, line, column) => self.open_at(ctx, &path, line, column),
+                Action::SetEncoding(encoding) => self.set_encoding(encoding),
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
                         self.active = Some(index);

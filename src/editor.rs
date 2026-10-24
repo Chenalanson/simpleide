@@ -8,7 +8,9 @@ use std::rc::Rc;
 use eframe::egui::TextBuffer;
 
 use crate::highlight::{self, Highlighter, SharedLayoutCache};
-use crate::util::{file_name, read_text_file, relative_display, write_text_file, LineEnding};
+use crate::util::{
+    file_name, read_text_file, relative_display, write_text_file, LineEnding, TextEncoding,
+};
 
 pub struct EditorBuffer {
     text: String,
@@ -40,6 +42,10 @@ impl EditorBuffer {
             self.text = text;
             self.bump();
         }
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.bump();
     }
 
     fn bump(&self) {
@@ -102,6 +108,7 @@ pub struct Document {
     pub saved_revision: u64,
     pub line_ending: LineEnding,
     pub bom: bool,
+    pub encoding: TextEncoding,
     pub syntax_name: Option<String>,
     pub language: String,
     pub cursor_index: usize,
@@ -124,6 +131,7 @@ impl Document {
             saved_revision: 0,
             line_ending: loaded.line_ending,
             bom: loaded.bom,
+            encoding: loaded.encoding,
             syntax_name,
             language,
             cursor_index: 0,
@@ -145,6 +153,7 @@ impl Document {
             self.buffer.as_string(),
             self.line_ending,
             self.bom,
+            self.encoding,
         )?;
         self.saved_revision = revision_before_save;
         Ok(())

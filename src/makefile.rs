@@ -635,7 +635,7 @@ fn commit(
     backup(path, root)?;
     #[cfg(test)]
     let _ = root;
-    write_text_file(path, &text, loaded.line_ending, loaded.bom)?;
+    write_text_file(path, &text, loaded.line_ending, loaded.bom, loaded.encoding)?;
     Ok(Some(path.to_path_buf()))
 }
 
@@ -745,7 +745,7 @@ fn dedupe(values: Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::LineEnding;
+    use crate::util::{LineEnding, TextEncoding};
 
     fn sample() -> String {
         [
@@ -787,7 +787,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("Makefile");
-        write_text_file(&path, text, LineEnding::Lf, false).unwrap();
+        write_text_file(&path, text, LineEnding::Lf, false, TextEncoding::Utf8).unwrap();
         (root, path)
     }
 

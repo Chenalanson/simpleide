@@ -25,6 +25,7 @@
 - 文本编辑：`Ctrl+S` 保存、Tab 缩进、撤销/重做、复制粘贴等由 egui 文本编辑控件提供
 - syntect 语法高亮：C/C++/ASM/Rust/Makefile/CMake/TOML/JSON 等
 - 自动换行开关、代码字号调节、相对行号、空白字符、换行标尺、CRLF/LF 保持
+- UTF-8 / GBK 自动识别与保存编码切换（兼容老 Keil 工程）
 - 查找 / 替换：大小写、正则、上下一个、全部替换，匹配高亮
 - Build / Clean / Rebuild / Flash 在后台线程执行，UI 不冻结
 - 实时抓取 stdout/stderr，解析 ANSI 颜色，按 `error` / `warning` 自动标红/标黄；错误行可点击跳转，行号栏显示红/黄诊断条，日志可过滤错误/警告

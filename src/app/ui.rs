@@ -684,6 +684,7 @@ impl App {
         let newline = doc.newline_label();
         let dirty = doc.is_dirty();
         let word_wrap = self.settings.word_wrap;
+        let encoding = doc.encoding;
 
         Frame::new()
             .fill(theme::EDITOR_BG)
@@ -752,7 +753,26 @@ impl App {
                         }
                         ui.label(RichText::new(&language).size(12.0).color(theme::INFO));
                         ui.label(RichText::new(newline).size(12.0).color(theme::TEXT_FAINT));
-                        ui.label(RichText::new("UTF-8").size(12.0).color(theme::TEXT_FAINT));
+                        egui::ComboBox::from_id_salt("simple_embedded_file_encoding")
+                            .selected_text(
+                                RichText::new(encoding.label())
+                                    .size(12.0)
+                                    .color(theme::TEXT_FAINT),
+                            )
+                            .width(64.0)
+                            .show_ui(ui, |ui| {
+                                for value in [
+                                    crate::util::TextEncoding::Utf8,
+                                    crate::util::TextEncoding::Gbk,
+                                ] {
+                                    if ui
+                                        .selectable_label(encoding == value, value.label())
+                                        .clicked()
+                                    {
+                                        actions.push(Action::SetEncoding(value));
+                                    }
+                                }
+                            });
                     });
                 });
             });

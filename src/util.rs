@@ -13,6 +13,21 @@ pub enum LineEnding {
     Crlf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextEncoding {
+    Utf8,
+    Gbk,
+}
+
+impl TextEncoding {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Utf8 => "UTF-8",
+            Self::Gbk => "GBK",
+        }
+    }
+}
+
 impl LineEnding {
     pub fn label(self) -> &'static str {
         match self {
@@ -26,6 +41,7 @@ pub struct LoadedText {
     pub text: String,
     pub line_ending: LineEnding,
     pub bom: bool,
+    pub encoding: TextEncoding,
 }
 
 pub fn read_text_file(path: &Path) -> Result<LoadedText, String> {
@@ -49,14 +65,22 @@ pub fn read_text_file(path: &Path) -> Result<LoadedText, String> {
         (false, bytes.as_slice())
     };
 
-    let raw =
-        std::str::from_utf8(bytes).map_err(|_| "文件不是 UTF-8 编码，暂不支持该编码".to_owned())?;
+    let (raw, encoding) = match std::str::from_utf8(bytes) {
+        Ok(raw) => (raw.to_owned(), TextEncoding::Utf8),
+        Err(_) => {
+            let (decoded, _, had_errors) = encoding_rs::GBK.decode(bytes);
+            if had_errors {
+                return Err("文件不是 UTF-8 或 GBK 编码，无法以文本方式打开".to_owned());
+            }
+            (decoded.into_owned(), TextEncoding::Gbk)
+        }
+    };
 
     let had_crlf = raw.contains("\r\n");
     let text = if raw.contains('\r') {
         raw.replace("\r\n", "\n").replace('\r', "\n")
     } else {
-        raw.to_owned()
+        raw
     };
 
     Ok(LoadedText {
@@ -67,6 +91,7 @@ pub fn read_text_file(path: &Path) -> Result<LoadedText, String> {
             LineEnding::Lf
         },
         bom,
+        encoding,
     })
 }
 
@@ -75,23 +100,37 @@ pub fn write_text_file(
     text: &str,
     line_ending: LineEnding,
     bom: bool,
+    encoding: TextEncoding,
 ) -> Result<(), String> {
-    let mut bytes = Vec::with_capacity(text.len() + 3);
-    if bom {
-        bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-    }
-
+    let mut content = String::with_capacity(text.len() + 16);
     match line_ending {
-        LineEnding::Lf => bytes.extend_from_slice(text.as_bytes()),
+        LineEnding::Lf => content.push_str(text),
         LineEnding::Crlf => {
             for part in text.split_inclusive('\n') {
                 if let Some(line) = part.strip_suffix('\n') {
-                    bytes.extend_from_slice(line.as_bytes());
-                    bytes.extend_from_slice(b"\r\n");
+                    content.push_str(line);
+                    content.push_str("\r\n");
                 } else {
-                    bytes.extend_from_slice(part.as_bytes());
+                    content.push_str(part);
                 }
             }
+        }
+    }
+
+    let mut bytes = Vec::with_capacity(content.len() + 3);
+    match encoding {
+        TextEncoding::Utf8 => {
+            if bom {
+                bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+            }
+            bytes.extend_from_slice(content.as_bytes());
+        }
+        TextEncoding::Gbk => {
+            let (encoded, _, had_errors) = encoding_rs::GBK.encode(&content);
+            if had_errors {
+                return Err("文件包含无法用 GBK 表示的字符，请改用 UTF-8 保存".to_owned());
+            }
+            bytes.extend_from_slice(&encoded);
         }
     }
 
@@ -279,11 +318,44 @@ mod tests {
         let loaded = read_text_file(&path).unwrap();
         assert_eq!(loaded.text, "int main() {\n  return 0;\n}\n");
         assert_eq!(loaded.line_ending, LineEnding::Crlf);
-        write_text_file(&path, &loaded.text, loaded.line_ending, loaded.bom).unwrap();
+        write_text_file(
+            &path,
+            &loaded.text,
+            loaded.line_ending,
+            loaded.bom,
+            loaded.encoding,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read(&path).unwrap(),
             b"int main() {\r\n  return 0;\r\n}\r\n"
         );
+    }
+
+    #[test]
+    fn gbk_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.c");
+        let text = "// 中文注释\nint value = 1;\n";
+        let (encoded, _, had_errors) = encoding_rs::GBK.encode(text);
+        assert!(!had_errors);
+        std::fs::write(&path, encoded.as_ref()).unwrap();
+
+        let loaded = read_text_file(&path).unwrap();
+        assert_eq!(loaded.encoding, TextEncoding::Gbk);
+        assert_eq!(loaded.text, text);
+        write_text_file(
+            &path,
+            &loaded.text,
+            loaded.line_ending,
+            loaded.bom,
+            loaded.encoding,
+        )
+        .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let (decoded, _, had_errors) = encoding_rs::GBK.decode(&bytes);
+        assert!(!had_errors);
+        assert_eq!(decoded, text);
     }
 
     #[test]
