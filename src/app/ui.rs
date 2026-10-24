@@ -897,6 +897,16 @@ impl App {
                         gutter_font.clone(),
                         color,
                     );
+                    if doc.bookmarks.contains(&line_no) {
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                egui::pos2(gutter_rect.left() + 2.0, top + 3.0),
+                                egui::vec2(2.0, (row.size.y - 6.0).max(4.0)),
+                            ),
+                            CornerRadius::same(1),
+                            theme::ACCENT,
+                        );
+                    }
                 }
                 if row.ends_with_newline {
                     line_no += 1;

@@ -380,6 +380,69 @@ impl App {
         }
     }
 
+    fn toggle_bookmark(&mut self) {
+        let Some(index) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(index) else {
+            return;
+        };
+        let line = doc.cursor_line;
+        let added = doc.bookmarks.insert(line);
+        if !added {
+            doc.bookmarks.remove(&line);
+        }
+        let message = if added {
+            format!("已添加书签：第 {line} 行")
+        } else {
+            format!("已移除书签：第 {line} 行")
+        };
+        self.set_toast(message, Severity::Info);
+    }
+
+    fn goto_bookmark(&mut self, ctx: &egui::Context, forward: bool) {
+        let Some(index) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(index) else {
+            return;
+        };
+        if doc.bookmarks.is_empty() {
+            self.set_toast("当前文件没有书签", Severity::Warning);
+            return;
+        }
+        let current = doc.cursor_line;
+        let target = if forward {
+            doc.bookmarks
+                .iter()
+                .copied()
+                .find(|line| *line > current)
+                .or_else(|| doc.bookmarks.iter().next().copied())
+        } else {
+            doc.bookmarks
+                .iter()
+                .rev()
+                .copied()
+                .find(|line| *line < current)
+                .or_else(|| doc.bookmarks.iter().next_back().copied())
+        };
+        let Some(target) = target else {
+            return;
+        };
+        let index = crate::util::char_index_at_line(doc.buffer.as_string(), target);
+        doc.update_cursor(index);
+        let editor_id = egui::Id::new(("simple_embedded_code_editor", &doc.path));
+        let mut state = egui::text_edit::TextEditState::load(ctx, editor_id).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(
+                egui::text::CCursor::new(index),
+            )));
+        state.store(ctx, editor_id);
+        self.focus_editor = true;
+        self.set_toast(format!("跳转到书签：第 {target} 行"), Severity::Info);
+    }
+
     fn request_close_tab(&mut self, index: usize) {
         let Some(doc) = self.tabs.get(index) else {
             return;
@@ -687,23 +750,37 @@ impl App {
             return;
         }
 
-        let (open, save, save_all, build, rebuild, close_tab, open_settings, zoom_in, zoom_out) =
-            ctx.input(|input| {
-                let command = input.modifiers.command;
-                (
-                    command && input.key_pressed(egui::Key::O),
-                    command && input.key_pressed(egui::Key::S),
-                    command && input.modifiers.shift && input.key_pressed(egui::Key::S),
-                    command && !input.modifiers.shift && input.key_pressed(egui::Key::B),
-                    command && input.modifiers.shift && input.key_pressed(egui::Key::B),
-                    command && input.key_pressed(egui::Key::W),
-                    command && input.key_pressed(egui::Key::Comma),
-                    command
-                        && (input.key_pressed(egui::Key::Plus)
-                            || input.key_pressed(egui::Key::Equals)),
-                    command && input.key_pressed(egui::Key::Minus),
-                )
-            });
+        let (
+            open,
+            save,
+            save_all,
+            build,
+            rebuild,
+            close_tab,
+            open_settings,
+            zoom_in,
+            zoom_out,
+            bookmark_toggle,
+            bookmark_next,
+            bookmark_prev,
+        ) = ctx.input(|input| {
+            let command = input.modifiers.command;
+            (
+                command && input.key_pressed(egui::Key::O),
+                command && input.key_pressed(egui::Key::S),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::S),
+                command && !input.modifiers.shift && input.key_pressed(egui::Key::B),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::B),
+                command && input.key_pressed(egui::Key::W),
+                command && input.key_pressed(egui::Key::Comma),
+                command
+                    && (input.key_pressed(egui::Key::Plus) || input.key_pressed(egui::Key::Equals)),
+                command && input.key_pressed(egui::Key::Minus),
+                command && input.key_pressed(egui::Key::F2),
+                !command && !input.modifiers.shift && input.key_pressed(egui::Key::F2),
+                !command && input.modifiers.shift && input.key_pressed(egui::Key::F2),
+            )
+        });
 
         if open {
             self.pick_project_folder();
@@ -725,6 +802,14 @@ impl App {
         }
         if open_settings {
             self.open_settings();
+        }
+        if bookmark_toggle {
+            self.toggle_bookmark();
+        }
+        if bookmark_next {
+            self.goto_bookmark(ctx, true);
+        } else if bookmark_prev {
+            self.goto_bookmark(ctx, false);
         }
         if zoom_in || zoom_out {
             let delta = if zoom_in { 1.0 } else { -1.0 };

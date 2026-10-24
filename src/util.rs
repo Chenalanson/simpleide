@@ -207,6 +207,24 @@ pub fn hide_console(command: &mut Command) {
 
 /// Converts a character index (the unit used by egui's TextEdit) into (line, column),
 /// both 1-based. Kept O(n) but used only once per frame for the active document.
+pub fn char_index_at_line(text: &str, line: usize) -> usize {
+    if line <= 1 {
+        return 0;
+    }
+    let mut index = 0usize;
+    let mut current = 1usize;
+    for ch in text.chars() {
+        if current == line {
+            break;
+        }
+        index += 1;
+        if ch == '\n' {
+            current += 1;
+        }
+    }
+    index
+}
+
 pub fn line_column_at_char(text: &str, char_index: usize) -> (usize, usize) {
     let mut line = 1usize;
     let mut column = 1usize;
@@ -242,6 +260,15 @@ mod tests {
         assert_eq!(line_column_at_char("abc", 0), (1, 1));
         assert_eq!(line_column_at_char("abc\ndef", 4), (2, 1));
         assert_eq!(line_column_at_char("abc\ndef", 6), (2, 3));
+    }
+
+    #[test]
+    fn char_index_at_line_starts_at_line_beginning() {
+        let text = "abc\ndef\nghi";
+        assert_eq!(char_index_at_line(text, 1), 0);
+        assert_eq!(char_index_at_line(text, 2), 4);
+        assert_eq!(char_index_at_line(text, 3), 8);
+        assert_eq!(char_index_at_line(text, 99), 11);
     }
 
     #[test]

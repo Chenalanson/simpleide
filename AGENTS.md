@@ -79,6 +79,7 @@ docs/                  README 截图和使用教程
 - 支持 UTF-8，文件上限 16 MB，二进制文件拒绝打开。
 - 打开文件/切换 Tab 时，`focus_editor` 会请求焦点并清掉跨 Tab 的旧选区。
 - 左侧行号与当前行高亮；`Settings.relative_line_numbers` 切换相对行号，`Settings.ruler_column` 可选 80/120 列标尺。
+- 书签按 `Document.bookmarks` 保存在内存中；`Ctrl+F2` 切换，`F2` / `Shift+F2` 前后跳转，书签行在行号栏左侧显示强调色竖条。
 - 当前版本仍未内置 LSP、调试器或自动补全；用户已规划这些增强，后续在 `xiug` 分支分批接入，不要伪造未接通的能力。
 
 ### 工程信息

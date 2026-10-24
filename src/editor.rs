@@ -1,6 +1,7 @@
 //! Open document model and the egui `TextBuffer` adapter.
 
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -98,6 +99,7 @@ pub struct Document {
     pub language: String,
     pub cursor_line: usize,
     pub cursor_column: usize,
+    pub bookmarks: BTreeSet<usize>,
     pub layout_cache: SharedLayoutCache,
 }
 
@@ -118,6 +120,7 @@ impl Document {
             language,
             cursor_line: 1,
             cursor_column: 1,
+            bookmarks: BTreeSet::new(),
             layout_cache: highlight::new_cache(),
         })
     }
