@@ -1422,38 +1422,61 @@ fn meta_editable_list(
     actions: &mut Vec<Action>,
 ) {
     let id = ui.make_persistent_id(("simple_embedded_meta_list", label));
+    let selected_id = egui::Id::new("simple_embedded_meta_list_selected");
     let mut open = ui
         .data_mut(|data| data.get_persisted::<bool>(id))
         .unwrap_or(true);
-    let mut toggle = false;
+    let selected = ui.data_mut(|data| data.get_persisted::<egui::Id>(selected_id)) == Some(id);
 
-    ui.horizontal(|ui| {
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::click());
-        paint_chevron(ui.painter(), rect, open, theme::ACCENT);
-        if response.clicked() {
-            toggle = true;
-        }
-        if ui
-            .add(Button::new(RichText::new(label).size(11.0).color(theme::TEXT_FAINT)).frame(false))
-            .clicked()
-        {
-            toggle = true;
-        }
-        let button_width = 22.0;
-        let remaining = ui.available_width();
-        let reserved = button_width + 8.0;
-        if remaining > reserved {
-            ui.add_space(remaining - reserved);
-        }
-        let plus = Button::new(RichText::new("+").size(16.0).strong().color(theme::SUCCESS))
-            .frame(false)
-            .min_size(egui::vec2(20.0, 20.0));
-        if ui.add(plus).on_hover_text(format!("添加{label}")).clicked() {
-            actions.push(Action::AddMetaItem(field));
-        }
-    });
+    let row_height = 22.0;
+    let row_rect = egui::Rect::from_min_size(
+        ui.cursor().min,
+        egui::vec2(ui.available_width(), row_height),
+    );
+    let hovered = ui.rect_contains_pointer(row_rect);
+    let fill = if selected {
+        Color32::from_rgb(36, 84, 108)
+    } else if hovered {
+        Color32::from_rgb(28, 49, 63)
+    } else {
+        Color32::TRANSPARENT
+    };
+    if fill != Color32::TRANSPARENT {
+        ui.painter()
+            .rect_filled(row_rect, CornerRadius::same(4), fill);
+    }
 
-    if toggle {
+    let mut plus_clicked = false;
+    let row = ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), row_height),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            let (chevron_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::hover());
+            paint_chevron(ui.painter(), chevron_rect, open, theme::ACCENT);
+            ui.label(RichText::new(label).size(11.0).color(if selected {
+                theme::TEXT
+            } else {
+                theme::TEXT_FAINT
+            }));
+            let plus_width = 22.0;
+            let remaining = ui.available_width();
+            let reserved = plus_width + 8.0;
+            if remaining > reserved {
+                ui.add_space(remaining - reserved);
+            }
+            let plus = paint_plus_button(ui);
+            plus_clicked = plus.clicked();
+            plus.on_hover_text(format!("添加{label}"));
+        },
+    );
+    let response = row.response.interact(Sense::click());
+    if response.clicked() || plus_clicked {
+        ui.data_mut(|data| data.insert_persisted(selected_id, id));
+    }
+    if plus_clicked {
+        actions.push(Action::AddMetaItem(field));
+    }
+    if response.clicked() && !plus_clicked {
         open = !open;
         ui.data_mut(|data| data.insert_persisted(id, open));
     }
@@ -1483,6 +1506,32 @@ fn meta_editable_list(
             });
         }
     }
+}
+
+fn paint_plus_button(ui: &mut egui::Ui) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(28, 55, 43));
+    }
+    let center = rect.center();
+    let arm = 5.0;
+    let stroke = Stroke::new(2.4_f32, theme::SUCCESS);
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x - arm, center.y),
+            egui::pos2(center.x + arm, center.y),
+        ],
+        stroke,
+    );
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x, center.y - arm),
+            egui::pos2(center.x, center.y + arm),
+        ],
+        stroke,
+    );
+    response
 }
 
 fn settings_section(ui: &mut egui::Ui, title: &str) {
