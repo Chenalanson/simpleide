@@ -601,13 +601,9 @@ impl App {
     }
 
     fn sync_title(&mut self, ctx: &egui::Context) {
-        let title = if let Some(project) = &self.project {
-            let file = self
-                .active_document()
-                .map(|doc| format!("{} — ", doc.name))
-                .unwrap_or_default();
-            let dirty = if self.has_unsaved() { " ●" } else { "" };
-            format!("{file}{}{dirty} — {APP_NAME}", project.name)
+        let title = if let Some(doc) = self.active_document() {
+            let dirty = if doc.is_dirty() { " ●" } else { "" };
+            format!("{}{dirty} — {APP_NAME}", doc.name)
         } else {
             APP_NAME.to_owned()
         };
@@ -958,14 +954,14 @@ impl App {
                     .inner_margin(Margin::symmetric(10, 3))
                     .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
                     .show(ui, |ui| {
-                        ui.spacing_mut().interact_size.y = 22.0;
+                        ui.spacing_mut().interact_size.y = 24.0;
                         ui.horizontal(|ui| {
                             let toggle_label = if open { "收起" } else { "展开" };
                             if ui
                                 .add(
                                     Button::new(
                                         RichText::new(toggle_label)
-                                            .size(9.5)
+                                            .size(12.0)
                                             .color(theme::TEXT_FAINT),
                                     )
                                     .frame(false),
@@ -989,24 +985,27 @@ impl App {
                             );
                             ui.label(
                                 RichText::new("构建输出")
-                                    .size(11.5)
+                                    .size(12.5)
                                     .strong()
                                     .color(theme::TEXT_DIM),
                             );
 
                             colored_dot(ui, status_color, 6.0);
-                            ui.label(RichText::new(status_text).size(10.5).color(status_color));
+                            ui.label(RichText::new(status_text).size(12.0).color(status_color));
 
                             if problem_count > 0 {
                                 ui.label(
                                     RichText::new(format!("{problem_count} 条问题"))
-                                        .size(10.0)
+                                        .size(11.0)
                                         .color(theme::ERROR),
                                 );
                             }
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let auto = ui.checkbox(&mut auto_scroll, "自动滚动");
+                                let auto = ui.checkbox(
+                                    &mut auto_scroll,
+                                    RichText::new("自动滚动").size(12.0).color(theme::TEXT_DIM),
+                                );
                                 auto.on_hover_text("构建输出增加时自动滚动到底部");
 
                                 let copy_enabled = log_count > 0;
@@ -1029,7 +1028,7 @@ impl App {
                                 if running {
                                     let stop = ui.add(
                                         Button::new(
-                                            RichText::new("停止").size(10.5).color(theme::ERROR),
+                                            RichText::new("停止").size(12.0).color(theme::ERROR),
                                         )
                                         .fill(theme::ERROR.gamma_multiply(0.12))
                                         .stroke(Stroke::new(
@@ -1181,10 +1180,10 @@ impl App {
 }
 
 fn small_flat_button(text: &str, color: Color32) -> egui::Button<'static> {
-    Button::new(RichText::new(text.to_owned()).size(10.5).color(color))
+    Button::new(RichText::new(text.to_owned()).size(12.0).color(color))
         .frame(false)
         .corner_radius(4)
-        .min_size(egui::vec2(0.0, 21.0))
+        .min_size(egui::vec2(0.0, 22.0))
 }
 
 fn colored_dot(ui: &mut egui::Ui, color: Color32, size: f32) {

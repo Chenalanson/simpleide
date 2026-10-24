@@ -13,6 +13,7 @@ impl App {
             .project
             .as_ref()
             .map(|project| (project.name.clone(), util::display_path(&project.root)));
+        let has_project = project_info.is_some();
         let mode = self.build_config.mode_summary();
         let command = self.build_config.build_command.clone();
         let has_command = !command.trim().is_empty();
@@ -34,36 +35,31 @@ impl App {
                     .inner_margin(Margin::symmetric(12, 0))
                     .show(ui, |ui| {
                         if let Some((name, path)) = &project_info {
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    Label::new(
-                                        RichText::new(name).size(13.5).strong().color(theme::TEXT),
-                                    )
-                                    .truncate(),
-                                );
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if ui
-                                        .add(small_flat_button("更换", theme::TEXT_FAINT))
-                                        .on_hover_text("打开另一个工程文件夹 (Ctrl+O)")
-                                        .clicked()
-                                    {
-                                        actions.push(Action::OpenPicker);
-                                    }
-                                });
-                            });
-                            ui.add(
-                                Label::new(RichText::new(path).size(9.5).color(theme::TEXT_FAINT))
-                                    .truncate(),
-                            )
-                            .on_hover_text(path);
-
-                            ui.add_space(8.0);
                             Frame::new()
                                 .fill(theme::PANEL_RAISED)
                                 .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
                                 .corner_radius(6)
                                 .inner_margin(Margin::symmetric(9, 7))
                                 .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(name)
+                                                .size(14.0)
+                                                .strong()
+                                                .color(theme::TEXT),
+                                        );
+                                        ui.add_space(8.0);
+                                        let response = ui.add(
+                                            Label::new(
+                                                RichText::new(path)
+                                                    .size(11.5)
+                                                    .color(theme::TEXT_FAINT),
+                                            )
+                                            .truncate(),
+                                        );
+                                        response.on_hover_text(path);
+                                    });
+                                    ui.add_space(3.0);
                                     ui.horizontal(|ui| {
                                         colored_dot(
                                             ui,
@@ -80,7 +76,7 @@ impl App {
                                             } else {
                                                 "尚未配置构建".to_owned()
                                             })
-                                            .size(10.5)
+                                            .size(12.0)
                                             .color(
                                                 if has_command {
                                                     theme::TEXT_DIM
@@ -89,25 +85,34 @@ impl App {
                                                 },
                                             ),
                                         );
-                                        ui.with_layout(
-                                            Layout::right_to_left(Align::Center),
-                                            |ui| {
-                                                if ui
-                                                    .add(small_flat_button("配置", theme::ACCENT))
-                                                    .on_hover_text("编辑构建环境")
-                                                    .clicked()
-                                                {
-                                                    actions.push(Action::OpenSettings);
-                                                }
-                                            },
-                                        );
+                                        let links_width = 38.0;
+                                        let remaining = ui.available_width();
+                                        if remaining > links_width {
+                                            ui.add_space(remaining - links_width);
+                                        }
+                                        ui.vertical(|ui| {
+                                            if ui
+                                                .add(small_flat_button("配置", theme::ACCENT))
+                                                .on_hover_text("编辑构建环境")
+                                                .clicked()
+                                            {
+                                                actions.push(Action::OpenSettings);
+                                            }
+                                            if ui
+                                                .add(small_flat_button("更换", theme::TEXT_FAINT))
+                                                .on_hover_text("打开另一个工程文件夹 (Ctrl+O)")
+                                                .clicked()
+                                            {
+                                                actions.push(Action::OpenPicker);
+                                            }
+                                        });
                                     });
                                     if has_command {
                                         ui.add(
                                             Label::new(
                                                 RichText::new(format!("$ {command}"))
                                                     .monospace()
-                                                    .size(9.5)
+                                                    .size(12.0)
                                                     .color(theme::TEXT_FAINT),
                                             )
                                             .truncate(),
@@ -131,7 +136,7 @@ impl App {
                                     ui.add_space(3.0);
                                     ui.label(
                                         RichText::new("选择一个已有的工程文件夹")
-                                            .size(9.5)
+                                            .size(11.0)
                                             .color(theme::TEXT_FAINT),
                                     );
                                     ui.add_space(8.0);
@@ -164,17 +169,17 @@ impl App {
                             );
                             ui.label(
                                 RichText::new("资源管理器")
-                                    .size(11.0)
+                                    .size(12.0)
                                     .strong()
                                     .color(theme::TEXT_DIM),
                             );
-                            if project_info.is_some() {
+                            if has_project {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     if ui
                                         .add(
                                             Button::new(
                                                 RichText::new("刷新")
-                                                    .size(10.0)
+                                                    .size(12.0)
                                                     .color(theme::TEXT_FAINT),
                                             )
                                             .frame(false),
@@ -193,7 +198,7 @@ impl App {
                                         .add(
                                             Button::new(
                                                 RichText::new("隐藏文件")
-                                                    .size(10.0)
+                                                    .size(12.0)
                                                     .color(hidden_color),
                                             )
                                             .frame(false),
@@ -220,7 +225,7 @@ impl App {
                         Frame::new()
                             .inner_margin(Margin::symmetric(5, 4))
                             .show(ui, |ui| {
-                                if project_info.is_some() {
+                                if has_project {
                                     if let Some(tree) = self.tree.as_mut() {
                                         let tree_actions = tree.show(ui, active_path.as_deref());
                                         for tree_action in tree_actions {
@@ -240,7 +245,7 @@ impl App {
                                     ui.vertical_centered(|ui| {
                                         ui.label(
                                             RichText::new("工程文件会显示在这里")
-                                                .size(10.0)
+                                                .size(11.0)
                                                 .color(theme::TEXT_FAINT),
                                         );
                                     });
@@ -422,16 +427,16 @@ impl App {
             .fill(theme::EDITOR_BG)
             .inner_margin(Margin::symmetric(12, 4))
             .show(ui, |ui| {
-                ui.spacing_mut().interact_size.y = 22.0;
+                ui.spacing_mut().interact_size.y = 24.0;
                 ui.horizontal(|ui| {
                     let response = ui.add_sized(
-                        [ui.available_width().min(400.0), 20.0],
-                        Label::new(RichText::new(&path).size(10.5).color(theme::TEXT_FAINT))
+                        [ui.available_width().min(400.0), 22.0],
+                        Label::new(RichText::new(&path).size(12.0).color(theme::TEXT_FAINT))
                             .truncate(),
                     );
                     response.on_hover_text(&full_path);
                     if dirty {
-                        ui.label(RichText::new("● 未保存").size(9.5).color(theme::WARNING));
+                        ui.label(RichText::new("● 未保存").size(11.0).color(theme::WARNING));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let save_color = if dirty {
@@ -441,7 +446,7 @@ impl App {
                         };
                         if ui
                             .add(
-                                Button::new(RichText::new("保存").size(10.5).color(save_color))
+                                Button::new(RichText::new("保存").size(12.0).color(save_color))
                                     .frame(false),
                             )
                             .on_hover_text("保存当前文件 (Ctrl+S)")
@@ -456,7 +461,7 @@ impl App {
                         };
                         if ui
                             .add(
-                                Button::new(RichText::new("自动换行").size(10.0).color(wrap_color))
+                                Button::new(RichText::new("自动换行").size(12.0).color(wrap_color))
                                     .fill(if word_wrap {
                                         theme::ACCENT_SOFT
                                     } else {
@@ -470,9 +475,9 @@ impl App {
                         {
                             actions.push(Action::ToggleWrap);
                         }
-                        ui.label(RichText::new(&language).size(9.5).color(theme::INFO));
-                        ui.label(RichText::new(newline).size(9.5).color(theme::TEXT_FAINT));
-                        ui.label(RichText::new("UTF-8").size(9.5).color(theme::TEXT_FAINT));
+                        ui.label(RichText::new(&language).size(12.0).color(theme::INFO));
+                        ui.label(RichText::new(newline).size(12.0).color(theme::TEXT_FAINT));
+                        ui.label(RichText::new("UTF-8").size(12.0).color(theme::TEXT_FAINT));
                     });
                 });
             });
@@ -1014,7 +1019,7 @@ impl App {
                 ui.label(RichText::new(title).size(16.0).strong().color(theme::TEXT));
             });
             ui.add_space(10.0);
-            ui.label(RichText::new(body).size(11.5).color(theme::TEXT_DIM));
+            ui.label(RichText::new(body).size(12.0).color(theme::TEXT_DIM));
             ui.add_space(4.0);
             ui.label(
                 RichText::new("未命名的外部修改不会被覆盖，但未保存内容会丢失。")

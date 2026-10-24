@@ -66,7 +66,7 @@ docs/                  README 截图和使用教程
 - 事件采用 immediate mode：`App::ui` 收集 `Action`，再在帧末 `apply_actions`。部分明显的即时状态（滚动、输出开关）直接修改。
 - `src/app/ui.rs` 是 `app` 的子模块，可以访问父模块私有字段；跨模块公开方法用 `pub(super)`。
 - 自定义画线/图标优先用 `Painter`，不要依赖可能没有字形的 Unicode 图标。CJK 字体在 `main.rs` 运行时从系统字体加载。
-- 左侧工程卡片和文件树展示路径时使用 `util::display_path` 去掉 Windows `\\?\` 前缀。
+- 左侧构建卡片顶部显示工程名（粗体）和路径，路径使用 `util::display_path` 去掉 Windows `\\?\` 前缀；下方显示构建模式、配置/更换和命令。
 - 无工程时左上角显示“导入工程”卡片；中间只显示一行提示“请在左上角选择工程并开始”。
 - Windows 标题栏通过 DWM 深色属性和 `ViewportCommand::SetTheme(Dark)` 与面板配色保持一致。
 

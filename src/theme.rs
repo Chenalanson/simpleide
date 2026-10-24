@@ -118,7 +118,7 @@ pub fn secondary_button(text: impl Into<String>) -> egui::Button<'static> {
 }
 
 pub fn ghost_button(text: impl Into<String>) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text.into()).color(TEXT_DIM).size(12.5))
+    egui::Button::new(egui::RichText::new(text.into()).color(TEXT_DIM).size(13.5))
         .fill(Color32::TRANSPARENT)
         .stroke(Stroke::NONE)
         .corner_radius(5)
