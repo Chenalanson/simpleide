@@ -527,6 +527,7 @@ pub struct Settings {
     pub word_wrap: bool,
     pub auto_scroll_output: bool,
     pub output_open: bool,
+    pub output_height: f32,
     pub left_split: f32,
     pub resource_open: bool,
     pub info_open: bool,
@@ -543,6 +544,7 @@ impl Default for Settings {
             word_wrap: true,
             auto_scroll_output: true,
             output_open: true,
+            output_height: 214.0,
             left_split: 0.5,
             resource_open: true,
             info_open: true,
@@ -608,6 +610,10 @@ impl Settings {
 
     fn sanitize(&mut self) {
         self.font_size = self.font_size.clamp(10.0, 28.0);
+        if !self.output_height.is_finite() || self.output_height <= 0.0 {
+            self.output_height = 214.0;
+        }
+        self.output_height = self.output_height.clamp(40.0, 4000.0);
         if !self.left_split.is_finite() || self.left_split <= 0.0 {
             self.left_split = 0.5;
         }

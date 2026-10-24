@@ -1216,21 +1216,45 @@ impl App {
         let mut toggle_output = false;
         let (status_color, status_text) = self.build_status();
         let full_height = ui.available_height().max(100.0);
-
-        let mut panel = egui::Panel::bottom("simple_embedded_build_output");
-        panel = if open {
-            panel
-                .resizable(true)
-                .default_size(214.0)
-                .min_size(100.0)
-                .max_size(full_height)
+        let output_panel_id = egui::Id::new("simple_embedded_build_output");
+        let height = if open {
+            self.settings.output_height.clamp(40.0, full_height)
         } else {
-            panel.resizable(false).exact_size(36.0)
+            40.0
         };
+        let mut output_open = open;
+        let mut drag_height: Option<f32> = None;
+        let mut drag_stopped = false;
+
+        let panel = egui::Panel::bottom(output_panel_id)
+            .resizable(false)
+            .exact_size(height);
 
         panel
             .frame(Frame::new().fill(theme::EDITOR_BG))
             .show_inside(ui, |ui| {
+                let (handle_rect, handle) =
+                    ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), Sense::drag());
+                let handle = handle.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                let handle_color = if handle.hovered() || handle.dragged() {
+                    theme::ACCENT
+                } else {
+                    theme::BORDER_SOFT
+                };
+                ui.painter().rect_filled(
+                    egui::Rect::from_center_size(handle_rect.center(), egui::vec2(46.0, 1.0)),
+                    CornerRadius::ZERO,
+                    handle_color,
+                );
+                if handle.dragged() {
+                    let new_height = (height - handle.drag_delta().y).clamp(40.0, full_height);
+                    drag_height = Some(new_height);
+                    output_open = new_height > 44.0;
+                }
+                if handle.drag_stopped() {
+                    drag_stopped = true;
+                }
+
                 Frame::new()
                     .fill(theme::PANEL_RAISED)
                     .inner_margin(Margin::symmetric(10, 3))
@@ -1333,7 +1357,6 @@ impl App {
                         .fill(theme::EDITOR_BG)
                         .inner_margin(Margin::symmetric(10, 5))
                         .show(ui, |ui| {
-                            ui.set_min_height(170.0);
                             if !self.build.log.is_empty() {
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 let row_height = 18.0;
@@ -1450,8 +1473,20 @@ impl App {
             });
 
         if toggle_output {
-            self.settings.output_open = !self.settings.output_open;
+            let next_open = !open;
+            self.settings.output_open = next_open;
+            if next_open && self.settings.output_height < 100.0 {
+                self.settings.output_height = 214.0;
+            }
             self.settings.save();
+        } else {
+            if let Some(new_height) = drag_height {
+                self.settings.output_height = new_height;
+                self.settings.output_open = output_open;
+            }
+            if drag_stopped {
+                self.settings.save();
+            }
         }
         if auto_scroll != self.settings.auto_scroll_output {
             self.settings.auto_scroll_output = auto_scroll;

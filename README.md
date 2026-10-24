@@ -28,6 +28,7 @@
 - Build / Clean / Rebuild / Flash 在后台线程执行，UI 不冻结
 - 实时抓取 stdout/stderr，解析 ANSI 颜色，按 `error` / `warning` 自动标红/标黄
 - 构建前自动保存所有脏文件；可停止构建进程树
+- 构建输出面板顶部可拖动调高度，收起后也能向上拉出；高度会保存
 - 本地构建或远程 SSH 构建（复用系统 OpenSSH）
 - Flash 命令可选，在本地工程目录执行，方便接 J-Link / OpenOCD
 - 每工程独立构建配置，保存在用户目录，不污染工程
