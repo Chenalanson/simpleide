@@ -1421,12 +1421,29 @@ fn meta_editable_list(
     field: MetaListField,
     actions: &mut Vec<Action>,
 ) {
+    let id = ui.make_persistent_id(("simple_embedded_meta_list", label));
+    let mut open = ui
+        .data_mut(|data| data.get_persisted::<bool>(id))
+        .unwrap_or(true);
+    let mut toggle = false;
+
     ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(11.0).color(theme::TEXT_FAINT));
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::click());
+        paint_chevron(ui.painter(), rect, open, theme::ACCENT);
+        if response.clicked() {
+            toggle = true;
+        }
+        if ui
+            .add(Button::new(RichText::new(label).size(11.0).color(theme::TEXT_FAINT)).frame(false))
+            .clicked()
+        {
+            toggle = true;
+        }
         let button_width = 22.0;
         let remaining = ui.available_width();
-        if remaining > button_width {
-            ui.add_space(remaining - button_width);
+        let reserved = button_width + 8.0;
+        if remaining > reserved {
+            ui.add_space(remaining - reserved);
         }
         let plus = Button::new(RichText::new("+").size(16.0).strong().color(theme::SUCCESS))
             .frame(false)
@@ -1436,15 +1453,23 @@ fn meta_editable_list(
         }
     });
 
+    if toggle {
+        open = !open;
+        ui.data_mut(|data| data.insert_persisted(id, open));
+    }
+    if !open {
+        return;
+    }
+
     if items.is_empty() {
         ui.horizontal(|ui| {
-            ui.add_space(8.0);
+            ui.add_space(14.0);
             ui.label(RichText::new("未检测").size(11.0).color(theme::TEXT_FAINT));
         });
     } else {
         for item in items {
             ui.horizontal(|ui| {
-                ui.add_space(8.0);
+                ui.add_space(14.0);
                 let response = ui.add(
                     Label::new(
                         RichText::new(format!("• {item}"))
