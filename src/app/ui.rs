@@ -831,6 +831,18 @@ impl App {
                         {
                             actions.push(Action::OpenRegisters);
                         }
+                        if ui
+                            .add(
+                                Button::new(
+                                    RichText::new("补全").size(12.0).color(theme::TEXT_DIM),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text("工程符号补全 (Ctrl+Space)")
+                            .clicked()
+                        {
+                            actions.push(Action::OpenCompletion);
+                        }
                         let read_only_color = if read_only {
                             theme::WARNING
                         } else {
@@ -2145,6 +2157,100 @@ impl App {
         }
         if let Some(action) = action {
             actions.push(action);
+        }
+    }
+
+    pub(super) fn show_completion(&mut self, ctx: &egui::Context) {
+        let mut open = self.completion.open;
+        let mut chosen = None;
+        let query = self.completion.query.to_lowercase();
+        let filtered = self
+            .completion
+            .items
+            .iter()
+            .filter(|name| name.to_lowercase().contains(&query))
+            .take(120)
+            .cloned()
+            .collect::<Vec<_>>();
+        egui::Window::new("符号补全")
+            .id(Id::new("simple_embedded_completion"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([420.0, 320.0])
+            .min_height(240.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .inner_margin(Margin::same(10))
+                    .corner_radius(6),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(380.0);
+                ui.set_min_height(210.0);
+                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("符号补全")
+                            .size(14.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.label(
+                        RichText::new(format!("{} 项", filtered.len()))
+                            .size(10.5)
+                            .color(theme::TEXT_FAINT),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("×", theme::TEXT_DIM))
+                            .on_hover_text("关闭")
+                            .clicked()
+                        {
+                            open = false;
+                        }
+                    });
+                });
+                let query_response = ui.add(
+                    TextEdit::singleline(&mut self.completion.query)
+                        .id(Id::new("simple_embedded_completion_filter"))
+                        .font(FontId::monospace(12.0))
+                        .text_color(theme::TEXT)
+                        .background_color(theme::BG)
+                        .desired_width(360.0)
+                        .hint_text(RichText::new("过滤符号").color(theme::TEXT_FAINT)),
+                );
+                if query_response.lost_focus()
+                    && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                {
+                    chosen = filtered.first().cloned();
+                }
+                ui.separator();
+                ScrollArea::vertical()
+                    .id_salt("simple_embedded_completion_list")
+                    .max_height(220.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for name in &filtered {
+                            if ui
+                                .selectable_label(
+                                    false,
+                                    RichText::new(name)
+                                        .monospace()
+                                        .size(12.0)
+                                        .color(theme::INFO),
+                                )
+                                .clicked()
+                            {
+                                chosen = Some(name.clone());
+                            }
+                        }
+                    });
+            });
+        self.completion.open = open;
+        if let Some(name) = chosen {
+            self.insert_completion(ctx, &name);
         }
     }
 

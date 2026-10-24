@@ -96,8 +96,9 @@ docs/                  README 截图和使用教程
 - `arraygen.rs` 把选中文本或当前文件（最多 8 KB）生成 `const uint8_t` C 数组；工具栏“数组”或 `Ctrl+Shift+A` 打开，变量名会被清洗成合法标识符，支持复制。
 - `registers.rs` 优先用正则解析工程内 `.svd` 的 peripheral/baseAddress/register/addressOffset/description；没有可用 SVD 时回退扫描 `.h/.c` 中 `*_BASE` / `*_ADDR` / `*_ADDRESS` 宏。`Ctrl+Shift+R` 或工具栏“寄存器”打开，最多 2000 项并去重。它是只读浏览器，不读写芯片寄存器。
 - `debugger.rs` 启动本机 gdb CLI（非 MI），通过 stdin/stdout 转发命令并收集控制台输出；`DebugState` 保存会话、断点和日志。右侧“调试”或 `F5` 启动/继续，`F9` 切换断点，`F10` 下一步，`F11` 单步，`Shift+F11` 跳出，`Shift+F5` 停止。调试程序默认取设置路径，否则从 `build/`、`Debug/`、`Release/` 等目录挑最新的 ELF/AXF/EXE；gdb 架构必须与目标匹配（ARM 需 arm-none-eabi-gdb）。
+- `navigation.rs` 提供标识符/前缀提取与字符区间替换；`F12` 在 `symbols.rs` 索引中找定义，`Shift+F12` 用全工程正则搜索列引用，工具栏“补全”或 `Ctrl+Space` 打开符号补全。全部是轻量启发式，不是 LSP。
 - `log.rs` 的 `parse_location` 解析 `file:line:col`；日志行带位置时可点击跳转。`LogStore` 维护最多 1000 条问题诊断，`App::refresh_diagnostics` 解析为本地路径并在行号栏右侧画红/黄竖条；输出面板可过滤全部/错误/警告。
-- 当前版本仍未内置 LSP 或自动补全；调试是基础 gdb 控制台，不是完整 IDE 调试前端。后续增强在 `xiug` 分支分批接入，不要伪造未接通的能力。
+- 当前版本未内置 LSP；补全、跳转和引用搜索是轻量符号索引，调试是基础 gdb 控制台，不是完整 IDE 调试前端。后续增强在 `xiug` 分支分批接入，不要伪造未接通的能力。
 
 ### 工程信息
 

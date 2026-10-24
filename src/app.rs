@@ -137,6 +137,15 @@ struct HexState {
 }
 
 #[derive(Default)]
+struct CompletionState {
+    open: bool,
+    query: String,
+    prefix_start: usize,
+    cursor: usize,
+    items: Vec<String>,
+}
+
+#[derive(Default)]
 struct DebugState {
     open: bool,
     session: Option<crate::debugger::DebugSession>,
@@ -374,6 +383,7 @@ enum Action {
     OpenRegisters,
     OpenHex(PathBuf),
     OpenArrayGenerator,
+    OpenCompletion,
     OpenDebug,
     DebugContinue,
     DebugStepOver,
@@ -422,6 +432,7 @@ pub struct App {
     hex: HexState,
     array: ArrayState,
     debug: DebugState,
+    completion: CompletionState,
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
     diagnostics_revision: u64,
@@ -475,6 +486,7 @@ impl App {
             hex: HexState::default(),
             array: ArrayState::default(),
             debug: DebugState::default(),
+            completion: CompletionState::default(),
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
             diagnostics_revision: u64::MAX,
@@ -867,6 +879,122 @@ impl App {
                 self.registers.error = Some(err);
             }
         }
+    }
+
+    fn current_word(&self) -> Option<String> {
+        let doc = self.active_document()?;
+        crate::navigation::word_at(doc.buffer.as_string(), doc.cursor_index).map(|value| value.0)
+    }
+
+    fn ensure_symbols(&mut self) {
+        if self.symbols.items.is_empty() {
+            self.refresh_symbols();
+        }
+    }
+
+    fn definition_at_cursor(&mut self, ctx: &egui::Context) {
+        let Some(word) = self.current_word() else {
+            self.set_toast("光标不在标识符上", Severity::Info);
+            return;
+        };
+        self.ensure_symbols();
+        let current_path = self.active_document().map(|doc| doc.path.clone());
+        let mut candidates = self
+            .symbols
+            .items
+            .iter()
+            .filter(|symbol| symbol.name == word)
+            .cloned()
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            self.open_references_for_word(&word);
+            self.set_toast(
+                format!("没有找到 {word} 的定义，已列出相关匹配"),
+                Severity::Info,
+            );
+            return;
+        }
+        if let Some(path) = current_path {
+            candidates.sort_by_key(|symbol| !same_path(&symbol.path, &path));
+        }
+        let symbol = candidates[0].clone();
+        self.open_at(
+            ctx,
+            &symbol.path.to_string_lossy(),
+            symbol.line,
+            symbol.column,
+        );
+    }
+
+    fn references_at_cursor(&mut self) {
+        let Some(word) = self.current_word() else {
+            self.set_toast("光标不在标识符上", Severity::Info);
+            return;
+        };
+        self.open_references_for_word(&word);
+    }
+
+    fn open_references_for_word(&mut self, word: &str) {
+        self.project_search.open = true;
+        self.project_search.query = format!(r"\b{}\b", regex::escape(word));
+        self.project_search.case_sensitive = true;
+        self.project_search.use_regex = true;
+        self.project_search.focus_query = false;
+        self.run_project_search();
+    }
+
+    fn open_completion(&mut self) {
+        let Some(doc) = self.active_document() else {
+            return;
+        };
+        let text = doc.buffer.as_string().to_owned();
+        let cursor = doc.cursor_index;
+        let (prefix_start, prefix) = crate::navigation::word_prefix(&text, cursor);
+        self.ensure_symbols();
+        let lower = prefix.to_lowercase();
+        let mut names = BTreeSet::new();
+        for symbol in &self.symbols.items {
+            if symbol.name.to_lowercase().starts_with(&lower) {
+                names.insert(symbol.name.clone());
+            }
+            if names.len() >= 200 {
+                break;
+            }
+        }
+        if names.is_empty() {
+            self.set_toast("没有匹配的工程符号", Severity::Info);
+            return;
+        }
+        self.completion = CompletionState {
+            open: true,
+            query: prefix,
+            prefix_start,
+            cursor,
+            items: names.into_iter().collect(),
+        };
+    }
+
+    fn insert_completion(&mut self, ctx: &egui::Context, name: &str) {
+        let Some(index) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(index) else {
+            return;
+        };
+        if doc.read_only {
+            self.set_toast("只读文件不能补全", Severity::Warning);
+            return;
+        }
+        let text = doc.buffer.as_string().to_owned();
+        let start = self.completion.prefix_start.min(self.completion.cursor);
+        let end = self.completion.cursor.min(text.chars().count());
+        let (new_text, cursor) = crate::navigation::replace_range_chars(&text, start, end, name);
+        doc.buffer.set_text(new_text);
+        doc.update_cursor(cursor);
+        set_editor_cursor(ctx, &doc.path, cursor);
+        self.completion.open = false;
+        self.focus_editor = true;
+        self.find.dirty = true;
     }
 
     fn debug_target(&self) -> Option<PathBuf> {
@@ -1825,6 +1953,9 @@ impl App {
             debug_step,
             debug_finish,
             breakpoint_toggle,
+            definition_jump,
+            references_jump,
+            completion_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -1860,6 +1991,9 @@ impl App {
                 input.key_pressed(egui::Key::F11) && !input.modifiers.shift,
                 input.key_pressed(egui::Key::F11) && input.modifiers.shift,
                 input.key_pressed(egui::Key::F9),
+                input.key_pressed(egui::Key::F12) && !input.modifiers.shift,
+                input.key_pressed(egui::Key::F12) && input.modifiers.shift,
+                command && input.key_pressed(egui::Key::Space),
             )
         });
 
@@ -1958,6 +2092,14 @@ impl App {
         if breakpoint_toggle {
             self.toggle_breakpoint();
         }
+        if definition_jump {
+            self.definition_at_cursor(ctx);
+        } else if references_jump {
+            self.references_at_cursor();
+        }
+        if completion_open {
+            self.open_completion();
+        }
         if format_document {
             self.format_current_document();
         }
@@ -1995,6 +2137,10 @@ impl App {
         }
         if self.debug.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.debug.open = false;
+        }
+        if self.completion.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.completion.open = false;
+            self.focus_editor = true;
         }
         if zoom_in || zoom_out {
             let delta = if zoom_in { 1.0 } else { -1.0 };
@@ -2088,6 +2234,7 @@ impl App {
                 }
                 Action::OpenHex(path) => self.open_hex(&path),
                 Action::OpenArrayGenerator => self.open_array_generator(ctx),
+                Action::OpenCompletion => self.open_completion(),
                 Action::OpenDebug => self.debug.open = true,
                 Action::DebugContinue => self.debug_continue(),
                 Action::DebugStepOver => self.debug_command("next"),
@@ -2331,6 +2478,9 @@ impl eframe::App for App {
         }
         if self.debug.open && !modal_open {
             self.show_debug_window(&ctx, &mut actions);
+        }
+        if self.completion.open && !modal_open {
+            self.show_completion(&ctx);
         }
 
         if self.settings_draft.is_none()

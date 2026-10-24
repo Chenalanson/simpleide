@@ -16,6 +16,7 @@ mod ignore;
 mod indent;
 mod log;
 mod makefile;
+mod navigation;
 mod project_meta;
 mod registers;
 mod search;
