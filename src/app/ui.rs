@@ -685,6 +685,7 @@ impl App {
         let dirty = doc.is_dirty();
         let word_wrap = self.settings.word_wrap;
         let encoding = doc.encoding;
+        let read_only = doc.read_only;
 
         Frame::new()
             .fill(theme::EDITOR_BG)
@@ -750,6 +751,41 @@ impl App {
                         {
                             self.find.open = true;
                             self.find.focus_query = true;
+                        }
+                        if ui
+                            .add(
+                                Button::new(
+                                    RichText::new("格式化").size(12.0).color(theme::TEXT_DIM),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text("用 clang-format 格式化当前 C/C++ 文件")
+                            .clicked()
+                        {
+                            actions.push(Action::FormatDocument);
+                        }
+                        let read_only_color = if read_only {
+                            theme::WARNING
+                        } else {
+                            theme::TEXT_FAINT
+                        };
+                        if ui
+                            .add(
+                                Button::new(
+                                    RichText::new("只读").size(12.0).color(read_only_color),
+                                )
+                                .fill(if read_only {
+                                    theme::SURFACE
+                                } else {
+                                    Color32::TRANSPARENT
+                                })
+                                .frame(read_only)
+                                .corner_radius(4),
+                            )
+                            .on_hover_text("切换只读，禁止编辑和保存")
+                            .clicked()
+                        {
+                            actions.push(Action::ToggleReadOnly);
                         }
                         ui.label(RichText::new(&language).size(12.0).color(theme::INFO));
                         ui.label(RichText::new(newline).size(12.0).color(theme::TEXT_FAINT));
@@ -1127,7 +1163,8 @@ impl App {
         };
         let editor_id = Id::new(("simple_embedded_code_editor", &doc.path));
         let scroll_id = Id::new(("simple_embedded_code_scroll", &doc.path));
-        if ui.memory(|memory| memory.has_focus(editor_id)) {
+        let read_only = doc.read_only;
+        if !read_only && ui.memory(|memory| memory.has_focus(editor_id)) {
             let shift_tab =
                 ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
             let tab = if shift_tab {
@@ -1230,6 +1267,7 @@ impl App {
                 let output = TextEdit::multiline(&mut doc.buffer)
                     .id(editor_id)
                     .code_editor()
+                    .interactive(!read_only)
                     .font(FontId::monospace(font_size))
                     .desired_width(if word_wrap {
                         viewport_width.max(80.0)
@@ -2275,6 +2313,26 @@ impl App {
                         );
                     });
                     ui.horizontal(|ui| {
+                        ui.checkbox(&mut draft.autosave, "自动保存");
+                        ui.add(
+                            egui::Slider::new(&mut draft.autosave_delay_ms, 500..=5000)
+                                .text("停止输入后 (ms)"),
+                        );
+                        ui.checkbox(&mut draft.format_on_save, "保存时 clang-format");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("clang-format")
+                                .size(11.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                        ui.add(
+                            TextEdit::singleline(&mut draft.clang_format_path)
+                                .desired_width(360.0)
+                                .hint_text("留空自动查找，或填写 clang-format.exe 路径"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
                         ui.checkbox(&mut draft.respect_gitignore, "遵循 .gitignore");
                         ui.label(
                             RichText::new("额外忽略规则")
@@ -2363,6 +2421,10 @@ impl App {
             };
             self.settings.use_spaces = draft.use_spaces;
             self.settings.indent_width = draft.indent_width.clamp(1, 8);
+            self.settings.autosave = draft.autosave;
+            self.settings.autosave_delay_ms = draft.autosave_delay_ms.clamp(500, 10_000);
+            self.settings.format_on_save = draft.format_on_save;
+            self.settings.clang_format_path = draft.clang_format_path.trim().to_owned();
             self.settings.auto_scroll_output = draft.auto_scroll_output;
             self.settings.show_hidden = draft.show_hidden;
             self.settings.respect_gitignore = draft.respect_gitignore;

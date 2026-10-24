@@ -86,6 +86,9 @@ docs/                  README 截图和使用教程
 - `search.rs` 负责全工程搜索：按 `IgnoreRules` 剪枝目录，跳过 2 MB 以上文件和二进制文件，最多 500 条结果；`Ctrl+Shift+F` 或查找栏“全工程”打开结果窗口，点击跳转。
 - `ignore.rs` 实现 gitignore 风格匹配（`*`、`**`、`?`、目录、否定规则）。资源管理器读取工程根 `.gitignore`，也可在设置中追加分号分隔的忽略规则；`Settings.respect_gitignore` 控制是否启用。
 - `indent.rs` 负责缩进：`Tab` / `Shift+Tab` 插删缩进单元（选中多行时整块处理），回车调用 `auto_indent` 保持缩进并在左括号后增加一级。`Settings.use_spaces` / `indent_width` 控制缩进风格。
+- 自动保存由 `App::tick_autosave` 的脏文档签名驱动：编辑停止 `Settings.autosave_delay_ms` 后调用 `save_all_dirty`，并在无输入时请求重绘；默认关闭。
+- 每个 `Document` 有内存态 `read_only`；只读时编辑器不可交互，替换、编码切换、格式化与保存都会被拒绝。工具栏按钮切换，不持久化。
+- `formatting.rs` 调用 clang-format：优先 `Settings.clang_format_path`，否则查找 PATH 和常见 LLVM 目录；`format_on_save` 失败只提示，仍会保存原文。没有内置格式化器，不要伪造成功。
 - `log.rs` 的 `parse_location` 解析 `file:line:col`；日志行带位置时可点击跳转。`LogStore` 维护最多 1000 条问题诊断，`App::refresh_diagnostics` 解析为本地路径并在行号栏右侧画红/黄竖条；输出面板可过滤全部/错误/警告。
 - 当前版本仍未内置 LSP、调试器或自动补全；用户已规划这些增强，后续在 `xiug` 分支分批接入，不要伪造未接通的能力。
 

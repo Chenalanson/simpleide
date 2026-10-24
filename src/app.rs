@@ -3,6 +3,7 @@
 mod ui;
 
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,6 +22,7 @@ use crate::config::{
 };
 use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
+use crate::formatting;
 use crate::highlight::{self, Highlighter};
 use crate::ignore::IgnoreRules;
 use crate::log::{LogFilter, Severity};
@@ -56,6 +58,10 @@ struct SettingsDraft {
     ruler_column: u16,
     use_spaces: bool,
     indent_width: u8,
+    autosave: bool,
+    autosave_delay_ms: u64,
+    format_on_save: bool,
+    clang_format_path: String,
     auto_scroll_output: bool,
     show_hidden: bool,
     respect_gitignore: bool,
@@ -285,6 +291,8 @@ enum Action {
     OpenFile(PathBuf),
     OpenAt(String, usize, usize),
     SetEncoding(TextEncoding),
+    ToggleReadOnly,
+    FormatDocument,
     SelectTab(usize),
     CloseTab(usize),
     SaveActive,
@@ -323,6 +331,8 @@ pub struct App {
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
     diagnostics_revision: u64,
+    dirty_signature: u64,
+    autosave_since: Option<Instant>,
     left_split: f32,
     resource_open: bool,
     info_open: bool,
@@ -364,6 +374,8 @@ impl App {
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
             diagnostics_revision: u64::MAX,
+            dirty_signature: 0,
+            autosave_since: None,
             left_split,
             resource_open,
             info_open,
@@ -604,12 +616,82 @@ impl App {
         let Some(doc) = self.tabs.get_mut(index) else {
             return;
         };
+        if doc.read_only {
+            self.set_toast("只读文件不能切换编码", Severity::Warning);
+            return;
+        }
         if doc.encoding == encoding {
             return;
         }
         doc.encoding = encoding;
         doc.buffer.mark_dirty();
         self.set_toast(format!("保存时将使用 {}", encoding.label()), Severity::Info);
+    }
+
+    fn format_document(doc: &mut Document, configured: &str) -> Result<bool, String> {
+        if !formatting::is_c_family(&doc.path) {
+            return Ok(false);
+        }
+        let text = doc.buffer.as_string().to_owned();
+        let formatted = formatting::format_source(&doc.path, &text, configured)?;
+        if formatted == text {
+            return Ok(false);
+        }
+        let cursor = doc.cursor_index.min(formatted.chars().count());
+        doc.buffer.set_text(formatted);
+        doc.update_cursor(cursor);
+        Ok(true)
+    }
+
+    fn toggle_read_only(&mut self) {
+        let Some(index) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(index) else {
+            return;
+        };
+        if !doc.read_only && doc.is_dirty() {
+            self.set_toast("请先保存当前修改，再切换只读", Severity::Warning);
+            return;
+        }
+        doc.read_only = !doc.read_only;
+        let name = doc.name.clone();
+        let enabled = doc.read_only;
+        self.set_toast(
+            if enabled {
+                format!("{name} 已设为只读")
+            } else {
+                format!("{name} 已恢复编辑")
+            },
+            Severity::Info,
+        );
+    }
+
+    fn format_current_document(&mut self) {
+        let Some(index) = self.active else {
+            return;
+        };
+        let configured = self.settings.clang_format_path.clone();
+        let result = {
+            let Some(doc) = self.tabs.get_mut(index) else {
+                return;
+            };
+            if doc.read_only {
+                self.set_toast("只读文件不能格式化", Severity::Warning);
+                return;
+            }
+            if !formatting::is_c_family(&doc.path) {
+                self.set_toast("clang-format 仅支持 C/C++ 源文件", Severity::Warning);
+                return;
+            }
+            (doc.name.clone(), Self::format_document(doc, &configured))
+        };
+        let (name, result) = result;
+        match result {
+            Ok(true) => self.set_toast(format!("已格式化 {name}"), Severity::Success),
+            Ok(false) => self.set_toast(format!("{name} 已经是格式化状态"), Severity::Info),
+            Err(err) => self.set_toast(format!("格式化 {name} 失败：{err}"), Severity::Warning),
+        }
     }
 
     fn save_active(&mut self) -> bool {
@@ -622,13 +704,32 @@ impl App {
         if !doc.is_dirty() {
             return true;
         }
+        if doc.read_only {
+            self.set_toast("只读文件不能保存", Severity::Warning);
+            return false;
+        }
+        let configured = self.settings.clang_format_path.clone();
+        let format_on_save = self.settings.format_on_save;
         let Some(doc) = self.tabs.get_mut(index) else {
             return true;
         };
+        let mut format_error = None;
+        if format_on_save && formatting::is_c_family(&doc.path) {
+            if let Err(err) = Self::format_document(doc, &configured) {
+                format_error = Some(err);
+            }
+        }
         let name = doc.name.clone();
         match doc.save() {
             Ok(()) => {
-                self.set_toast(format!("已保存 {name}"), Severity::Success);
+                if let Some(err) = format_error {
+                    self.set_toast(
+                        format!("已保存 {name}，但格式化失败：{err}"),
+                        Severity::Warning,
+                    );
+                } else {
+                    self.set_toast(format!("已保存 {name}"), Severity::Success);
+                }
                 true
             }
             Err(err) => {
@@ -639,13 +740,56 @@ impl App {
     }
 
     fn save_all_dirty(&mut self) -> Result<usize, String> {
+        let configured = self.settings.clang_format_path.clone();
+        let format_on_save = self.settings.format_on_save;
         let mut saved = 0usize;
-        for doc in self.tabs.iter_mut().filter(|doc| doc.is_dirty()) {
+        for doc in self
+            .tabs
+            .iter_mut()
+            .filter(|doc| doc.is_dirty() && !doc.read_only)
+        {
+            if format_on_save && formatting::is_c_family(&doc.path) {
+                let _ = Self::format_document(doc, &configured);
+            }
             doc.save()
                 .map_err(|err| format!("保存 {} 失败：{err}", doc.name))?;
             saved += 1;
         }
         Ok(saved)
+    }
+
+    fn tick_autosave(&mut self, ctx: &egui::Context) {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut dirty_count = 0usize;
+        for doc in self.tabs.iter().filter(|doc| doc.is_dirty()) {
+            doc.path.hash(&mut hasher);
+            doc.buffer.revision().hash(&mut hasher);
+            dirty_count += 1;
+        }
+        let signature = if dirty_count == 0 { 0 } else { hasher.finish() };
+        if signature != self.dirty_signature {
+            self.dirty_signature = signature;
+            self.autosave_since = (signature != 0).then(Instant::now);
+        }
+        if !self.settings.autosave {
+            self.autosave_since = None;
+            return;
+        }
+        let delay = Duration::from_millis(self.settings.autosave_delay_ms);
+        let Some(since) = self.autosave_since else {
+            return;
+        };
+        let elapsed = since.elapsed();
+        if elapsed < delay {
+            ctx.request_repaint_after(delay - elapsed);
+            return;
+        }
+        self.autosave_since = None;
+        match self.save_all_dirty() {
+            Ok(0) => {}
+            Ok(count) => self.set_toast(format!("已自动保存 {count} 个文件"), Severity::Success),
+            Err(err) => self.set_toast(format!("自动保存失败：{err}"), Severity::Error),
+        }
     }
 
     fn save_all_with_toast(&mut self) {
@@ -819,6 +963,10 @@ impl App {
         let Some(doc) = self.tabs.get_mut(active) else {
             return;
         };
+        if doc.read_only {
+            self.set_toast("只读文件不能替换", Severity::Warning);
+            return;
+        }
         let revision = doc.buffer.revision();
         self.find.ensure_matches(doc.buffer.as_string(), revision);
         let Some(matched) = self.find.current().cloned() else {
@@ -864,6 +1012,10 @@ impl App {
         let Some(doc) = self.tabs.get_mut(active) else {
             return;
         };
+        if doc.read_only {
+            self.set_toast("只读文件不能替换", Severity::Warning);
+            return;
+        }
         let revision = doc.buffer.revision();
         self.find.ensure_matches(doc.buffer.as_string(), revision);
         let count = self.find.matches.len();
@@ -987,6 +1139,10 @@ impl App {
             ruler_column: self.settings.ruler_column,
             use_spaces: self.settings.use_spaces,
             indent_width: self.settings.indent_width,
+            autosave: self.settings.autosave,
+            autosave_delay_ms: self.settings.autosave_delay_ms,
+            format_on_save: self.settings.format_on_save,
+            clang_format_path: self.settings.clang_format_path.clone(),
             auto_scroll_output: self.settings.auto_scroll_output,
             show_hidden: self.settings.show_hidden,
             respect_gitignore: self.settings.respect_gitignore,
@@ -1227,6 +1383,7 @@ impl App {
             find_next,
             find_prev,
             project_search_open,
+            format_document,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -1249,6 +1406,7 @@ impl App {
                 input.key_pressed(egui::Key::F3) && !input.modifiers.shift,
                 input.key_pressed(egui::Key::F3) && input.modifiers.shift,
                 command && input.modifiers.shift && input.key_pressed(egui::Key::F),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::I),
             )
         });
 
@@ -1307,6 +1465,9 @@ impl App {
                 self.project_search.case_sensitive = self.find.case_sensitive;
                 self.project_search.use_regex = self.find.use_regex;
             }
+        }
+        if format_document {
+            self.format_current_document();
         }
         if self.find.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.find.open = false;
@@ -1388,6 +1549,8 @@ impl App {
                 Action::OpenFile(path) => self.open_file(path),
                 Action::OpenAt(path, line, column) => self.open_at(ctx, &path, line, column),
                 Action::SetEncoding(encoding) => self.set_encoding(encoding),
+                Action::ToggleReadOnly => self.toggle_read_only(),
+                Action::FormatDocument => self.format_current_document(),
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
                         self.active = Some(index);
@@ -1594,6 +1757,7 @@ impl eframe::App for App {
             self.apply_actions(&ctx, actions);
         }
 
+        self.tick_autosave(&ctx);
         self.show_toast(&ctx);
         self.sync_title(&ctx);
 

@@ -114,6 +114,7 @@ pub struct Document {
     pub cursor_index: usize,
     pub cursor_line: usize,
     pub cursor_column: usize,
+    pub read_only: bool,
     pub bookmarks: BTreeSet<usize>,
     pub layout_cache: SharedLayoutCache,
 }
@@ -137,6 +138,7 @@ impl Document {
             cursor_index: 0,
             cursor_line: 1,
             cursor_column: 1,
+            read_only: false,
             bookmarks: BTreeSet::new(),
             layout_cache: highlight::new_cache(),
         })

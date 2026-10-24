@@ -532,6 +532,10 @@ pub struct Settings {
     pub ruler_column: u16,
     pub use_spaces: bool,
     pub indent_width: u8,
+    pub autosave: bool,
+    pub autosave_delay_ms: u64,
+    pub format_on_save: bool,
+    pub clang_format_path: String,
     pub auto_scroll_output: bool,
     pub output_open: bool,
     pub output_height: f32,
@@ -556,6 +560,10 @@ impl Default for Settings {
             ruler_column: 0,
             use_spaces: true,
             indent_width: 4,
+            autosave: false,
+            autosave_delay_ms: 1500,
+            format_on_save: false,
+            clang_format_path: String::new(),
             auto_scroll_output: true,
             output_open: true,
             output_height: 214.0,
@@ -628,6 +636,7 @@ impl Settings {
             self.ruler_column = 0;
         }
         self.indent_width = self.indent_width.clamp(1, 8);
+        self.autosave_delay_ms = self.autosave_delay_ms.clamp(500, 10_000);
         if !self.output_height.is_finite() || self.output_height <= 0.0 {
             self.output_height = 214.0;
         }

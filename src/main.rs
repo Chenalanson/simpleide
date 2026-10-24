@@ -6,6 +6,7 @@ mod build;
 mod config;
 mod editor;
 mod file_tree;
+mod formatting;
 mod highlight;
 mod ignore;
 mod indent;
