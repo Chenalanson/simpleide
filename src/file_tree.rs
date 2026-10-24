@@ -21,6 +21,7 @@ pub enum TreeAction {
     OpenFile(PathBuf),
     Reveal(PathBuf),
     OpenInVscode(PathBuf),
+    HexView(PathBuf),
 }
 
 pub struct FileTree {
@@ -202,6 +203,10 @@ impl FileTree {
                 }
                 if ui.button("用 VS Code 打开").clicked() {
                     context_action = Some(TreeAction::OpenInVscode(entry.path.clone()));
+                    ui.close();
+                }
+                if !entry.is_dir && ui.button("十六进制查看").clicked() {
+                    context_action = Some(TreeAction::HexView(entry.path.clone()));
                     ui.close();
                 }
             });

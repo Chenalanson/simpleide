@@ -101,6 +101,39 @@ struct TodoState {
     filter: Option<crate::todo::TodoKind>,
 }
 
+const MAX_ARRAY_BYTES: usize = 8192;
+
+struct ArrayState {
+    open: bool,
+    name: String,
+    hex: bool,
+    per_line: usize,
+    source: Vec<u8>,
+    source_label: String,
+    truncated: bool,
+}
+
+impl Default for ArrayState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            name: "data".to_owned(),
+            hex: true,
+            per_line: 16,
+            source: Vec::new(),
+            source_label: String::new(),
+            truncated: false,
+        }
+    }
+}
+
+#[derive(Default)]
+struct HexState {
+    open: bool,
+    dump: crate::hexview::HexDump,
+    error: Option<String>,
+}
+
 #[derive(Default)]
 struct SymbolState {
     open: bool,
@@ -315,6 +348,8 @@ enum Action {
     OpenGitStatus,
     OpenTodos,
     OpenSymbols,
+    OpenHex(PathBuf),
+    OpenArrayGenerator,
     SelectTab(usize),
     CloseTab(usize),
     SaveActive,
@@ -352,6 +387,8 @@ pub struct App {
     project_search: ProjectSearchState,
     todo: TodoState,
     symbols: SymbolState,
+    hex: HexState,
+    array: ArrayState,
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
     diagnostics_revision: u64,
@@ -401,6 +438,8 @@ impl App {
             project_search: ProjectSearchState::default(),
             todo: TodoState::default(),
             symbols: SymbolState::default(),
+            hex: HexState::default(),
+            array: ArrayState::default(),
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
             diagnostics_revision: u64::MAX,
@@ -728,6 +767,61 @@ impl App {
             Ok(true) => self.set_toast(format!("已格式化 {name}"), Severity::Success),
             Ok(false) => self.set_toast(format!("{name} 已经是格式化状态"), Severity::Info),
             Err(err) => self.set_toast(format!("格式化 {name} 失败：{err}"), Severity::Warning),
+        }
+    }
+
+    fn open_array_generator(&mut self, ctx: &egui::Context) {
+        let Some(index) = self.active else {
+            self.set_toast("请先打开一个文件", Severity::Warning);
+            return;
+        };
+        let Some(doc) = self.tabs.get(index) else {
+            return;
+        };
+        let text = doc.buffer.as_string();
+        let selection = selected_char_range(ctx, &doc.path).filter(|(start, end)| end > start);
+        let (mut bytes, source_label) = if let Some((start, end)) = selection {
+            (
+                text.chars()
+                    .skip(start)
+                    .take(end.saturating_sub(start))
+                    .collect::<String>()
+                    .into_bytes(),
+                "选中内容".to_owned(),
+            )
+        } else {
+            (text.as_bytes().to_vec(), "当前文件".to_owned())
+        };
+        let truncated = bytes.len() > MAX_ARRAY_BYTES;
+        bytes.truncate(MAX_ARRAY_BYTES);
+        let name = doc
+            .path
+            .file_stem()
+            .map(|stem| format!("{}_data", stem.to_string_lossy()))
+            .unwrap_or_else(|| "data".to_owned());
+        self.array = ArrayState {
+            open: true,
+            name,
+            hex: true,
+            per_line: 16,
+            source: bytes,
+            source_label,
+            truncated,
+        };
+    }
+
+    fn open_hex(&mut self, path: &Path) {
+        match crate::hexview::HexDump::open(path) {
+            Ok(dump) => {
+                self.hex.dump = dump;
+                self.hex.error = None;
+                self.hex.open = true;
+            }
+            Err(err) => {
+                self.hex.error = Some(err);
+                self.hex.open = true;
+                self.hex.dump = crate::hexview::HexDump::default();
+            }
         }
     }
 
@@ -1519,6 +1613,8 @@ impl App {
             git_open,
             todo_open,
             symbols_open,
+            hex_open,
+            array_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -1545,6 +1641,8 @@ impl App {
                 command && input.modifiers.shift && input.key_pressed(egui::Key::G),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::T),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::O),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::H),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::A),
             )
         });
 
@@ -1616,6 +1714,15 @@ impl App {
             self.symbols.open = true;
             self.refresh_symbols();
         }
+        if hex_open {
+            if let Some(doc) = self.active_document() {
+                let path = doc.path.clone();
+                self.open_hex(&path);
+            }
+        }
+        if array_open {
+            self.open_array_generator(ctx);
+        }
         if format_document {
             self.format_current_document();
         }
@@ -1637,6 +1744,14 @@ impl App {
         }
         if self.symbols.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.symbols.open = false;
+            self.focus_editor = true;
+        }
+        if self.hex.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.hex.open = false;
+            self.focus_editor = true;
+        }
+        if self.array.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.array.open = false;
             self.focus_editor = true;
         }
         if zoom_in || zoom_out {
@@ -1725,6 +1840,8 @@ impl App {
                     self.symbols.open = true;
                     self.refresh_symbols();
                 }
+                Action::OpenHex(path) => self.open_hex(&path),
+                Action::OpenArrayGenerator => self.open_array_generator(ctx),
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
                         self.active = Some(index);
@@ -1854,6 +1971,15 @@ fn build_result_status(last: &LastBuild) -> (Color32, String) {
     }
 }
 
+fn selected_char_range(ctx: &egui::Context, path: &Path) -> Option<(usize, usize)> {
+    let editor_id = egui::Id::new(("simple_embedded_code_editor", path));
+    let state = egui::text_edit::TextEditState::load(ctx, editor_id)?;
+    let range = state.cursor.char_range()?;
+    let start = range.primary.index.min(range.secondary.index);
+    let end = range.primary.index.max(range.secondary.index);
+    (end > start).then_some((start, end))
+}
+
 fn set_editor_cursor(ctx: &egui::Context, path: &Path, char_index: usize) {
     let editor_id = egui::Id::new(("simple_embedded_code_editor", path));
     let mut state = egui::text_edit::TextEditState::load(ctx, editor_id).unwrap_or_default();
@@ -1930,6 +2056,12 @@ impl eframe::App for App {
         }
         if self.symbols.open && !modal_open {
             self.show_symbols(&ctx, &mut actions);
+        }
+        if self.hex.open && !modal_open {
+            self.show_hex_viewer(&ctx);
+        }
+        if self.array.open && !modal_open {
+            self.show_array_generator(&ctx);
         }
 
         if self.settings_draft.is_none()

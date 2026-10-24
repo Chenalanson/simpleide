@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod arraygen;
 mod brackets;
 mod build;
 mod config;
@@ -8,6 +9,7 @@ mod editor;
 mod file_tree;
 mod formatting;
 mod git;
+mod hexview;
 mod highlight;
 mod ignore;
 mod indent;

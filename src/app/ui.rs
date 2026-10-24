@@ -300,6 +300,9 @@ impl App {
                                                             TreeAction::OpenInVscode(path) => {
                                                                 Action::OpenVscode(path)
                                                             }
+                                                            TreeAction::HexView(path) => {
+                                                                Action::OpenHex(path)
+                                                            }
                                                         });
                                                     }
                                                 }
@@ -803,6 +806,18 @@ impl App {
                             .clicked()
                         {
                             actions.push(Action::OpenSymbols);
+                        }
+                        if ui
+                            .add(
+                                Button::new(
+                                    RichText::new("数组").size(12.0).color(theme::TEXT_DIM),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text("把选中内容或当前文件生成 C 数组 (Ctrl+Shift+A)")
+                            .clicked()
+                        {
+                            actions.push(Action::OpenArrayGenerator);
                         }
                         let read_only_color = if read_only {
                             theme::WARNING
@@ -1583,6 +1598,206 @@ impl App {
                 symbol.line,
                 symbol.column,
             ));
+        }
+    }
+
+    pub(super) fn show_hex_viewer(&mut self, ctx: &egui::Context) {
+        let mut open = self.hex.open;
+        let mut to_array = false;
+        let name = util::file_name(&self.hex.dump.path);
+        let path = util::display_path(&self.hex.dump.path);
+        let size = self.hex.dump.data.len();
+        egui::Window::new("十六进制查看")
+            .id(Id::new("simple_embedded_hex_viewer"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([760.0, 480.0])
+            .min_height(360.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .inner_margin(Margin::same(12))
+                    .corner_radius(6),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(720.0);
+                ui.set_min_height(330.0);
+                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("十六进制 · {name}"))
+                            .size(16.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.label(
+                        RichText::new(format!("{size} 字节"))
+                            .size(11.0)
+                            .color(theme::TEXT_FAINT),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("×", theme::TEXT_DIM))
+                            .on_hover_text("关闭")
+                            .clicked()
+                        {
+                            open = false;
+                        }
+                        if ui
+                            .add(small_flat_button("生成数组", theme::TEXT_DIM))
+                            .on_hover_text("把这批字节生成 C 数组")
+                            .clicked()
+                        {
+                            to_array = true;
+                        }
+                    });
+                });
+                ui.label(RichText::new(&path).size(10.5).color(theme::TEXT_FAINT));
+                ui.separator();
+                if let Some(error) = &self.hex.error {
+                    ui.label(RichText::new(error).size(11.5).color(theme::ERROR));
+                } else if size == 0 {
+                    ui.label(RichText::new("空文件").size(11.5).color(theme::TEXT_FAINT));
+                } else {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ScrollArea::vertical()
+                        .id_salt("simple_embedded_hex_rows")
+                        .auto_shrink([false, false])
+                        .show_rows(ui, 18.0, self.hex.dump.row_count(), |ui, range| {
+                            for index in range {
+                                if let Some(row) = self.hex.dump.row(index) {
+                                    ui.label(
+                                        RichText::new(row)
+                                            .monospace()
+                                            .size(12.0)
+                                            .color(theme::TEXT_DIM),
+                                    );
+                                }
+                            }
+                        });
+                }
+            });
+        self.hex.open = open;
+        if to_array {
+            let mut bytes = self.hex.dump.data.clone();
+            let truncated = bytes.len() > MAX_ARRAY_BYTES;
+            bytes.truncate(MAX_ARRAY_BYTES);
+            let name = self
+                .hex
+                .dump
+                .path
+                .file_stem()
+                .map(|stem| format!("{}_data", stem.to_string_lossy()))
+                .unwrap_or_else(|| "data".to_owned());
+            self.array = ArrayState {
+                open: true,
+                name,
+                hex: true,
+                per_line: 16,
+                source: bytes,
+                source_label: "十六进制视图".to_owned(),
+                truncated,
+            };
+        }
+    }
+
+    pub(super) fn show_array_generator(&mut self, ctx: &egui::Context) {
+        let mut open = self.array.open;
+        let mut copied = false;
+        let preview = crate::arraygen::generate(
+            &self.array.source,
+            &self.array.name,
+            self.array.hex,
+            self.array.per_line,
+        );
+        egui::Window::new("生成 C 数组")
+            .id(Id::new("simple_embedded_array_generator"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([780.0, 520.0])
+            .min_height(420.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .inner_margin(Margin::same(12))
+                    .corner_radius(6),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(740.0);
+                ui.set_min_height(390.0);
+                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("生成 C 数组")
+                            .size(16.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "{} · {} 字节",
+                            self.array.source_label,
+                            self.array.source.len()
+                        ))
+                        .size(11.0)
+                        .color(theme::TEXT_FAINT),
+                    );
+                    if self.array.truncated {
+                        ui.label(
+                            RichText::new("已截断到 8 KB")
+                                .size(11.0)
+                                .color(theme::WARNING),
+                        );
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("×", theme::TEXT_DIM))
+                            .on_hover_text("关闭")
+                            .clicked()
+                        {
+                            open = false;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("变量名").size(11.5).color(theme::TEXT_DIM));
+                    ui.add(
+                        TextEdit::singleline(&mut self.array.name)
+                            .id(Id::new("simple_embedded_array_name"))
+                            .font(FontId::monospace(12.0))
+                            .text_color(theme::TEXT)
+                            .background_color(theme::BG)
+                            .desired_width(220.0),
+                    );
+                    ui.checkbox(&mut self.array.hex, "十六进制");
+                    ui.add(egui::Slider::new(&mut self.array.per_line, 4..=32).text("每行字节"));
+                    if ui.button("复制").clicked() {
+                        ui.ctx().copy_text(preview.clone());
+                        copied = true;
+                    }
+                });
+                ui.separator();
+                ScrollArea::both()
+                    .id_salt("simple_embedded_array_preview")
+                    .max_height(330.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(&preview)
+                                .monospace()
+                                .size(12.0)
+                                .color(theme::TEXT_DIM),
+                        );
+                    });
+            });
+        self.array.open = open;
+        if copied {
+            self.set_toast("C 数组已复制到剪贴板", Severity::Success);
         }
     }
 

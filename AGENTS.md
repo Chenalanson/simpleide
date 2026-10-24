@@ -92,6 +92,8 @@ docs/                  README 截图和使用教程
 - `git.rs` 通过本机 `git` 命令读取状态：`status --porcelain -z -uall --branch`，并用 `rev-parse --show-prefix` 把仓库根路径映射到工程子目录；`git diff HEAD -U0` 提供当前文件修改行。资源管理器显示 `M/U/A/D/R` 徽标，行号栏左侧黄色条表示修改行；`Ctrl+Shift+G` 打开只读状态窗口，不执行提交或网络操作。
 - `todo.rs` 扫描工程中的 `TODO` / `FIXME` / `HACK` / `NOTE`（大写单词边界），跳过忽略目录和 2 MB 以上文件，最多 500 条；`Ctrl+Shift+T` 或资源管理器 TODO 按钮打开窗口，支持类型过滤与点击跳转。
 - `symbols.rs` 用轻量正则索引 C/C++ 函数、struct/union/enum/class、宏和汇编标签，最多 2000 条；`Ctrl+Shift+O` 或工具栏“符号”打开过滤窗口。它不是完整的 C++ 解析器或 LSP，复杂声明可能漏检，不要宣称语义级准确。
+- `hexview.rs` 读取最多 32 MB 文件，按 16 字节一行显示偏移/十六进制/ASCII；文件树右键或 `Ctrl+Shift+H` 打开当前文件，可从窗口把字节转给数组生成器。
+- `arraygen.rs` 把选中文本或当前文件（最多 8 KB）生成 `const uint8_t` C 数组；工具栏“数组”或 `Ctrl+Shift+A` 打开，变量名会被清洗成合法标识符，支持复制。
 - `log.rs` 的 `parse_location` 解析 `file:line:col`；日志行带位置时可点击跳转。`LogStore` 维护最多 1000 条问题诊断，`App::refresh_diagnostics` 解析为本地路径并在行号栏右侧画红/黄竖条；输出面板可过滤全部/错误/警告。
 - 当前版本仍未内置 LSP、调试器或自动补全；用户已规划这些增强，后续在 `xiug` 分支分批接入，不要伪造未接通的能力。
 
