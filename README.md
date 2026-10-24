@@ -1,0 +1,165 @@
+# MiniEIDE
+
+一个 Windows 桌面端的极简嵌入式编辑器：**文件夹就是工程**，打开目录 → 编辑代码 → 一键构建 → 查看彩色日志。没有工程导入向导，没有芯片包，没有存储器布局，也不会向工程目录写入任何项目文件。
+
+使用 Rust + `eframe/egui` 编写。界面为三栏布局：左侧文件树、中间多标签代码编辑、底部异步构建输出。
+
+![MiniEIDE](docs/editor.png)
+
+首次启动：直接打开文件夹，没有工程向导。
+
+![欢迎页](docs/welcome.png)
+
+## 功能
+
+- 打开任意文件夹作为工程，不做 `Makefile` / `Cargo.toml` / `CMakeLists.txt` 之外的项目配置
+- 左侧目录树：展开/折叠、隐藏文件、刷新、点击打开文件；右键可在资源管理器或 VS Code 中打开
+- 多文件 Tab、脏标记、关闭前提示保存
+- 文本编辑：`Ctrl+S` 保存、Tab 缩进、撤销/重做、复制粘贴等由 egui 文本编辑控件提供
+- syntect 语法高亮：C/C++/ASM/Rust/Makefile/CMake/TOML/JSON 等
+- 自动换行开关、代码字号调节、CRLF/LF 保持
+- Build / Clean / Rebuild / Flash 在后台线程执行，UI 不冻结
+- 实时抓取 stdout/stderr，解析 ANSI 颜色，按 `error` / `warning` 自动标红/标黄
+- 构建前自动保存所有脏文件；可停止构建进程树
+- 本地构建或远程 SSH 构建（复用系统 OpenSSH）
+- Flash 命令可选，在本地工程目录执行，方便接 J-Link / OpenOCD
+- 每工程独立构建配置，保存在用户目录，不污染工程
+
+## 运行
+
+需要 Rust 1.92+（开发环境使用 Rust 1.99）。目标平台为 Windows，代码也保留了 Linux/macOS 的本地构建分支。
+
+```powershell
+cargo run --release
+```
+
+也可以直接带工程路径启动，第二个参数会额外打开一个文件：
+
+```powershell
+cargo run --release -- D:\firmware\my-board src\main.c
+```
+
+构建后的可执行文件：
+
+```text
+target\release\mini-embedded-ide.exe
+```
+
+## 快捷键
+
+| 快捷键 | 操作 |
+| --- | --- |
+| `Ctrl+O` | 打开工程文件夹 |
+| `Ctrl+S` | 保存当前文件 |
+| `Ctrl+Shift+S` | 保存所有文件 |
+| `Ctrl+B` | Build |
+| `Ctrl+Shift+B` | Rebuild |
+| `Ctrl+W` | 关闭当前标签页 |
+| `Ctrl+,` | 设置 |
+| `Ctrl+=` / `Ctrl+-` | 放大 / 缩小代码字号 |
+
+## 构建命令如何工作
+
+打开工程时自动识别：
+
+| 检测到 | Build | Clean | Rebuild |
+| --- | --- | --- | --- |
+| `Cargo.toml` | `cargo build` | `cargo clean` | `cargo clean && cargo build` |
+| `Makefile` | `make`，否则尝试 `gmake` / `mingw32-make`（Windows） | `<make> clean` | `<make> clean && <make>` |
+| `CMakeLists.txt` | `cmake -S . -B build && cmake --build build` | 清理 target | clean-first |
+
+检测结果只是初始值，在 **设置** 中可随时修改。编辑器只负责调用命令，不接管 CMake/Make/Cargo 的构建逻辑。
+
+构建前会自动保存所有未保存文件，然后通过本机 shell（Windows 为 `cmd /S /C`）在工程根目录启动进程。日志从 stdout/stderr 双流读取；Windows 下停止会调用 `taskkill /T` 终止子进程树。
+
+### 远程 SSH 构建
+
+设置 → 构建位置选择 **远程 SSH**，填写：
+
+- SSH 主机：`user@host`，或 `~/.ssh/config` 中的别名
+- SSH 端口（默认 22）
+- 远程工程目录：如 `/home/user/firmware`
+
+应用会执行：
+
+```text
+ssh -o BatchMode=yes -o ConnectTimeout=10 <host> "cd '<远程目录>' && <构建命令>"
+```
+
+因此需要提前配置 SSH key 免密登录。远程模式目前直接调用系统 OpenSSH，没有绑定 OpenCode 的 `ssh-mcp`；这样不依赖额外运行时，也便于在任意终端环境复用。
+
+### 烧录
+
+烧录命令始终在本地工程目录执行，例如：
+
+```text
+JLink.exe -CommanderScript flash.jlink
+```
+
+这样可以由 J-Link 直接访问本机 USB。留空时顶部烧录按钮自动禁用。当前没有内置 MCP 客户端；如果后续要接 `jlink-mcp`，可以直接把 Flash 命令替换为对应的命令行封装。
+
+## 配置与“零工程文件”
+
+所有设置都在：
+
+```text
+%APPDATA%\MiniEIDE\settings.json
+```
+
+内容包括最近工程、每个工程各自的 Build/Clean/Rebuild/Flash/SSH 配置、字号、自动换行、输出面板状态等。
+
+工程目录中不会创建 `.eide`、`.mini-ide` 或任何类似文件。把文件夹交给同事、放到 Git 里或移到另一台机器，它仍然只是一个普通工程。
+
+## 示例
+
+`examples/blink` 是一个可编译的最小 C 工程（HAL 为 PC 上的空实现）：
+
+```powershell
+cargo run --release -- examples\blink examples\blink\src\main.c
+```
+
+在 Windows 上需要 `gcc` 和 `mingw32-make` 在 `PATH` 中。
+
+## 目录结构
+
+```text
+src/
+  main.rs        窗口、字体、图标
+  app.rs         应用状态、快捷键、顶部栏、状态栏、构建输出
+  app/ui.rs      文件树、Tab、编辑器、欢迎页、设置/确认弹窗
+  build.rs       子进程、stdout/stderr、停止、日志事件
+  config.rs      自动检测、每工程设置、SSH 命令
+  editor.rs      String 文档 + egui TextBuffer 适配 + 保存
+  file_tree.rs   惰性目录树
+  highlight.rs   syntect 高亮 + galley 缓存
+  log.rs         ANSI SGR 解析、错误分级、日志裁剪
+  theme.rs       配色
+  util.rs        路径、换行、文件管理器集成
+examples/blink/  可直接打开的演示工程
+```
+
+## 设计取舍
+
+- **没有使用 ropey**：egui 的 `TextEdit` 需要一个可返回连续 `&str` 的 `TextBuffer`，ropey 无法直接满足；这里使用带 revision 的 `String` 缓冲，并在编辑时即时更新高亮缓存。
+- **没有使用 tokio**：构建是单进程 + 双流读取，`std::process` + 线程 + `mpsc` 足够，依赖更轻，停止/退出行为也更直接。
+- **eframe 0.34.3**：开发时采用当前稳定 API；相比需求里的 0.29，Panel、字体等 API 有升级。
+- **不做 LSP / 调试器**：保持“文件夹 + 编译 + 日志”的核心。代码跳转、调试建议继续使用 VS Code / J-Link 工具链。
+
+## 已实现边界
+
+- 只打开 UTF-8 文本文件，上限 16 MB，二进制文件会拒绝打开
+- 不监听外部文件修改，保存前不会自动合并磁盘差异
+- 构建日志按固定行高虚拟化显示，特别长的行会横向裁剪；可悬停查看或复制全部日志
+- 没有工程级调试、芯片包、内存布局、自动补全
+- 远程构建不支持交互式密码；请使用 SSH key
+- 当前没有接入 `ssh-mcp` / `jlink-mcp`，远程构建走 OpenSSH，烧录走用户自定义的本地命令
+
+## 开发
+
+```powershell
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo run
+```
+
+测试覆盖自动检测、SSH 命令构造、CRLF 保存、文件树展开、ANSI 解析和后台命令执行等。

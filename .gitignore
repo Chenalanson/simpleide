@@ -1,0 +1,4 @@
+/target
+/examples/blink/build
+*.log
+/.opencode/
