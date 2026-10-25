@@ -882,7 +882,7 @@ impl App {
     }
 
     fn show_find_overlay(&mut self, ctx: &egui::Context, editor_rect: egui::Rect) {
-        let width = (editor_rect.width() - 24.0).max(300.0);
+        let width = 560.0_f32.min((editor_rect.width() - 24.0).max(300.0));
         let position = egui::pos2(editor_rect.right() - width - 12.0, editor_rect.top() + 8.0);
         egui::Area::new(Id::new("simple_embedded_find_overlay"))
             .order(egui::Order::Foreground)
