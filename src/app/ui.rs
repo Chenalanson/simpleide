@@ -1089,8 +1089,7 @@ impl App {
             .show(ui, |ui| {
                 ui.spacing_mut().interact_size.y = 24.0;
                 ui.horizontal(|ui| {
-                    let response = ui.add_sized(
-                        [ui.available_width().min(900.0), 22.0],
+                    let response = ui.add(
                         Label::new(
                             RichText::new(&breadcrumb)
                                 .size(12.0)
