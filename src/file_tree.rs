@@ -19,9 +19,20 @@ struct Entry {
 
 pub enum TreeAction {
     OpenFile(PathBuf),
+    OpenToSide(PathBuf),
     Reveal(PathBuf),
     OpenInVscode(PathBuf),
     HexView(PathBuf),
+    PreviewImage(PathBuf),
+    NewFile(PathBuf),
+    NewFolder(PathBuf),
+    CopyPath(PathBuf),
+    CopyRelativePath(PathBuf),
+    Cut(PathBuf),
+    Copy(PathBuf),
+    Paste(PathBuf),
+    Rename(PathBuf),
+    Delete(PathBuf),
 }
 
 pub struct FileTree {
@@ -106,7 +117,12 @@ impl FileTree {
         self.warm_root();
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, active: Option<&Path>) -> Vec<TreeAction> {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        active: Option<&Path>,
+        can_paste: bool,
+    ) -> Vec<TreeAction> {
         let mut actions = Vec::new();
         ui.spacing_mut().item_spacing.y = 1.0;
         let root = self.root.clone();
@@ -132,10 +148,33 @@ impl FileTree {
 
         let mut context_action = None;
         row.response.context_menu(|ui| {
-            if ui.button("在资源管理器中显示").clicked() {
+            if ui.button("新建文件...").clicked() {
+                context_action = Some(TreeAction::NewFile(root.clone()));
+                ui.close();
+            }
+            if ui.button("新建文件夹...").clicked() {
+                context_action = Some(TreeAction::NewFolder(root.clone()));
+                ui.close();
+            }
+            if can_paste && ui.button("粘贴").clicked() {
+                context_action = Some(TreeAction::Paste(root.clone()));
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("在文件资源管理器中显示").clicked() {
                 context_action = Some(TreeAction::Reveal(root.clone()));
                 ui.close();
             }
+            ui.separator();
+            if ui.button("复制路径").clicked() {
+                context_action = Some(TreeAction::CopyPath(root.clone()));
+                ui.close();
+            }
+            if ui.button("复制相对路径").clicked() {
+                context_action = Some(TreeAction::CopyRelativePath(root.clone()));
+                ui.close();
+            }
+            ui.separator();
             if ui.button("用 VS Code 打开").clicked() {
                 context_action = Some(TreeAction::OpenInVscode(root.clone()));
                 ui.close();
@@ -147,7 +186,7 @@ impl FileTree {
         row.response.on_hover_text(crate::util::display_path(&root));
 
         if expanded {
-            self.show_dir(ui, &root, 1, active, &mut actions);
+            self.show_dir(ui, &root, 1, active, &mut actions, can_paste);
         }
         actions
     }
@@ -163,6 +202,7 @@ impl FileTree {
         depth: usize,
         active: Option<&Path>,
         actions: &mut Vec<TreeAction>,
+        can_paste: bool,
     ) {
         let entries = self.children_for(dir).to_vec();
         for entry in entries {
@@ -197,16 +237,69 @@ impl FileTree {
 
             let mut context_action = None;
             row.response.context_menu(|ui| {
-                if ui.button("在资源管理器中显示").clicked() {
+                if entry.is_dir {
+                    if ui.button("新建文件...").clicked() {
+                        context_action = Some(TreeAction::NewFile(entry.path.clone()));
+                        ui.close();
+                    }
+                    if ui.button("新建文件夹...").clicked() {
+                        context_action = Some(TreeAction::NewFolder(entry.path.clone()));
+                        ui.close();
+                    }
+                    if can_paste && ui.button("粘贴").clicked() {
+                        context_action = Some(TreeAction::Paste(entry.path.clone()));
+                        ui.close();
+                    }
+                    ui.separator();
+                } else if ui.button("在侧边打开").clicked() {
+                    context_action = Some(TreeAction::OpenToSide(entry.path.clone()));
+                    ui.close();
+                }
+                if ui.button("剪切").clicked() {
+                    context_action = Some(TreeAction::Cut(entry.path.clone()));
+                    ui.close();
+                }
+                if ui.button("复制").clicked() {
+                    context_action = Some(TreeAction::Copy(entry.path.clone()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("复制路径").clicked() {
+                    context_action = Some(TreeAction::CopyPath(entry.path.clone()));
+                    ui.close();
+                }
+                if ui.button("复制相对路径").clicked() {
+                    context_action = Some(TreeAction::CopyRelativePath(entry.path.clone()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("重命名...").clicked() {
+                    context_action = Some(TreeAction::Rename(entry.path.clone()));
+                    ui.close();
+                }
+                if ui.button("删除").clicked() {
+                    context_action = Some(TreeAction::Delete(entry.path.clone()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("在文件资源管理器中显示").clicked() {
                     context_action = Some(TreeAction::Reveal(entry.path.clone()));
                     ui.close();
                 }
-                if ui.button("用 VS Code 打开").clicked() {
-                    context_action = Some(TreeAction::OpenInVscode(entry.path.clone()));
+                if !entry.is_dir
+                    && is_image_path(&entry.path)
+                    && ui.button("在图像预览中打开").clicked()
+                {
+                    context_action = Some(TreeAction::PreviewImage(entry.path.clone()));
                     ui.close();
                 }
                 if !entry.is_dir && ui.button("十六进制查看").clicked() {
                     context_action = Some(TreeAction::HexView(entry.path.clone()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("用 VS Code 打开").clicked() {
+                    context_action = Some(TreeAction::OpenInVscode(entry.path.clone()));
                     ui.close();
                 }
             });
@@ -217,7 +310,7 @@ impl FileTree {
                 .on_hover_text(crate::util::display_path(&entry.path));
 
             if entry.is_dir && is_expanded && depth < 64 {
-                self.show_dir(ui, &entry.path, depth + 1, active, actions);
+                self.show_dir(ui, &entry.path, depth + 1, active, actions, can_paste);
             }
         }
     }
@@ -256,6 +349,17 @@ impl FileTree {
 
 struct RowResponse {
     response: egui::Response,
+}
+
+fn is_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "tif" | "tiff"
+            )
+        })
 }
 
 fn row(

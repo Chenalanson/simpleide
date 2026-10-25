@@ -531,6 +531,7 @@ fn find_posix_tools_dir() -> Option<PathBuf> {
 pub struct ProjectSettings {
     pub version: u32,
     pub build: BuildConfig,
+    pub debug: ProjectDebugSettings,
 }
 
 impl Default for ProjectSettings {
@@ -538,6 +539,33 @@ impl Default for ProjectSettings {
         Self {
             version: 1,
             build: BuildConfig::default(),
+            debug: ProjectDebugSettings::default(),
+        }
+    }
+}
+
+/// Debug configuration that belongs to a project.
+///
+/// `program` is the ELF/AXF/EXE being debugged. `gdb_path` is stored here as
+/// well because a project may need a specific cross-gdb (for example
+/// `arm-none-eabi-gdb`) even when the machine-default gdb is different.
+/// `watches` keeps the Live Watch expressions with the project.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectDebugSettings {
+    pub program: String,
+    pub gdb_path: String,
+    pub auto_refresh: bool,
+    pub watches: Vec<String>,
+}
+
+impl Default for ProjectDebugSettings {
+    fn default() -> Self {
+        Self {
+            program: String::new(),
+            gdb_path: String::new(),
+            auto_refresh: true,
+            watches: Vec::new(),
         }
     }
 }
@@ -570,7 +598,11 @@ impl ProjectSettings {
         }
     }
 
-    pub fn save(project_root: &Path, build: &BuildConfig) -> Result<PathBuf, String> {
+    pub fn save(
+        project_root: &Path,
+        build: &BuildConfig,
+        debug: &ProjectDebugSettings,
+    ) -> Result<PathBuf, String> {
         let path = Self::path(project_root);
         let Some(parent) = path.parent() else {
             return Err("工程配置路径无效".to_owned());
@@ -580,6 +612,7 @@ impl ProjectSettings {
         let settings = Self {
             version: 1,
             build: build.clone(),
+            debug: debug.clone(),
         };
         let mut bytes = serde_json::to_vec_pretty(&settings)
             .map_err(|err| format!("无法序列化工程配置：{err}"))?;
@@ -694,10 +727,13 @@ pub fn register_workspace_association() -> Result<PathBuf, String> {
     let icon_key = format!(r"HKCU\Software\Classes\{WORKSPACE_TYPE_NAME}\DefaultIcon");
     let command_key = format!(r"HKCU\Software\Classes\{WORKSPACE_TYPE_NAME}\shell\open\command");
     let command = format!("\"{exe}\" \"%1\"");
+    let icon = crate::write_app_icon_ico()
+        .map(|path| format!("\"{}\",0", display_path(&path)))
+        .unwrap_or_else(|_| format!("\"{exe}\",0"));
     let entries = [
         (extension_key.clone(), WORKSPACE_TYPE_NAME.to_owned()),
         (class_key, "Simple embedded 工作区".to_owned()),
-        (icon_key, format!("\"{exe}\",0")),
+        (icon_key, icon),
         (command_key, command),
     ];
     for (key, value) in &entries {
@@ -709,8 +745,36 @@ pub fn register_workspace_association() -> Result<PathBuf, String> {
             return Err(format!("写入注册表失败：{key}"));
         }
     }
+    notify_shell_association_changed();
     Ok(PathBuf::from(exe))
 }
+
+#[cfg(target_os = "windows")]
+fn notify_shell_association_changed() {
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHChangeNotify(
+            event: i32,
+            flags: u32,
+            item1: *const std::ffi::c_void,
+            item2: *const std::ffi::c_void,
+        );
+    }
+    const SHCNE_ASSOCCHANGED: i32 = 0x0800_0000;
+    const SHCNF_IDLIST: u32 = 0;
+    // SAFETY: both item pointers are allowed to be null for this notification.
+    unsafe {
+        SHChangeNotify(
+            SHCNE_ASSOCCHANGED,
+            SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn notify_shell_association_changed() {}
 
 pub fn autodetect(project_root: &Path) -> BuildConfig {
     let mut extra_paths = Vec::new();
@@ -1262,7 +1326,13 @@ mod tests {
             },
             ..BuildConfig::default()
         };
-        let path = ProjectSettings::save(dir.path(), &config).unwrap();
+        let debug = ProjectDebugSettings {
+            program: "build/demo.axf".into(),
+            gdb_path: "C:/tools/arm-none-eabi-gdb.exe".into(),
+            auto_refresh: true,
+            watches: vec!["counter".into(), "state".into()],
+        };
+        let path = ProjectSettings::save(dir.path(), &config, &debug).unwrap();
         assert!(path.ends_with("settings.json"));
         assert!(path.parent().unwrap().ends_with(".simple-embedded"));
         let loaded = ProjectSettings::load(dir.path()).unwrap().unwrap();
@@ -1272,6 +1342,10 @@ mod tests {
             "C:/tools/openocd.exe".to_owned()
         );
         assert_eq!(loaded.build.openocd.target_config, "stm32f1x.cfg");
+        assert_eq!(loaded.debug.program, "build/demo.axf");
+        assert_eq!(loaded.debug.gdb_path, "C:/tools/arm-none-eabi-gdb.exe");
+        assert!(loaded.debug.auto_refresh);
+        assert_eq!(loaded.debug.watches, vec!["counter", "state"]);
     }
 
     #[test]

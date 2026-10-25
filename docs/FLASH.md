@@ -22,7 +22,8 @@ Simple embedded 不自带芯片烧录算法，也不接管 J-Link / ST-Link 的�
 
 - **Flash 始终在本机执行**。即使构建目标选的是“远程 SSH”，烧录命令也不会通过 SSH 发到远端。
 - 左侧“工程信息 → 烧录配置”现在可以直接切换烧录工具；OpenOCD 的工具路径、程序文件、芯片配置和接口配置也在那里编辑，自定义命令仍可在 **配置 → 构建** 中填写。
-- 烧录配置保存在工程 `.simple-embedded/settings.json`，重新打开工程不会丢失；切换工具或点保存后立即写入。
+- 烧录配置保存在工程 `.simple-embedded/settings.json`，重新打开工程不会丢失；切换工具或点保存后立即写入。调试程序和 gdb 路径也保存在同一文件的 `debug` 节点。
+- 调试会复用这里的 OpenOCD / pyOCD 配置启动 GDB server，并使用 arm-none-eabi-gdb 连接；调试前请确认工具路径和芯片/接口 cfg 正确。
 - OpenOCD 使用独立参数启动，不经过 shell；程序文件路径有空格时不需要自己加引号。
 
 ---
@@ -160,7 +161,7 @@ Simple embedded 已内置 OpenOCD 配置，不需要自己拼完整命令。适�
 - 工具路径下拉会检测 PATH、`Program Files`、PlatformIO 的 `tool-openocd` 等常见位置。
 - 程序文件必须已经存在；烧录前请先构建成功。
 - `.bin` 文件需要额外写起始地址，内置 OpenOCD 配置目前要求使用 `.hex`、`.elf` 或 `.axf`。
-- 目前只负责烧录，不会启动 OpenOCD gdb server；调试仍使用 gdb 控制台。
+- 调试时会用同一组 OpenOCD 参数启动 gdb server，并由 arm-none-eabi-gdb 连接；烧录和调试不要同时占用同一个探针。
 
 ### 4.3 pyOCD
 

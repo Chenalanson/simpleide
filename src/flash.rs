@@ -211,6 +211,78 @@ pub fn preview(config: &OpenOcdConfig, root: &Path) -> Result<String, String> {
     ))
 }
 
+/// Build an `openocd` GDB server invocation for embedded debugging.
+pub fn openocd_server_spec(
+    config: &OpenOcdConfig,
+    root: &Path,
+    port: u16,
+) -> Result<RunSpec, String> {
+    let interface = resolve_script(root, &config.interface_config, "interface")?;
+    let target = resolve_script(root, &config.target_config, "target")?;
+    let executable = resolve_executable(effective_executable(config), root);
+    let server_command = format!("gdb_port {port}; telnet_port disabled; tcl_port disabled");
+    let args: Vec<OsString> = vec![
+        "-f".into(),
+        interface.clone().into(),
+        "-f".into(),
+        target.clone().into(),
+        "-c".into(),
+        server_command.clone().into(),
+    ];
+    let display = format!(
+        "{} -f {} -f {} -c \"{}\"",
+        util::relative_display(root, &executable),
+        interface,
+        target,
+        server_command
+    );
+    Ok(RunSpec {
+        program: executable.into_os_string(),
+        args,
+        cwd: root.to_path_buf(),
+        display,
+        env_paths: Vec::new(),
+        env: Vec::new(),
+    })
+}
+
+/// Build a `pyocd gdbserver` invocation for embedded debugging.
+pub fn pyocd_server_spec(config: &PyOcdConfig, root: &Path, port: u16) -> Result<RunSpec, String> {
+    let target = config.target.trim();
+    if target.is_empty() {
+        return Err("pyOCD 目标芯片不能为空".to_owned());
+    }
+    let pack = resolve_pack(config, root, true)?;
+    let executable = resolve_executable(effective_pyocd_executable(config), root);
+    let port = port.to_string();
+    let mut args: Vec<OsString> = vec![
+        "gdbserver".into(),
+        "--port".into(),
+        port.clone().into(),
+        "-t".into(),
+        target.into(),
+    ];
+    if let Some(pack) = &pack {
+        args.push("--pack".into());
+        args.push(pack.clone().into());
+    }
+    let mut display = format!(
+        "{} gdbserver --port {port} -t {target}",
+        util::relative_display(root, &executable)
+    );
+    if let Some(pack) = &pack {
+        display.push_str(&format!(" --pack {pack}"));
+    }
+    Ok(RunSpec {
+        program: executable.into_os_string(),
+        args,
+        cwd: root.to_path_buf(),
+        display,
+        env_paths: Vec::new(),
+        env: Vec::new(),
+    })
+}
+
 /// Build a direct `pyocd flash` invocation.
 pub fn make_pyocd_spec(config: &PyOcdConfig, root: &Path) -> Result<RunSpec, String> {
     let program = resolve_program_file(&config.program_file, root, true)?;
@@ -746,6 +818,45 @@ mod tests {
         assert!(spec
             .display
             .contains("program build/demo.hex verify reset exit"));
+    }
+
+    #[test]
+    fn openocd_server_spec_uses_requested_port_and_disables_extra_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = openocd_server_spec(&sample_config(), dir.path(), 3456).unwrap();
+        let args = spec
+            .args
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec![
+                "-f",
+                "interface/stlink.cfg",
+                "-f",
+                "target/stm32f1x.cfg",
+                "-c",
+                "gdb_port 3456; telnet_port disabled; tcl_port disabled",
+            ]
+        );
+        assert!(spec.display.contains("gdb_port 3456"));
+    }
+
+    #[test]
+    fn pyocd_server_spec_uses_gdbserver_subcommand() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = pyocd_server_spec(&sample_pyocd(), dir.path(), 3456).unwrap();
+        let args = spec
+            .args
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec!["gdbserver", "--port", "3456", "-t", "stm32f103xb"]
+        );
+        assert!(spec.display.contains("gdbserver --port 3456"));
     }
 
     #[test]

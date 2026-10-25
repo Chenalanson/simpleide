@@ -441,7 +441,7 @@ fn decode_output(bytes: &[u8]) -> String {
     }
 }
 
-fn terminate_process(child: &mut Child) {
+pub(crate) fn terminate_process(child: &mut Child) {
     #[cfg(target_os = "windows")]
     {
         let pid = child.id().to_string();

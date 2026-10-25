@@ -247,6 +247,45 @@ struct CompletionState {
     last_cursor: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DebugSideTab {
+    #[default]
+    Variables,
+    Registers,
+}
+
+#[derive(Clone, Debug, Default)]
+struct WatchEntry {
+    expr: String,
+    value: String,
+    type_name: String,
+}
+
+impl WatchEntry {
+    fn new(expr: String) -> Self {
+        Self {
+            expr: expr.trim().replace(['\n', '\r'], " "),
+            value: String::new(),
+            type_name: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WatchSection {
+    None,
+    Value(usize),
+    Type(usize),
+    Registers,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RegisterValue {
+    name: String,
+    value: String,
+    raw: String,
+}
+
 #[derive(Default)]
 struct DebugState {
     open: bool,
@@ -256,6 +295,78 @@ struct DebugState {
     breakpoints: BTreeSet<(PathBuf, usize)>,
     target: Option<PathBuf>,
     log: Vec<String>,
+    starting: bool,
+    pending_continue: bool,
+    watch_tab: DebugSideTab,
+    watches: Vec<WatchEntry>,
+    watch_input: String,
+    watch_filter: String,
+    register_filter: String,
+    registers: Vec<RegisterValue>,
+    watch_refresh: Option<u64>,
+    watch_refresh_id: u64,
+    last_watch_refresh: Option<Instant>,
+    auto_watch: bool,
+    side_width: f32,
+    /// Last source location reported by gdb, used for the execution marker.
+    current_source: Option<(PathBuf, usize)>,
+    /// Number of console lines already scanned for stop locations.
+    log_scan: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CreateKind {
+    File,
+    Folder,
+}
+
+impl CreateKind {
+    fn title(self) -> &'static str {
+        match self {
+            Self::File => "新建文件",
+            Self::Folder => "新建文件夹",
+        }
+    }
+
+    fn action(self) -> &'static str {
+        match self {
+            Self::File => "创建文件",
+            Self::Folder => "创建文件夹",
+        }
+    }
+}
+
+struct CreateEntryDraft {
+    kind: CreateKind,
+    dir: PathBuf,
+    name: String,
+    error: Option<String>,
+    focus: bool,
+}
+
+struct ImagePreviewState {
+    path: PathBuf,
+    texture: Option<egui::TextureHandle>,
+    size: [usize; 2],
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct FileClipboard {
+    path: PathBuf,
+    cut: bool,
+}
+
+struct RenameEntryDraft {
+    path: PathBuf,
+    name: String,
+    error: Option<String>,
+    focus: bool,
+}
+
+struct DeleteEntryDraft {
+    path: PathBuf,
+    is_dir: bool,
 }
 
 #[derive(Default)]
@@ -508,6 +619,7 @@ enum Action {
     DebugFinish,
     DebugStop,
     DebugSend(String),
+    ToggleBreakpointAt(PathBuf, usize),
     SelectTab(usize),
     CloseTab(usize),
     CloseOtherTabs(usize),
@@ -531,6 +643,7 @@ enum Action {
     AddMetaItem(MetaListField),
     EditBuildOptions,
     AddSupportPack,
+    ImportSupportPack(PathBuf),
     EditFlashConfig,
     SetFlashTool(FlashTool),
     SetOpenOcdPath(String),
@@ -542,6 +655,17 @@ enum Action {
     ClearDebugLog,
     CopyDebugLog,
     Reveal(PathBuf),
+    CopyPath(PathBuf),
+    CopyRelativePath(PathBuf),
+    NewFile(PathBuf),
+    NewFolder(PathBuf),
+    OpenToSide(PathBuf),
+    CutFile(PathBuf),
+    CopyFile(PathBuf),
+    PasteFile(PathBuf),
+    RenameFile(PathBuf),
+    DeleteFile(PathBuf),
+    PreviewImage(PathBuf),
     OpenVscode(PathBuf),
     ToggleWrap,
 }
@@ -557,6 +681,7 @@ pub struct App {
     support_packs: Vec<crate::support_pack::SupportPack>,
     build: BuildController,
     build_config: BuildConfig,
+    project_debug: crate::config::ProjectDebugSettings,
     settings_draft: Option<SettingsDraft>,
     toolchain_install: Option<Receiver<crate::toolchain::InstallEvent>>,
     toolchain_status: String,
@@ -573,6 +698,12 @@ pub struct App {
     hex: HexState,
     array: ArrayState,
     debug: DebugState,
+    debug_start: Option<Receiver<Result<(crate::debugger::DebugSession, PathBuf), String>>>,
+    create_entry: Option<CreateEntryDraft>,
+    rename_entry: Option<RenameEntryDraft>,
+    delete_entry: Option<DeleteEntryDraft>,
+    file_clipboard: Option<FileClipboard>,
+    image_preview: Option<ImagePreviewState>,
     output_view: OutputView,
     completion: CompletionState,
     member_index: Option<crate::completion::MemberIndex>,
@@ -627,6 +758,7 @@ impl App {
             project_meta: ProjectMeta::default(),
             support_packs: Vec::new(),
             build_config: BuildConfig::default(),
+            project_debug: crate::config::ProjectDebugSettings::default(),
             settings_draft: None,
             toolchain_install: None,
             toolchain_status: String::new(),
@@ -643,6 +775,12 @@ impl App {
             hex: HexState::default(),
             array: ArrayState::default(),
             debug: DebugState::default(),
+            debug_start: None,
+            create_entry: None,
+            rename_entry: None,
+            delete_entry: None,
+            file_clipboard: None,
+            image_preview: None,
             output_view: OutputView::default(),
             completion: CompletionState::default(),
             member_index: None,
@@ -729,12 +867,18 @@ impl App {
         self.debug_stop();
         self.debug.open = false;
         self.debug.target = None;
+        self.create_entry = None;
+        self.image_preview = None;
         self.output_view = OutputView::Build;
 
         let mut config_error = None;
         let mut created_config = false;
+        let mut project_file_debug = None;
         let (mut config, from_project) = match crate::config::ProjectSettings::load(&root) {
-            Ok(Some(settings)) => (settings.build, true),
+            Ok(Some(settings)) => {
+                project_file_debug = Some(settings.debug);
+                (settings.build, true)
+            }
             Ok(None) => (self.settings.build_config_for(&root), false),
             Err(err) => {
                 config_error = Some(err);
@@ -747,14 +891,54 @@ impl App {
                 config.build_options = options;
             }
         }
+        let original_debug = project_file_debug.unwrap_or_default();
+        let mut project_debug = original_debug.clone();
+        if project_debug.gdb_path.trim().is_empty() {
+            project_debug.gdb_path = self.settings.gdb_path.clone();
+        }
+        if project_debug.program.trim().is_empty() && !from_project {
+            // The debug program is project-specific: only inherit it from the
+            // global fallback when this project has no settings file and the
+            // path actually belongs to this project.
+            let configured = self.settings.debug_program.trim();
+            if !configured.is_empty() && Path::new(configured).starts_with(&root) {
+                project_debug.program = configured.to_owned();
+            }
+        }
+        if project_debug.program.trim().is_empty() {
+            if let Some(path) = detect_debug_program(&root) {
+                project_debug.program = util::display_path(&path);
+            }
+        }
+        let debug_needs_save = project_debug != original_debug;
+        self.project_debug = project_debug;
+        self.debug.watches = self
+            .project_debug
+            .watches
+            .iter()
+            .cloned()
+            .map(WatchEntry::new)
+            .collect();
+        self.debug.auto_watch = self.project_debug.auto_refresh;
+        self.debug.watch_refresh = None;
+        self.debug.last_watch_refresh = None;
+        self.debug.registers.clear();
         let mut config_in_project = from_project;
         if !from_project && config_error.is_none() {
-            match crate::config::ProjectSettings::save(&root, &config) {
+            match crate::config::ProjectSettings::save(&root, &config, &self.project_debug) {
                 Ok(_) => {
                     created_config = true;
                     config_in_project = true;
                 }
                 Err(err) => config_error = Some(err),
+            }
+        } else if from_project && debug_needs_save && config_error.is_none() {
+            // Backfill debug settings into project files created by an older
+            // version that only stored the build configuration.
+            if let Err(err) =
+                crate::config::ProjectSettings::save(&root, &config, &self.project_debug)
+            {
+                config_error = Some(err);
             }
         }
         if config_in_project {
@@ -770,7 +954,12 @@ impl App {
         let project_name = Project::new(root.clone()).name;
         self.project_meta = ProjectMeta::detect(&root);
         self.support_packs = crate::support_pack::scan(&root);
+        if self.support_packs.is_empty() {
+            self.support_packs =
+                crate::support_pack::scan_keil_installed(self.project_meta.device.as_deref());
+        }
         self.project = Some(Project::new(root.clone()));
+        self.debug.target = self.debug_target();
         self.member_index = None;
         self.completion = CompletionState::default();
         self.build_config = config;
@@ -1316,6 +1505,9 @@ impl App {
             || self.meta_add.is_some()
             || self.flash_draft.is_some()
             || self.build_options_draft.is_some()
+            || self.create_entry.is_some()
+            || self.rename_entry.is_some()
+            || self.delete_entry.is_some()
     }
 
     fn handle_completion_keys(&mut self, ctx: &egui::Context) {
@@ -1464,81 +1656,241 @@ impl App {
     }
 
     fn debug_target(&self) -> Option<PathBuf> {
-        let configured = self.settings.debug_program.trim();
+        let root = self.project.as_ref()?.root.clone();
+        let configured = self.project_debug.program.trim();
         if !configured.is_empty() {
             let path = PathBuf::from(configured);
-            return path.is_file().then_some(path);
-        }
-        let root = self.project.as_ref()?.root.clone();
-        let mut candidates = Vec::new();
-        for dir in [
-            root.join("build"),
-            root.join("Debug"),
-            root.join("Release"),
-            root.join("out"),
-            root.clone(),
-        ] {
-            let Ok(read_dir) = std::fs::read_dir(&dir) else {
-                continue;
+            let path = if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
             };
-            for entry in read_dir.flatten() {
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-                let extension = path
-                    .extension()
-                    .map(|value| value.to_string_lossy().to_lowercase())
-                    .unwrap_or_default();
-                if !matches!(extension.as_str(), "elf" | "axf" | "exe" | "out") {
-                    continue;
-                }
-                let modified = entry
-                    .metadata()
-                    .ok()
-                    .and_then(|metadata| metadata.modified().ok());
-                candidates.push((modified, path));
+            if path.is_file() {
+                return Some(std::fs::canonicalize(&path).unwrap_or(path));
             }
         }
-        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
-        candidates.into_iter().next().map(|(_, path)| path)
+        detect_debug_program(&root)
+    }
+
+    fn arm_gdb_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        let mut add_tool = |path: &Path| {
+            let dir = if path.is_file() {
+                path.parent().unwrap_or(path)
+            } else {
+                path
+            };
+            if dir.is_dir() {
+                dirs.push(dir.to_path_buf());
+            }
+        };
+        let compiler = self.settings.compiler_path.trim();
+        if !compiler.is_empty() {
+            add_tool(Path::new(compiler));
+        }
+        for path in &self.build_config.extra_paths {
+            let path = Path::new(path.trim());
+            if path.as_os_str().is_empty() {
+                continue;
+            }
+            add_tool(path);
+        }
+        if self.settings.use_bundled_toolchain {
+            let root = crate::toolchain::resolve_tools_dir(&self.settings.bundled_tools_dir);
+            if let Some(compiler) = crate::toolchain::detect(&root).compiler {
+                add_tool(&compiler);
+            }
+        }
+        let (compiler, _) = crate::toolchain::detect_installed();
+        if let Some(compiler) = compiler {
+            add_tool(&compiler);
+        }
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
+
+    fn debug_start_error(&mut self, message: impl Into<String>) -> bool {
+        let message = message.into();
+        self.debug.starting = false;
+        self.debug_start = None;
+        self.debug.error = Some(message.clone());
+        self.debug.open = true;
+        self.set_toast(message, Severity::Error);
+        false
     }
 
     fn start_debug_session(&mut self) -> bool {
+        if self.debug.starting || self.debug_start.is_some() {
+            return true;
+        }
         let Some(target) = self.debug_target() else {
-            self.set_toast(
-                "未找到调试程序，请在设置中填写 ELF/EXE 路径",
-                Severity::Warning,
-            );
-            self.debug.open = true;
-            return false;
+            return self.debug_start_error("未找到调试程序，请在设置中填写 ELF/AXF/EXE 路径");
         };
-        let Some(gdb) = crate::debugger::detect_gdb(&self.settings.gdb_path) else {
-            self.set_toast("未找到 gdb，请在设置中填写 gdb 路径", Severity::Warning);
-            self.debug.open = true;
-            return false;
+        let kind = crate::debugger::target_kind(&target);
+        let configured_gdb = if self.project_debug.gdb_path.trim().is_empty() {
+            self.settings.gdb_path.clone()
+        } else {
+            self.project_debug.gdb_path.clone()
         };
-        match crate::debugger::DebugSession::start(&target, &gdb) {
-            Ok(mut session) => {
+        let gdb = if kind == crate::debugger::DebugTargetKind::Embedded {
+            let dirs = self.arm_gdb_dirs();
+            match crate::debugger::detect_arm_gdb(&configured_gdb, &dirs) {
+                Some(gdb) => gdb,
+                None => {
+                    return self.debug_start_error(
+                        "未找到 arm-none-eabi-gdb，请在“设置 → 调试”填写 ARM gdb 路径；MinGW 的 gdb 不能调试 ARM 目标",
+                    );
+                }
+            }
+        } else {
+            match crate::debugger::detect_gdb(&configured_gdb) {
+                Some(gdb) => gdb,
+                None => {
+                    return self.debug_start_error("未找到 gdb，请在“设置 → 调试”填写 gdb 路径");
+                }
+            }
+        };
+        let server = if kind == crate::debugger::DebugTargetKind::Embedded {
+            let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+                return self.debug_start_error("请先打开工程");
+            };
+            match self.build_config.flash_tool {
+                FlashTool::OpenOcd => {
+                    if !crate::flash::openocd_available(
+                        &self.build_config.openocd.executable,
+                        &root,
+                    ) {
+                        return self.debug_start_error(
+                            "未找到 OpenOCD，请先在“工程信息 → 烧录配置”选择 openocd.exe",
+                        );
+                    }
+                    let port = match crate::debugger::free_tcp_port() {
+                        Ok(port) => port,
+                        Err(err) => return self.debug_start_error(err),
+                    };
+                    match crate::flash::openocd_server_spec(&self.build_config.openocd, &root, port)
+                    {
+                        Ok(spec) => Some((spec, port, crate::debugger::ServerKind::OpenOcd)),
+                        Err(err) => return self.debug_start_error(err),
+                    }
+                }
+                FlashTool::PyOcd => {
+                    if !crate::flash::pyocd_available(&self.build_config.pyocd.executable, &root) {
+                        return self.debug_start_error(
+                            "未找到 pyOCD，请先在“工程信息 → 烧录配置”选择 pyocd.exe",
+                        );
+                    }
+                    let port = match crate::debugger::free_tcp_port() {
+                        Ok(port) => port,
+                        Err(err) => return self.debug_start_error(err),
+                    };
+                    match crate::flash::pyocd_server_spec(&self.build_config.pyocd, &root, port) {
+                        Ok(spec) => Some((spec, port, crate::debugger::ServerKind::PyOcd)),
+                        Err(err) => return self.debug_start_error(err),
+                    }
+                }
+                FlashTool::Custom => {
+                    return self.debug_start_error(
+                        "调试需要 GDB server：请先在“工程信息 → 烧录配置”选择 OpenOCD 或 pyOCD",
+                    );
+                }
+            }
+        } else {
+            None
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.debug_start = Some(rx);
+        self.debug.starting = true;
+        self.debug.pending_continue = false;
+        self.debug.open = true;
+        self.debug.error = None;
+        self.debug.log.clear();
+        self.debug.target = Some(target.clone());
+        self.debug.watch_refresh = None;
+        self.debug.last_watch_refresh = None;
+        self.debug.current_source = None;
+        self.debug.log_scan = 0;
+        self.debug.registers.clear();
+        for watch in &mut self.debug.watches {
+            watch.value.clear();
+            watch.type_name.clear();
+        }
+        self.set_toast("正在启动调试服务…", Severity::Info);
+
+        let target_for_thread = target;
+        let gdb_for_thread = gdb;
+        std::thread::spawn(move || {
+            let result = if let Some((spec, port, server_kind)) = server {
+                crate::debugger::DebugSession::start_embedded(
+                    &target_for_thread,
+                    &gdb_for_thread,
+                    spec,
+                    port,
+                    server_kind,
+                )
+                .map(|session| (session, target_for_thread))
+            } else {
+                crate::debugger::DebugSession::start(&target_for_thread, &gdb_for_thread)
+                    .map(|session| (session, target_for_thread))
+            };
+            let _ = tx.send(result);
+        });
+        true
+    }
+
+    fn poll_debug_start(&mut self) {
+        let Some(rx) = self.debug_start.as_ref() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok((mut session, target))) => {
+                self.debug_start = None;
+                self.debug.starting = false;
+                session.poll();
                 for (path, line) in &self.debug.breakpoints {
                     session.send(&format!("break \"{}\":{}", gdb_source_path(path), line));
                 }
                 self.debug.session = Some(session);
-                self.debug.target = Some(target.clone());
+                self.debug.target = Some(target);
                 self.debug.error = None;
                 self.debug.log.clear();
                 self.debug.open = true;
-                self.set_toast(
-                    format!("调试会话已启动：{}", util::display_path(&target)),
-                    Severity::Success,
-                );
-                true
+                self.debug.log_scan = 0;
+                self.debug.current_source = None;
+                self.refresh_debug_watch();
+                let continue_now = self.debug.pending_continue;
+                self.debug.pending_continue = false;
+                if continue_now {
+                    if let Some(session) = &mut self.debug.session {
+                        if session.started {
+                            session.send("continue");
+                        } else {
+                            session.send("run");
+                            session.started = true;
+                        }
+                    }
+                }
+                self.set_toast("调试会话已启动", Severity::Success);
             }
-            Err(err) => {
+            Ok(Err(err)) => {
+                self.debug_start = None;
+                self.debug.starting = false;
+                self.debug.pending_continue = false;
                 self.debug.error = Some(err.clone());
                 self.debug.open = true;
                 self.set_toast(err, Severity::Error);
-                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.debug_start = None;
+                self.debug.starting = false;
+                self.debug.pending_continue = false;
+                let message = "调试启动失败：后台线程已退出".to_owned();
+                self.debug.error = Some(message.clone());
+                self.debug.open = true;
+                self.set_toast(message, Severity::Error);
             }
         }
     }
@@ -1556,7 +1908,15 @@ impl App {
 
     fn debug_continue(&mut self) {
         self.focus_debug_output();
-        if self.debug.session.is_none() && !self.start_debug_session() {
+        if self.debug.starting {
+            self.debug.pending_continue = true;
+            return;
+        }
+        if self.debug.session.is_none() {
+            if !self.start_debug_session() {
+                return;
+            }
+            self.debug.pending_continue = true;
             return;
         }
         if let Some(session) = &mut self.debug.session {
@@ -1571,6 +1931,10 @@ impl App {
 
     fn debug_command(&mut self, command: &str) {
         self.focus_debug_output();
+        if self.debug.starting {
+            self.set_toast("正在启动调试服务，请稍候", Severity::Info);
+            return;
+        }
         let Some(session) = &mut self.debug.session else {
             self.set_toast("请先启动调试会话", Severity::Warning);
             return;
@@ -1579,13 +1943,291 @@ impl App {
     }
 
     fn debug_stop(&mut self) {
+        if self.debug_start.take().is_some() {
+            self.debug.starting = false;
+            self.debug.pending_continue = false;
+            self.debug.error = None;
+            self.debug.log.push("[调试启动已取消]".to_owned());
+            return;
+        }
         if let Some(mut session) = self.debug.session.take() {
             session.poll();
             self.debug.log = session.log.clone();
             session.stop();
             self.debug.log.push("[调试已停止]".to_owned());
         }
+        self.debug.starting = false;
+        self.debug.pending_continue = false;
+        self.debug.watch_refresh = None;
+        self.debug.last_watch_refresh = None;
         self.debug.error = None;
+        self.debug.current_source = None;
+        self.debug.log_scan = 0;
+    }
+
+    /// Follow new gdb console output and open the file/line where the target
+    /// stopped. Only new lines are scanned so a manual navigation away from
+    /// the paused line is not undone on every repaint.
+    fn poll_debug_location(&mut self, ctx: &egui::Context) {
+        let Some(session) = self.debug.session.as_ref() else {
+            return;
+        };
+        if self.debug.log_scan > session.log.len() {
+            self.debug.log_scan = 0;
+        }
+        if session.log.len() <= self.debug.log_scan {
+            return;
+        }
+        let fresh = session.log[self.debug.log_scan..].to_vec();
+        self.debug.log_scan = session.log.len();
+        let mut found = None;
+        for line in fresh.iter().rev() {
+            if let Some((path, line_no)) = crate::debugger::parse_stop_location(line) {
+                found = Some((path, line_no));
+                break;
+            }
+        }
+        let Some((raw, line)) = found else {
+            return;
+        };
+        let Some(path) = self.resolve_debug_source(&raw) else {
+            return;
+        };
+        self.debug.current_source = Some((path.clone(), line));
+        self.jump_to_debug_source(ctx, &path, line);
+        ctx.request_repaint();
+    }
+
+    fn resolve_debug_source(&self, raw: &str) -> Option<PathBuf> {
+        let raw = raw.trim().trim_matches('"');
+        if raw.is_empty() {
+            return None;
+        }
+        let candidate = PathBuf::from(raw);
+        let mut bases = Vec::new();
+        if let Some(project) = &self.project {
+            bases.push(project.root.clone());
+            for sub in [
+                "build",
+                "build/Debug",
+                "build/Release",
+                "Debug",
+                "Release",
+                "out",
+            ] {
+                bases.push(project.root.join(sub));
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            bases.push(cwd);
+        }
+        let absolute = if candidate.is_absolute() {
+            Some(candidate.clone())
+        } else {
+            bases
+                .into_iter()
+                .map(|base| base.join(&candidate))
+                .find(|path| path.is_file())
+        };
+        let path = absolute.filter(|path| path.is_file())?;
+        Some(std::fs::canonicalize(&path).unwrap_or(path))
+    }
+
+    /// Show the paused source line without replacing the debug console focus.
+    fn jump_to_debug_source(&mut self, ctx: &egui::Context, path: &Path, line: usize) {
+        self.open_file(path.to_path_buf());
+        self.focus_editor = false;
+        let Some(index) = self.tabs.iter().position(|doc| same_path(&doc.path, path)) else {
+            return;
+        };
+        self.active = Some(index);
+        let Some(doc) = self.tabs.get_mut(index) else {
+            return;
+        };
+        let start = crate::util::char_index_at_line(doc.buffer.as_string(), line);
+        doc.update_cursor(start);
+        set_editor_cursor(ctx, &doc.path, start);
+        self.scroll_to_cursor = true;
+        if let Some(tree) = &mut self.tree {
+            tree.reveal(path);
+        }
+    }
+
+    fn refresh_debug_watch(&mut self) {
+        if self.debug.watch_refresh.is_some() {
+            return;
+        }
+        let expressions = self
+            .debug
+            .watches
+            .iter()
+            .map(|watch| watch.expr.clone())
+            .collect::<Vec<_>>();
+        let Some(session) = &mut self.debug.session else {
+            return;
+        };
+        self.debug.watch_refresh_id = self.debug.watch_refresh_id.wrapping_add(1).max(1);
+        let id = self.debug.watch_refresh_id;
+        session.send(&format!("echo __SE_WATCH_BEGIN_{id}__\\n"));
+        for (index, expression) in expressions.iter().enumerate() {
+            session.send(&format!("echo __SE_WATCH_V_{id}_{index}__\\n"));
+            session.send(&format!("p {expression}"));
+            session.send(&format!("echo __SE_WATCH_T_{id}_{index}__\\n"));
+            session.send(&format!("whatis {expression}"));
+        }
+        session.send(&format!("echo __SE_WATCH_R_{id}__\\n"));
+        session.send("info registers");
+        session.send(&format!("echo __SE_WATCH_END_{id}__\\n"));
+        self.debug.watch_refresh = Some(id);
+        self.debug.last_watch_refresh = Some(Instant::now());
+    }
+
+    fn poll_debug_watch(&mut self) {
+        let Some(id) = self.debug.watch_refresh else {
+            return;
+        };
+        let Some(session) = &mut self.debug.session else {
+            self.debug.watch_refresh = None;
+            return;
+        };
+        let end_marker = format!("__SE_WATCH_END_{id}__");
+        let Some(end) = session
+            .watch_output
+            .iter()
+            .position(|line| line.contains(&end_marker))
+        else {
+            return;
+        };
+        let lines = session.watch_output.drain(..=end).collect::<Vec<_>>();
+        self.debug.watch_refresh = None;
+        self.apply_watch_output(id, &lines);
+    }
+
+    fn apply_watch_output(&mut self, id: u64, lines: &[String]) {
+        let begin = format!("__SE_WATCH_BEGIN_{id}__");
+        let end = format!("__SE_WATCH_END_{id}__");
+        let registers = format!("__SE_WATCH_R_{id}__");
+        let mut section = WatchSection::None;
+        let mut values: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+        let mut types: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+        let mut register_lines = Vec::new();
+        for line in lines {
+            let marker = strip_gdb_prompts(line.trim());
+            if marker.is_empty() {
+                continue;
+            }
+            if marker == begin {
+                section = WatchSection::None;
+                continue;
+            }
+            if marker == end {
+                break;
+            }
+            if marker == registers {
+                section = WatchSection::Registers;
+                continue;
+            }
+            if let Some(index) = watch_marker_index(marker, "__SE_WATCH_V_", id) {
+                section = WatchSection::Value(index);
+                continue;
+            }
+            if let Some(index) = watch_marker_index(marker, "__SE_WATCH_T_", id) {
+                section = WatchSection::Type(index);
+                continue;
+            }
+            match section {
+                WatchSection::None => {}
+                WatchSection::Value(index) => {
+                    values.entry(index).or_default().push(marker.to_owned());
+                }
+                WatchSection::Type(index) => {
+                    types.entry(index).or_default().push(marker.to_owned());
+                }
+                WatchSection::Registers => {
+                    register_lines.push(marker.to_owned());
+                }
+            }
+        }
+        for (index, watch) in self.debug.watches.iter_mut().enumerate() {
+            if let Some(lines) = values.get(&index) {
+                let value = clean_watch_value(lines);
+                watch.value = if value.is_empty() {
+                    "—".to_owned()
+                } else {
+                    value
+                };
+            } else {
+                watch.value = "—".to_owned();
+            }
+            if let Some(lines) = types.get(&index) {
+                watch.type_name = clean_watch_type(lines);
+            }
+        }
+        self.debug.registers = register_lines
+            .iter()
+            .filter_map(|line| parse_register_line(line))
+            .collect();
+    }
+
+    fn tick_debug_watch(&mut self) {
+        if !self.debug.auto_watch
+            || self.debug.starting
+            || !self.settings.output_open
+            || self.output_view != OutputView::Debug
+            || self.debug.session.is_none()
+            || self.debug.watch_refresh.is_some()
+        {
+            return;
+        }
+        let due = self
+            .debug
+            .last_watch_refresh
+            .is_none_or(|last| last.elapsed() >= Duration::from_millis(1200));
+        if due {
+            self.refresh_debug_watch();
+        }
+    }
+
+    fn add_debug_watch(&mut self, expression: String) {
+        let expression = expression.trim().replace(['\n', '\r'], " ");
+        if expression.is_empty() {
+            self.set_toast("请输入变量名或表达式", Severity::Info);
+            return;
+        }
+        if self
+            .debug
+            .watches
+            .iter()
+            .any(|watch| watch.expr == expression)
+        {
+            self.set_toast("该变量已在监视列表中", Severity::Info);
+            return;
+        }
+        self.debug.watches.push(WatchEntry::new(expression));
+        self.debug.watch_input.clear();
+        self.persist_debug_watches();
+        self.debug.watch_refresh = None;
+        self.refresh_debug_watch();
+    }
+
+    fn remove_debug_watch(&mut self, index: usize) {
+        if index >= self.debug.watches.len() {
+            return;
+        }
+        self.debug.watches.remove(index);
+        self.persist_debug_watches();
+        self.debug.watch_refresh = None;
+        self.refresh_debug_watch();
+    }
+
+    fn persist_debug_watches(&mut self) {
+        self.project_debug.watches = self
+            .debug
+            .watches
+            .iter()
+            .map(|watch| watch.expr.clone())
+            .collect();
+        self.persist_build_config();
     }
 
     fn start_split(
@@ -1701,26 +2343,38 @@ impl App {
         };
         let path = doc.path.clone();
         let line = doc.cursor_line;
-        let key = (path.clone(), line);
+        self.toggle_breakpoint_at(&path, line);
+    }
+
+    fn toggle_breakpoint_at(&mut self, path: &Path, line: usize) {
+        if line == 0 {
+            return;
+        }
+        let key = (path.to_path_buf(), line);
         let added = if self.debug.breakpoints.contains(&key) {
             self.debug.breakpoints.remove(&key);
             if let Some(session) = &mut self.debug.session {
-                session.send(&format!("clear \"{}\":{}", gdb_source_path(&path), line));
+                session.send(&format!("clear \"{}\":{}", gdb_source_path(path), line));
             }
             false
         } else {
             self.debug.breakpoints.insert(key);
             if let Some(session) = &mut self.debug.session {
-                session.send(&format!("break \"{}\":{}", gdb_source_path(&path), line));
+                session.send(&format!("break \"{}\":{}", gdb_source_path(path), line));
             }
             true
         };
         self.set_toast(
-            if added {
-                format!("已添加断点：第 {line} 行")
-            } else {
-                format!("已移除断点：第 {line} 行")
-            },
+            format!(
+                "{}：{}:{}",
+                if added {
+                    "已添加断点"
+                } else {
+                    "已移除断点"
+                },
+                util::file_name(path),
+                line
+            ),
             Severity::Info,
         );
     }
@@ -2557,6 +3211,17 @@ impl App {
     }
 
     fn open_settings(&mut self) {
+        let (debug_program, gdb_path) = if self.project.is_some() {
+            (
+                self.project_debug.program.clone(),
+                self.project_debug.gdb_path.clone(),
+            )
+        } else {
+            (
+                self.settings.debug_program.clone(),
+                self.settings.gdb_path.clone(),
+            )
+        };
         self.settings_draft = Some(SettingsDraft {
             tab: SettingsTab::Build,
             extra_paths_text: self.build_config.extra_paths.join("\n"),
@@ -2576,8 +3241,8 @@ impl App {
             autosave_delay_ms: self.settings.autosave_delay_ms,
             format_on_save: self.settings.format_on_save,
             clang_format_path: self.settings.clang_format_path.clone(),
-            debug_program: self.settings.debug_program.clone(),
-            gdb_path: self.settings.gdb_path.clone(),
+            debug_program,
+            gdb_path,
             auto_scroll_output: self.settings.auto_scroll_output,
             show_minimap: self.settings.show_minimap,
             show_indent_guides: self.settings.show_indent_guides,
@@ -2718,7 +3383,7 @@ impl App {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             return;
         };
-        match crate::config::ProjectSettings::save(&root, &self.build_config) {
+        match crate::config::ProjectSettings::save(&root, &self.build_config, &self.project_debug) {
             Ok(_) => {
                 // The project file is authoritative once it can be written.
                 self.settings.build_configs.remove(&project_key(&root));
@@ -2932,6 +3597,9 @@ impl App {
                 self.meta_add = None;
                 self.flash_draft = None;
                 self.build_options_draft = None;
+                self.create_entry = None;
+                self.rename_entry = None;
+                self.delete_entry = None;
             }
             return;
         }
@@ -3353,7 +4021,9 @@ impl App {
             self.set_toast("请先打开工程", Severity::Warning);
             return;
         };
-        if let Err(err) = crate::config::ProjectSettings::save(&root, &self.build_config) {
+        if let Err(err) =
+            crate::config::ProjectSettings::save(&root, &self.build_config, &self.project_debug)
+        {
             self.set_toast(format!("工程配置保存失败：{err}"), Severity::Error);
             return;
         }
@@ -3385,7 +4055,9 @@ impl App {
         };
         let path = crate::config::ProjectSettings::path(&root);
         if !crate::config::ProjectSettings::exists(&root) {
-            if let Err(err) = crate::config::ProjectSettings::save(&root, &self.build_config) {
+            if let Err(err) =
+                crate::config::ProjectSettings::save(&root, &self.build_config, &self.project_debug)
+            {
                 self.set_toast(format!("工程配置保存失败：{err}"), Severity::Error);
                 return;
             }
@@ -3393,12 +4065,432 @@ impl App {
         self.open_file(path);
     }
 
-    fn refresh_support_packs(&mut self) {
-        self.support_packs = self
-            .project
+    fn open_create_entry(&mut self, dir: PathBuf, kind: CreateKind) {
+        self.create_entry = Some(CreateEntryDraft {
+            kind,
+            dir,
+            name: String::new(),
+            error: None,
+            focus: true,
+        });
+    }
+
+    fn open_to_side(&mut self, path: PathBuf) {
+        let other = self
+            .active_document()
+            .map(|doc| doc.path.clone())
+            .filter(|current| !same_path(current, &path));
+        self.open_file(path.clone());
+        let Some(other) = other else {
+            self.set_toast(
+                format!("已打开 {}；再打开一个文件即可分屏", util::file_name(&path)),
+                Severity::Info,
+            );
+            return;
+        };
+        if self.split_path.is_some() {
+            self.split_primary = Some(other);
+            self.split_path = Some(path.clone());
+            self.split_direction = SplitDirection::Right;
+            self.split_focus = 1;
+            self.active = self.tabs.iter().position(|doc| same_path(&doc.path, &path));
+            self.set_toast(
+                format!("已在侧边打开 {}", util::file_name(&path)),
+                Severity::Info,
+            );
+        } else {
+            self.start_split(other, path, SplitDirection::Right, 1);
+        }
+    }
+
+    fn set_file_clipboard(&mut self, path: PathBuf, cut: bool) {
+        if !path.exists() {
+            self.set_toast("文件已不存在", Severity::Warning);
+            return;
+        }
+        self.file_clipboard = Some(FileClipboard { path, cut });
+        self.set_toast(
+            if cut {
+                "已剪切，选择目标文件夹后粘贴"
+            } else {
+                "已复制，选择目标文件夹后粘贴"
+            },
+            Severity::Info,
+        );
+    }
+
+    fn paste_file(&mut self, target: PathBuf) {
+        let Some(clipboard) = self.file_clipboard.clone() else {
+            self.set_toast("剪贴板为空", Severity::Info);
+            return;
+        };
+        if !clipboard.path.exists() {
+            self.file_clipboard = None;
+            self.set_toast("剪贴板中的文件已不存在", Severity::Warning);
+            return;
+        }
+        let directory = if target.is_dir() {
+            target
+        } else {
+            target
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| clipboard.path.clone())
+        };
+        let source_name = util::file_name(&clipboard.path);
+        if clipboard.path.is_dir()
+            && (same_path(&directory, &clipboard.path) || directory.starts_with(&clipboard.path))
+        {
+            self.set_toast("不能把文件夹粘贴到它自己或子文件夹中", Severity::Warning);
+            return;
+        }
+        let mut destination = directory.join(&source_name);
+        if same_path(&destination, &clipboard.path) {
+            self.set_toast("文件已在目标文件夹中", Severity::Info);
+            return;
+        }
+        if destination.exists() {
+            if clipboard.cut {
+                self.set_toast(
+                    format!("目标位置已存在 {source_name}，请先重命名或删除"),
+                    Severity::Warning,
+                );
+                return;
+            }
+            destination = unique_copy_path(&directory, &clipboard.path);
+        }
+        let result = if clipboard.cut {
+            match std::fs::rename(&clipboard.path, &destination) {
+                Ok(()) => Ok(()),
+                Err(_) => copy_recursive(&clipboard.path, &destination)
+                    .and_then(|()| remove_path(&clipboard.path)),
+            }
+        } else {
+            copy_recursive(&clipboard.path, &destination)
+        };
+        if let Err(err) = result {
+            self.set_toast(
+                format!(
+                    "无法{} {}：{err}",
+                    if clipboard.cut { "移动" } else { "复制" },
+                    util::display_path(&clipboard.path)
+                ),
+                Severity::Error,
+            );
+            return;
+        }
+        if clipboard.cut {
+            self.file_clipboard = None;
+            self.rewrite_paths(&clipboard.path, &destination);
+        }
+        if let Some(tree) = &mut self.tree {
+            tree.refresh();
+            tree.reveal(&destination);
+        }
+        if destination.is_dir() {
+            self.member_index = None;
+        }
+        self.refresh_support_packs();
+        self.refresh_git_status();
+        self.set_toast(
+            format!(
+                "已{}到 {}",
+                if clipboard.cut { "移动" } else { "复制" },
+                util::display_path(&directory)
+            ),
+            Severity::Success,
+        );
+    }
+
+    fn start_rename(&mut self, path: PathBuf) {
+        let name = util::file_name(&path);
+        self.rename_entry = Some(RenameEntryDraft {
+            path,
+            name,
+            error: None,
+            focus: true,
+        });
+    }
+
+    fn commit_rename(&mut self, mut draft: RenameEntryDraft) {
+        let name = draft.name.trim();
+        if name.is_empty() {
+            draft.error = Some("名称不能为空".to_owned());
+            self.rename_entry = Some(draft);
+            return;
+        }
+        if name == "."
+            || name == ".."
+            || name.contains('/')
+            || name.contains('\\')
+            || name.contains(':')
+        {
+            draft.error = Some("名称不能包含路径分隔符".to_owned());
+            self.rename_entry = Some(draft);
+            return;
+        }
+        let Some(parent) = draft.path.parent().map(Path::to_path_buf) else {
+            draft.error = Some("无法确定上级目录".to_owned());
+            self.rename_entry = Some(draft);
+            return;
+        };
+        let destination = parent.join(name);
+        if same_path(&destination, &draft.path) {
+            self.rename_entry = None;
+            return;
+        }
+        if destination.exists() {
+            draft.error = Some(format!("{} 已存在", util::display_path(&destination)));
+            self.rename_entry = Some(draft);
+            return;
+        }
+        if let Err(err) = std::fs::rename(&draft.path, &destination) {
+            draft.error = Some(format!("重命名失败：{err}"));
+            self.rename_entry = Some(draft);
+            return;
+        }
+        self.rewrite_paths(&draft.path, &destination);
+        if let Some(tree) = &mut self.tree {
+            tree.refresh();
+            tree.reveal(&destination);
+        }
+        self.member_index = None;
+        self.refresh_support_packs();
+        self.refresh_git_status();
+        self.rename_entry = None;
+        self.set_toast(format!("已重命名为 {name}"), Severity::Success);
+    }
+
+    fn start_delete(&mut self, path: PathBuf) {
+        let is_dir = path.is_dir();
+        self.delete_entry = Some(DeleteEntryDraft { path, is_dir });
+    }
+
+    fn commit_delete(&mut self) {
+        let Some(draft) = self.delete_entry.take() else {
+            return;
+        };
+        if path_has_dirty_tab(&self.tabs, &draft.path) {
+            self.set_toast("请先保存或关闭该文件，再删除", Severity::Warning);
+            return;
+        }
+        if let Err(err) = remove_path(&draft.path) {
+            self.set_toast(
+                format!("无法删除 {}：{err}", util::display_path(&draft.path)),
+                Severity::Error,
+            );
+            return;
+        }
+        self.remove_path_references(&draft.path);
+        if let Some(tree) = &mut self.tree {
+            tree.refresh();
+        }
+        self.member_index = None;
+        self.refresh_support_packs();
+        self.refresh_git_status();
+        self.set_toast(
+            format!("已删除 {}", util::file_name(&draft.path)),
+            Severity::Success,
+        );
+    }
+
+    /// Keep open tabs, split panes, breakpoints and the debug marker pointing
+    /// at the new location after a rename or cut/paste.
+    fn rewrite_paths(&mut self, old: &Path, new: &Path) {
+        let root = self.project.as_ref().map(|project| project.root.clone());
+        for doc in &mut self.tabs {
+            if !same_path(&doc.path, old) && !doc.path.starts_with(old) {
+                continue;
+            }
+            let path = remap_path(&doc.path, old, new);
+            doc.path = path.clone();
+            doc.name = util::file_name(&path);
+            doc.rel_path = root
+                .as_deref()
+                .map(|root| util::relative_display(root, &path))
+                .unwrap_or_else(|| util::display_path(&path));
+        }
+        let breakpoints = std::mem::take(&mut self.debug.breakpoints);
+        for (path, line) in breakpoints {
+            self.debug
+                .breakpoints
+                .insert((remap_path(&path, old, new), line));
+        }
+        if let Some((path, line)) = self.debug.current_source.clone() {
+            self.debug.current_source = Some((remap_path(&path, old, new), line));
+        }
+        if let Some(path) = self.split_path.clone() {
+            self.split_path = Some(remap_path(&path, old, new));
+        }
+        if let Some(path) = self.split_primary.clone() {
+            self.split_primary = Some(remap_path(&path, old, new));
+        }
+        if let Some(preview) = &mut self.image_preview {
+            if same_path(&preview.path, old) {
+                preview.path = new.to_path_buf();
+            }
+        }
+    }
+
+    fn remove_path_references(&mut self, removed: &Path) {
+        let active_path = self.active_document().map(|doc| doc.path.clone());
+        self.tabs
+            .retain(|doc| !same_path(&doc.path, removed) && !doc.path.starts_with(removed));
+        self.active = active_path
+            .and_then(|path| self.tabs.iter().position(|doc| same_path(&doc.path, &path)))
+            .or_else(|| (!self.tabs.is_empty()).then_some(self.tabs.len().saturating_sub(1)));
+        if self
+            .split_path
             .as_ref()
-            .map(|project| crate::support_pack::scan(&project.root))
-            .unwrap_or_default();
+            .is_some_and(|path| same_path(path, removed) || path.starts_with(removed))
+        {
+            self.split_path = None;
+        }
+        if self
+            .split_primary
+            .as_ref()
+            .is_some_and(|path| same_path(path, removed) || path.starts_with(removed))
+        {
+            self.split_primary = None;
+        }
+        if self.split_path.is_none() || self.split_primary.is_none() {
+            self.split_focus = 0;
+        }
+        self.debug
+            .breakpoints
+            .retain(|(path, _)| !same_path(path, removed) && !path.starts_with(removed));
+        if self
+            .debug
+            .current_source
+            .as_ref()
+            .is_some_and(|(path, _)| same_path(path, removed) || path.starts_with(removed))
+        {
+            self.debug.current_source = None;
+        }
+        if self.image_preview.as_ref().is_some_and(|preview| {
+            same_path(&preview.path, removed) || preview.path.starts_with(removed)
+        }) {
+            self.image_preview = None;
+        }
+    }
+
+    fn commit_create_entry(&mut self, mut draft: CreateEntryDraft) {
+        let name = draft.name.trim();
+        if name.is_empty() {
+            draft.error = Some("名称不能为空".to_owned());
+            self.create_entry = Some(draft);
+            return;
+        }
+        if name == "."
+            || name == ".."
+            || name.contains('/')
+            || name.contains('\\')
+            || name.contains(':')
+        {
+            draft.error = Some("名称不能包含路径分隔符".to_owned());
+            self.create_entry = Some(draft);
+            return;
+        }
+        let path = draft.dir.join(name);
+        if path.exists() {
+            draft.error = Some(format!("{} 已存在", util::display_path(&path)));
+            self.create_entry = Some(draft);
+            return;
+        }
+        let result = match draft.kind {
+            CreateKind::File => std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map(|_| ()),
+            CreateKind::Folder => std::fs::create_dir(&path),
+        };
+        if let Err(err) = result {
+            draft.error = Some(format!("无法创建 {}：{err}", util::display_path(&path)));
+            self.create_entry = Some(draft);
+            return;
+        }
+        if let Some(tree) = &mut self.tree {
+            tree.refresh();
+            tree.reveal(&path);
+        }
+        self.member_index = None;
+        self.refresh_git_status();
+        self.create_entry = None;
+        match draft.kind {
+            CreateKind::File => {
+                self.open_file(path);
+                self.set_toast(format!("已创建文件 {name}"), Severity::Success);
+            }
+            CreateKind::Folder => {
+                self.set_toast(format!("已创建文件夹 {name}"), Severity::Success);
+            }
+        }
+    }
+
+    fn open_image_preview(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                self.set_toast(
+                    format!("无法读取 {}：{err}", util::display_path(&path)),
+                    Severity::Error,
+                );
+                return;
+            }
+        };
+        if metadata.len() > 32 * 1024 * 1024 {
+            self.set_toast("图片超过 32 MB，已取消预览", Severity::Warning);
+            return;
+        }
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                self.set_toast(
+                    format!("无法读取 {}：{err}", util::display_path(&path)),
+                    Severity::Error,
+                );
+                return;
+            }
+        };
+        let image = match image::load_from_memory(&bytes) {
+            Ok(image) => image,
+            Err(err) => {
+                self.set_toast(format!("无法解码图片：{err}"), Severity::Error);
+                return;
+            }
+        };
+        let image = if image.width() > 8192 || image.height() > 8192 {
+            image.thumbnail(4096, 4096)
+        } else {
+            image
+        };
+        let rgba = image.to_rgba8();
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        let color = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+        let texture = ctx.load_texture(
+            format!("simple_embedded_image_{}", path.display()),
+            color,
+            egui::TextureOptions::LINEAR,
+        );
+        self.image_preview = Some(ImagePreviewState {
+            path,
+            texture: Some(texture),
+            size,
+            error: None,
+        });
+    }
+
+    fn refresh_support_packs(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.support_packs.clear();
+            return;
+        };
+        let mut packs = crate::support_pack::scan(&root);
+        if packs.is_empty() {
+            packs = crate::support_pack::scan_keil_installed(self.project_meta.device.as_deref());
+        }
+        self.support_packs = packs;
     }
 
     fn add_support_pack(&mut self) {
@@ -3406,12 +4498,26 @@ impl App {
             self.set_toast("请先打开工程", Severity::Warning);
             return;
         };
+        let start_dir = self
+            .support_packs
+            .first()
+            .and_then(|pack| pack.path.parent())
+            .filter(|parent| parent.is_dir())
+            .unwrap_or(&root);
         let Some(paths) = rfd::FileDialog::new()
             .set_title("添加芯片支持包")
             .add_filter("Keil/CMSIS 支持包", &["pack", "pdsc"])
-            .set_directory(&root)
+            .set_directory(start_dir)
             .pick_files()
         else {
+            return;
+        };
+        self.import_support_pack_files(paths);
+    }
+
+    fn import_support_pack_files(&mut self, paths: Vec<PathBuf>) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Warning);
             return;
         };
         match crate::support_pack::import(&root, &paths) {
@@ -3469,6 +4575,7 @@ impl App {
                 Action::DebugFinish => self.debug_command("finish"),
                 Action::DebugStop => self.debug_stop(),
                 Action::DebugSend(command) => self.debug_command(&command),
+                Action::ToggleBreakpointAt(path, line) => self.toggle_breakpoint_at(&path, line),
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
                         let path = self.tabs[index].path.clone();
@@ -3549,6 +4656,7 @@ impl App {
                 Action::AddMetaItem(field) => self.open_meta_add(field),
                 Action::EditBuildOptions => self.open_build_options(),
                 Action::AddSupportPack => self.add_support_pack(),
+                Action::ImportSupportPack(path) => self.import_support_pack_files(vec![path]),
                 Action::EditFlashConfig => self.open_flash_config(),
                 Action::SetFlashTool(tool) => self.set_flash_tool(tool),
                 Action::SetOpenOcdPath(path) => self.set_openocd_path(path),
@@ -3587,6 +4695,29 @@ impl App {
                     }
                 }
                 Action::Reveal(path) => util::open_in_file_manager(&path),
+                Action::CopyPath(path) => {
+                    ctx.copy_text(util::display_path(&path));
+                    self.set_toast("路径已复制", Severity::Info);
+                }
+                Action::CopyRelativePath(path) => {
+                    let relative = self
+                        .project
+                        .as_ref()
+                        .map(|project| util::relative_display(&project.root, &path))
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| ".".to_owned());
+                    ctx.copy_text(relative);
+                    self.set_toast("相对路径已复制", Severity::Info);
+                }
+                Action::NewFile(dir) => self.open_create_entry(dir, CreateKind::File),
+                Action::NewFolder(dir) => self.open_create_entry(dir, CreateKind::Folder),
+                Action::OpenToSide(path) => self.open_to_side(path),
+                Action::CutFile(path) => self.set_file_clipboard(path, true),
+                Action::CopyFile(path) => self.set_file_clipboard(path, false),
+                Action::PasteFile(path) => self.paste_file(path),
+                Action::RenameFile(path) => self.start_rename(path),
+                Action::DeleteFile(path) => self.start_delete(path),
+                Action::PreviewImage(path) => self.open_image_preview(ctx, path),
                 Action::OpenVscode(path) => util::open_in_vscode(&path),
                 Action::ToggleWrap => {
                     self.settings.word_wrap = !self.settings.word_wrap;
@@ -3693,8 +4824,183 @@ fn preserve_case_replacement(original: &str, replacement: &str) -> String {
     replacement.to_owned()
 }
 
+fn strip_gdb_prompts(mut value: &str) -> &str {
+    loop {
+        if let Some(rest) = value.strip_prefix("(gdb) ") {
+            value = rest.trim_start();
+        } else if value == "(gdb)" {
+            return "";
+        } else {
+            return value;
+        }
+    }
+}
+
+fn watch_marker_index(line: &str, prefix: &str, id: u64) -> Option<usize> {
+    let rest = line.strip_prefix(prefix)?;
+    let rest = rest.strip_suffix("__")?;
+    let (marker_id, index) = rest.rsplit_once('_')?;
+    if marker_id.parse::<u64>().ok()? != id {
+        return None;
+    }
+    index.parse().ok()
+}
+
+fn clean_watch_value(lines: &[String]) -> String {
+    let mut text = String::new();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let line = if let Some(rest) = line.strip_prefix('$') {
+            rest.split_once(" = ").map_or(line, |(_, value)| value)
+        } else {
+            line
+        };
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(line);
+    }
+    text
+}
+
+fn clean_watch_type(lines: &[String]) -> String {
+    let mut text = String::new();
+    for line in lines {
+        let line = line.trim();
+        let line = line.strip_prefix("type = ").unwrap_or(line);
+        if line.is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(line);
+    }
+    text
+}
+
+fn parse_register_line(line: &str) -> Option<RegisterValue> {
+    let mut parts = line.split_whitespace();
+    let name = parts.next()?;
+    let value = parts.next()?;
+    if name.starts_with("__") || name.eq_ignore_ascii_case("all") {
+        return None;
+    }
+    if !(value.starts_with("0x")
+        || value.starts_with("0X")
+        || value.chars().all(|character| character.is_ascii_digit()))
+    {
+        return None;
+    }
+    Some(RegisterValue {
+        name: name.to_owned(),
+        value: value.to_owned(),
+        raw: line.to_owned(),
+    })
+}
+
 fn gdb_source_path(path: &Path) -> String {
     util::display_path(path).replace('\\', "/")
+}
+
+/// Find the newest build output when the project does not pin a debug program.
+fn detect_debug_program(root: &Path) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    for dir in [
+        root.join("build"),
+        root.join("Debug"),
+        root.join("Release"),
+        root.join("out"),
+        root.to_path_buf(),
+    ] {
+        let Ok(read_dir) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let extension = path
+                .extension()
+                .map(|value| value.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            if !matches!(extension.as_str(), "elf" | "axf" | "exe" | "out") {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok());
+            candidates.push((modified, path));
+        }
+    }
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
+    candidates.into_iter().next().map(|(_, path)| path)
+}
+
+fn remap_path(path: &Path, old: &Path, new: &Path) -> PathBuf {
+    if same_path(path, old) {
+        return new.to_path_buf();
+    }
+    path.strip_prefix(old)
+        .map(|suffix| new.join(suffix))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn path_has_dirty_tab(tabs: &[Document], path: &Path) -> bool {
+    tabs.iter()
+        .any(|doc| (same_path(&doc.path, path) || doc.path.starts_with(path)) && doc.is_dirty())
+}
+
+fn remove_path(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    }
+}
+
+fn copy_recursive(source: &Path, destination: &Path) -> std::io::Result<()> {
+    if source.is_dir() {
+        std::fs::create_dir_all(destination)?;
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            copy_recursive(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(source, destination).map(|_| ())
+    }
+}
+
+fn unique_copy_path(directory: &Path, source: &Path) -> PathBuf {
+    let stem = source
+        .file_stem()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_owned());
+    let extension = source
+        .extension()
+        .map(|value| format!(".{}", value.to_string_lossy()))
+        .unwrap_or_default();
+    for index in 1..10_000usize {
+        let name = if index == 1 {
+            format!("{stem} - 副本{extension}")
+        } else {
+            format!("{stem} - 副本 ({index}){extension}")
+        };
+        let candidate = directory.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    directory.join(format!("{stem} - 副本{extension}"))
 }
 
 fn selected_char_range(ctx: &egui::Context, path: &Path) -> Option<(usize, usize)> {
@@ -3733,12 +5039,22 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.build.poll();
+        self.poll_debug_start();
         self.poll_toolchain_install(&ctx);
         if let Some(session) = &mut self.debug.session {
             session.poll();
-            if self.debug.open {
+            let watch_visible = self.debug.auto_watch
+                && self.settings.output_open
+                && self.output_view == OutputView::Debug;
+            if self.debug.open || watch_visible {
                 ctx.request_repaint_after(Duration::from_millis(120));
             }
+        }
+        self.poll_debug_location(&ctx);
+        self.poll_debug_watch();
+        self.tick_debug_watch();
+        if self.debug.starting {
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
         self.refresh_diagnostics();
         self.handle_close_request(&ctx);
@@ -3780,6 +5096,18 @@ impl eframe::App for App {
             self.show_build_options_modal(&ctx);
             actions.clear();
         }
+        if self.create_entry.is_some() {
+            self.show_create_entry_modal(&ctx);
+            actions.clear();
+        }
+        if self.rename_entry.is_some() {
+            self.show_rename_entry_modal(&ctx);
+            actions.clear();
+        }
+        if self.delete_entry.is_some() {
+            self.show_delete_entry_modal(&ctx);
+            actions.clear();
+        }
         let modal_open = self.has_modal();
         if self.project_search.open && !modal_open {
             self.show_project_search(&ctx, &mut actions);
@@ -3805,6 +5133,9 @@ impl eframe::App for App {
         if self.debug.open && !modal_open {
             self.show_debug_overlay(&ctx, &mut actions);
         }
+        if self.image_preview.is_some() {
+            self.show_image_preview(&ctx);
+        }
         if self.completion.open && !modal_open {
             self.show_completion(&ctx);
         }
@@ -3818,6 +5149,9 @@ impl eframe::App for App {
             && self.meta_add.is_none()
             && self.flash_draft.is_none()
             && self.build_options_draft.is_none()
+            && self.create_entry.is_none()
+            && self.rename_entry.is_none()
+            && self.delete_entry.is_none()
         {
             self.apply_actions(&ctx, actions);
         }
@@ -4106,14 +5440,17 @@ impl App {
             .map(|session| session.is_running())
             .unwrap_or(false);
         let debug_has_session = self.debug.session.is_some();
+        let debug_starting = self.debug.starting;
         let mut auto_scroll = self.settings.auto_scroll_output;
         let mut toggle_output = false;
         let (status_color, status_text) = if debug_view {
             if self.debug.error.is_some() {
                 (theme::ERROR, "错误".to_owned())
+            } else if debug_starting {
+                (theme::ACCENT, "启动中".to_owned())
             } else if debug_has_session {
                 if debug_running {
-                    (theme::SUCCESS, "调试器运行中".to_owned())
+                    (theme::SUCCESS, "调试器已连接".to_owned())
                 } else {
                     (theme::TEXT_FAINT, "调试器已停止".to_owned())
                 }
@@ -4557,41 +5894,54 @@ impl App {
         auto_scroll: bool,
     ) {
         let input_height = 28.0;
-        let log_height = (ui.available_height() - input_height - 4.0).max(28.0);
-        let mut scroll = ScrollArea::vertical()
-            .id_salt("simple_embedded_debug_log")
-            .max_height(log_height)
-            .auto_shrink([false, false]);
-        if auto_scroll {
-            scroll = scroll.stick_to_bottom(true);
+        let gap = 4.0;
+        let body_height = (ui.available_height() - input_height - gap).max(80.0);
+        let total_width = ui.available_width();
+        let mut side_width = self.debug.side_width;
+        if side_width <= 0.0 {
+            side_width = 380.0;
         }
-        scroll.show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            if let Some(error) = &self.debug.error {
-                ui.label(RichText::new(error).size(11.0).color(theme::ERROR));
+        let max_side = (total_width * 0.62).max(260.0);
+        let side_width = side_width.clamp(260.0, max_side);
+        let handle_width = 6.0;
+        let log_width = (total_width - side_width - handle_width).max(180.0);
+        let mut new_side = side_width;
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(log_width, body_height),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.set_min_size(egui::vec2(log_width, body_height));
+                    self.show_debug_log_pane(ui, log, auto_scroll, body_height);
+                },
+            );
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(handle_width, body_height), Sense::drag());
+            let response = response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            let color = if response.hovered() || response.dragged() {
+                theme::ACCENT
+            } else {
+                theme::BORDER_SOFT
+            };
+            ui.painter().rect_filled(
+                egui::Rect::from_center_size(rect.center(), egui::vec2(1.0, rect.height())),
+                CornerRadius::ZERO,
+                color,
+            );
+            if response.dragged() {
+                new_side = (new_side - response.drag_delta().x).clamp(260.0, max_side);
             }
-            if log.is_empty() {
-                ui.label(
-                    RichText::new("启动 gdb 后，这里显示调试输出")
-                        .size(11.0)
-                        .color(theme::TEXT_FAINT),
-                );
-            }
-            for line in log {
-                let color = if line.contains("Error")
-                    || line.contains("error")
-                    || line.starts_with("No ")
-                {
-                    theme::ERROR
-                } else if line.starts_with('[') {
-                    theme::INFO
-                } else {
-                    theme::TEXT_DIM
-                };
-                ui.label(RichText::new(line).monospace().size(11.5).color(color));
-            }
+            ui.allocate_ui_with_layout(
+                egui::vec2(new_side, body_height),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.set_min_size(egui::vec2(new_side, body_height));
+                    self.show_debug_side_panel(ui);
+                },
+            );
         });
-        ui.add_space(4.0);
+        self.debug.side_width = new_side;
+        ui.add_space(gap);
         ui.horizontal(|ui| {
             let send_width = 48.0;
             let response = ui.add(
@@ -4606,13 +5956,56 @@ impl App {
                     ),
             );
             let submitted =
-                response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             if submitted || ui.add(small_flat_button("发送", theme::ACCENT)).clicked() {
                 let command = self.debug.input.trim().to_owned();
                 if !command.is_empty() {
                     self.debug.input.clear();
                     actions.push(Action::DebugSend(command));
                 }
+            }
+        });
+    }
+
+    fn show_debug_log_pane(
+        &mut self,
+        ui: &mut egui::Ui,
+        log: &[String],
+        auto_scroll: bool,
+        height: f32,
+    ) {
+        let mut scroll = ScrollArea::vertical()
+            .id_salt("simple_embedded_debug_log")
+            .max_height(height)
+            .auto_shrink([false, false]);
+        if auto_scroll {
+            scroll = scroll.stick_to_bottom(true);
+        }
+        scroll.show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            if let Some(error) = &self.debug.error {
+                ui.label(RichText::new(error).size(11.0).color(theme::ERROR));
+            }
+            if log.is_empty() {
+                let hint = if self.debug.starting {
+                    "正在启动 OpenOCD / pyOCD 和 gdb…"
+                } else {
+                    "启动 gdb 后，这里显示调试输出"
+                };
+                ui.label(RichText::new(hint).size(11.0).color(theme::TEXT_FAINT));
+            }
+            for line in log {
+                let color = if line.contains("Error")
+                    || line.contains("error")
+                    || line.starts_with("No ")
+                {
+                    theme::ERROR
+                } else if line.starts_with('[') {
+                    theme::INFO
+                } else {
+                    theme::TEXT_DIM
+                };
+                ui.label(RichText::new(line).monospace().size(11.5).color(color));
             }
         });
     }
@@ -4721,5 +6114,86 @@ mod tests {
         assert_eq!(preserve_case_replacement("foo", "BAR"), "bar");
         assert_eq!(preserve_case_replacement("Foo", "bar"), "Bar");
         assert_eq!(preserve_case_replacement("fOo", "bar"), "bar");
+    }
+
+    #[test]
+    fn parses_live_watch_markers_and_values() {
+        assert_eq!(
+            watch_marker_index("__SE_WATCH_V_7_3__", "__SE_WATCH_V_", 7),
+            Some(3)
+        );
+        assert_eq!(
+            watch_marker_index("__SE_WATCH_V_6_3__", "__SE_WATCH_V_", 7),
+            None
+        );
+        assert_eq!(strip_gdb_prompts("(gdb) (gdb) type = int"), "type = int");
+        let value = vec!["$2 = {a = 1, b = 2}".to_owned()];
+        assert_eq!(clean_watch_value(&value), "{a = 1, b = 2}");
+        let type_lines = vec!["type = struct Foo".to_owned()];
+        assert_eq!(clean_watch_type(&type_lines), "struct Foo");
+    }
+
+    #[test]
+    fn parses_cpu_register_rows() {
+        let register = parse_register_line("r0             0x20000000          0")
+            .expect("register should parse");
+        assert_eq!(register.name, "r0");
+        assert_eq!(register.value, "0x20000000");
+        assert!(parse_register_line("(gdb)").is_none());
+        assert!(parse_register_line("r1 invalid").is_none());
+    }
+
+    #[test]
+    fn unique_copy_path_avoids_existing_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("main.c");
+        std::fs::write(&source, "int main(void) {}").unwrap();
+        assert_eq!(
+            unique_copy_path(dir.path(), &source),
+            dir.path().join("main - 副本.c")
+        );
+        std::fs::write(dir.path().join("main - 副本.c"), "").unwrap();
+        assert_eq!(
+            unique_copy_path(dir.path(), &source),
+            dir.path().join("main - 副本 (2).c")
+        );
+    }
+
+    #[test]
+    fn copy_recursive_copies_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("Core");
+        std::fs::create_dir_all(source.join("Src")).unwrap();
+        std::fs::write(source.join("Src/main.c"), "int main(void) {}").unwrap();
+        let destination = dir.path().join("Core copy");
+        copy_recursive(&source, &destination).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(destination.join("Src/main.c")).unwrap(),
+            "int main(void) {}"
+        );
+    }
+
+    #[test]
+    fn remaps_paths_under_a_renamed_directory() {
+        let old = Path::new(r"D:\project\Core");
+        let new = Path::new(r"D:\project\Firmware");
+        assert_eq!(
+            remap_path(Path::new(r"D:\project\Core\Src\main.c"), old, new),
+            PathBuf::from(r"D:\project\Firmware\Src\main.c")
+        );
+        assert_eq!(
+            remap_path(Path::new(r"D:\project\README.md"), old, new),
+            PathBuf::from(r"D:\project\README.md")
+        );
+    }
+
+    #[test]
+    fn detects_build_output_as_debug_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let build = dir.path().join("build");
+        std::fs::create_dir(&build).unwrap();
+        let program = build.join("firmware.elf");
+        std::fs::write(&program, b"\x7fELF").unwrap();
+        assert_eq!(detect_debug_program(dir.path()), Some(program));
     }
 }

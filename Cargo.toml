@@ -8,6 +8,7 @@ description = "Simple embedded - a folder-first embedded IDE built with egui"
 eframe = { version = "0.34.3", default-features = false, features = ["glow", "default_fonts"] }
 egui = "0.34.3"
 encoding_rs = "0.8"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "ico", "tiff"] }
 raw-window-handle = "0.6"
 regex = "1"
 rfd = "0.17.2"

@@ -52,6 +52,154 @@ pub fn scan(root: &Path) -> Vec<SupportPack> {
     packs
 }
 
+/// Find a matching device family pack in common Keil/CMSIS pack roots.
+///
+/// This is a fallback for projects that do not keep a `.pack` / `.pdsc` in
+/// their own folder. Nothing is copied into the project; the UI offers an
+/// explicit import action for external results.
+pub fn scan_keil_installed(device: Option<&str>) -> Vec<SupportPack> {
+    scan_keil_roots(&keil_pack_roots(), device)
+}
+
+fn scan_keil_roots(roots: &[PathBuf], device: Option<&str>) -> Vec<SupportPack> {
+    let Some(device) = device else {
+        return Vec::new();
+    };
+    let token = pack_name_token(device);
+    if token.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
+    for root in roots {
+        collect_pack_candidates(root, &token, 0, &mut 0, &mut candidates);
+        if candidates.len() >= 40 {
+            break;
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut packs = Vec::new();
+    for path in candidates {
+        if !seen.insert(path.to_string_lossy().to_ascii_lowercase()) {
+            continue;
+        }
+        let pack = parse(&path);
+        if pack.error.is_some() || !device_matches(device, &pack.devices) {
+            continue;
+        }
+        packs.push(pack);
+        if packs.len() >= 8 {
+            break;
+        }
+    }
+    packs.sort_by_key(|pack| pack.file_name.to_lowercase());
+    packs
+}
+
+fn keil_pack_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(root) = std::env::var_os("KEIL_PACK_ROOT") {
+        roots.push(PathBuf::from(root));
+    }
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        roots.push(PathBuf::from(local).join("Arm").join("Packs"));
+    }
+    if let Some(roaming) = std::env::var_os("APPDATA") {
+        roots.push(PathBuf::from(roaming).join("Arm").join("Packs"));
+    }
+    for key in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(base) = std::env::var_os(key) {
+            let base = PathBuf::from(base);
+            roots.push(base.join("Keil_v5").join("ARM").join("PACK"));
+            roots.push(base.join("Keil").join("ARM").join("PACK"));
+        }
+    }
+    roots.push(PathBuf::from(r"D:\Keil5\Core\ARM\PACK"));
+    roots.push(PathBuf::from(r"D:\Keil5\ARM\PACK"));
+    roots.push(PathBuf::from(r"C:\Keil_v5\ARM\PACK"));
+    roots.push(PathBuf::from(r"C:\Keil\ARM\PACK"));
+    if let Some(uv4) = find_in_path("UV4.exe") {
+        if let Some(keil) = uv4.parent().and_then(|parent| parent.parent()) {
+            roots.push(keil.join("ARM").join("PACK"));
+            roots.push(keil.join("Core").join("ARM").join("PACK"));
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    roots.retain(|root| seen.insert(root.to_string_lossy().to_ascii_lowercase()));
+    roots
+}
+
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn collect_pack_candidates(
+    dir: &Path,
+    token: &str,
+    depth: usize,
+    visited: &mut usize,
+    out: &mut Vec<PathBuf>,
+) {
+    if depth > 5 || *visited > 20_000 || out.len() >= 40 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        *visited += 1;
+        if *visited > 20_000 || out.len() >= 40 {
+            return;
+        }
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_pack_candidates(&path, token, depth + 1, visited, out);
+            continue;
+        }
+        if !file_type.is_file() || !is_supported(&path) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if name.contains(token) {
+            out.push(path);
+        }
+    }
+}
+
+fn device_family(device: &str) -> String {
+    let upper = device.trim().to_ascii_uppercase();
+    if upper.starts_with("STM32") && upper.len() >= 9 {
+        upper[..9].to_owned()
+    } else {
+        upper
+    }
+}
+
+fn pack_name_token(device: &str) -> String {
+    let family = device_family(device);
+    if family.starts_with("STM32") && family.len() >= 7 {
+        family[..7].to_ascii_lowercase()
+    } else {
+        family.to_ascii_lowercase()
+    }
+}
+
+fn device_matches(device: &str, devices: &[String]) -> bool {
+    let family = device_family(device);
+    devices
+        .iter()
+        .any(|candidate| candidate.to_ascii_uppercase().starts_with(&family))
+}
+
 pub fn import(root: &Path, sources: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     if sources.is_empty() {
         return Ok(Vec::new());
@@ -222,7 +370,8 @@ fn parse_pdsc(text: &str) -> ParsedPack {
     } else {
         devices
     };
-    let svd_count = all_captures(text, r"(?is)<svd>\s*([^<]+?)\s*</svd>").len();
+    let svd_count = all_captures(text, r"(?is)<svd>\s*([^<]+?)\s*</svd>").len()
+        + all_captures(text, r#"(?is)<debug\s+[^>]*svd\s*=\s*"([^"]+)""#).len();
     (name, vendor, version, devices, svd_count)
 }
 

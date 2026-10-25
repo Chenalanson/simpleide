@@ -32,6 +32,7 @@ mod todo;
 mod toolchain;
 mod util;
 
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -108,7 +109,7 @@ fn configure_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-fn app_icon(size: u32) -> egui::IconData {
+pub(crate) fn app_icon(size: u32) -> egui::IconData {
     let mut rgba = vec![0u8; (size * size * 4) as usize];
     let s = size as f32;
     let radius = s * 0.22;
@@ -171,6 +172,59 @@ fn app_icon(size: u32) -> egui::IconData {
     }
 }
 
+/// Build a multi-size Windows ICO file from the same drawing used by the window
+/// icon. PNG-compressed entries keep the file small and work on Vista+.
+pub(crate) fn app_icon_ico() -> Result<Vec<u8>, String> {
+    let sizes = [16u32, 24, 32, 48, 64, 128, 256];
+    let mut entries = Vec::new();
+    for size in sizes {
+        let icon = app_icon(size);
+        let image = image::RgbaImage::from_raw(size, size, icon.rgba)
+            .ok_or_else(|| "图标缓冲区大小不正确".to_owned())?;
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+            .map_err(|err| format!("无法编码图标：{err}"))?;
+        entries.push((size, png));
+    }
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    let mut offset = 6 + 16 * entries.len();
+    for (size, png) in &entries {
+        let dimension = if *size >= 256 { 0 } else { *size as u8 };
+        bytes.push(dimension);
+        bytes.push(dimension);
+        bytes.push(0);
+        bytes.push(0);
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&32u16.to_le_bytes());
+        bytes.extend_from_slice(&(png.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(offset as u32).to_le_bytes());
+        offset += png.len();
+    }
+    for (_, png) in &entries {
+        bytes.extend_from_slice(png);
+    }
+    Ok(bytes)
+}
+
+/// Write the application icon next to the user settings so Explorer can use it
+/// as the `.se-workspace` file icon.
+pub(crate) fn write_app_icon_ico() -> Result<PathBuf, String> {
+    let dir = config::settings_path()
+        .parent()
+        .map(PathBuf::from)
+        .ok_or_else(|| "无法确定设置目录".to_owned())?;
+    std::fs::create_dir_all(&dir).map_err(|err| format!("无法创建 {}：{err}", dir.display()))?;
+    let path = dir.join("simple-embedded.ico");
+    let bytes = app_icon_ico()?;
+    std::fs::write(&path, bytes).map_err(|err| format!("无法写入 {}：{err}", path.display()))?;
+    Ok(path)
+}
+
 fn inside_rounded_rect(x: f32, y: f32, size: f32, radius: f32) -> bool {
     let min = radius;
     let max = size - radius;
@@ -207,4 +261,18 @@ fn distance_to_segment(px: f32, py: f32, a: egui::Pos2, b: egui::Pos2) -> f32 {
     let dx = apx - abx * t;
     let dy = apy - aby * t;
     (dx * dx + dy * dy).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_ico_contains_png_entries() {
+        let bytes = app_icon_ico().unwrap();
+        assert_eq!(&bytes[..4], &[0, 0, 1, 0]);
+        assert!(bytes
+            .windows(8)
+            .any(|window| window == b"\x89PNG\r\n\x1a\n"));
+    }
 }
