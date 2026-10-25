@@ -50,6 +50,8 @@ src/config.rs          自动检测、每工程配置、SSH 命令构造、设�
 src/project_meta.rs    Makefile / Keil .uvprojx 工程元数据提取
 src/editor.rs          EditorBuffer（String + revision）和 Document
 src/file_tree.rs       惰性目录树
+src/flash.rs           烧录工具配置、OpenOCD 检测与命令构造
+src/completion.rs      轻量成员索引、补全上下文和候选类型
 src/highlight.rs       syntect 高亮和 galley 缓存
 src/minimap.rs         编辑器右侧代码预览、缩略行缓存和滚动跳转
 src/log.rs             ANSI SGR、错误分级、日志上限
@@ -118,7 +120,8 @@ docs/                  README 截图和使用教程
 - `arraygen.rs` 把选中文本或当前文件（最多 8 KB）生成 `const uint8_t` C 数组；工具栏“数组”或 `Ctrl+Shift+A` 打开，变量名会被清洗成合法标识符，支持复制。
 - `registers.rs` 优先用正则解析工程内 `.svd` 的 peripheral/baseAddress/register/addressOffset/description；没有可用 SVD 时回退扫描 `.h/.c` 中 `*_BASE` / `*_ADDR` / `*_ADDRESS` 宏。`Ctrl+Shift+R` 或工具栏“寄存器”打开，最多 2000 项并去重。它是只读浏览器，不读写芯片寄存器。
 - `debugger.rs` 启动本机 gdb CLI（非 MI），通过 stdin/stdout 转发命令并收集控制台输出；`DebugState` 保存会话、断点和日志。右侧“调试”或 `F5` 启动/继续，`F9` 切换断点，`F10` 下一步，`F11` 单步，`Shift+F11` 跳出，`Shift+F5` 停止。调试程序默认取设置路径，否则从 `build/`、`Debug/`、`Release/` 等目录挑最新的 ELF/AXF/EXE；gdb 架构必须与目标匹配（ARM 需 arm-none-eabi-gdb）。
-- `navigation.rs` 提供标识符/前缀提取与字符区间替换；`F12` 在 `symbols.rs` 索引中找定义，`Shift+F12` 用全工程正则搜索列引用，`Ctrl+Space` 打开符号补全。全部是轻量启发式，不是 LSP。
+- `navigation.rs` 提供标识符/前缀提取与字符区间替换；`F12` 在 `symbols.rs` 索引中找定义，`Shift+F12` 用全工程正则搜索列引用。
+- 补全在输入至少 2 个标识符字符后自动弹出，锚定在光标下方；输入 `.` / `->` 时切换为成员补全。`↑` / `↓` 选择，`Enter` / `Tab` 插入，`Esc` 关闭；`Ctrl+Space` 仍可手动打开。全局候选来自 `symbols.rs` 的宏/函数/类型索引；成员候选由 `completion.rs` 用轻量正则解析 struct/union 和变量声明得到，成员索引在保存、刷新文件树或刷新符号时失效重建。它不是 C/C++ 语义解析：复杂宏展开、模板、继承、跨文件作用域和函数返回类型可能漏检。
 - 粘贴由编辑器在 TextEdit 前拦截 `Event::Paste`：`indent::adjust_pasted` 统一换行并按当前行缩进对齐后续行，同时保留粘贴内容相对缩进；只读或编辑器未聚焦时不拦截。
 - 分屏只从标签页右键菜单进入：`向右拆分` / `拆分和移动 → 向上拆分` / `取消拆分`。`split_primary` + `split_path` + `split_direction` 决定两个窗格，两个窗格都调用 `show_code_editor`，都可编辑；`split_focus` 记录焦点窗格，点击窗格会切换 active。当前不支持同一个文件在两个窗格重复打开。
 - 标签页右键菜单还提供关闭其他、关闭右侧标签页、关闭已保存、全部关闭；保存、另存为；复制完整路径、相对路径和面包屑路径；在文件资源管理器中显示、在资源管理器视图中显示；以及拆分操作。批量关闭遇到未保存文件时走 `PendingAction::CloseTabs` 确认。另存为会写入新路径并把标签页、分屏引用和语法识别一并切换到新文件。快捷键：Ctrl+F4 关闭当前，Ctrl+\ 向右拆分，Ctrl+K U 关闭已保存，Ctrl+K W 全部关闭，Ctrl+K S 保存全部，Ctrl+K Ctrl+\ 向上拆分，Ctrl+Shift+S 另存为，Shift+Alt+C 复制路径，Ctrl+K Ctrl+Shift+C 复制相对路径，Shift+Alt+R 在资源管理器中显示。
@@ -156,6 +159,9 @@ docs/                  README 截图和使用教程
   - 本地：Windows `cmd /S /C`，Unix `sh -c`。
   - 远程：`ssh -o BatchMode=yes -o ConnectTimeout=10 [ -p port ] host "cd '<remote_dir>' && <command>"`。
   - Flash 永远本地执行。
+- `BuildConfig.flash_tool` 为 `custom` / `openocd`。`custom` 使用 `flash_command` 经 shell 执行；`openocd` 使用 `flash.rs` 直接构造参数运行 `openocd -f interface/... -f target/... -c "program ... verify reset exit"`，不经过 shell，路径空格由 `Command` 处理。`OpenOcdConfig` 保存工具路径、程序文件、芯片配置和接口配置；只写 `stm32f1x.cfg` / `stlink.cfg` 时会自动补 `target/` / `interface/`，程序文件支持 `${ExecutableName}`、`${ProjectName}`、`${workspaceFolder}`、`${workspaceRoot}`。工具路径下拉会检测 PATH、Program Files、PlatformIO 等常见 OpenOCD 安装位置。
+- OpenOCD 的程序文件默认按 `ProjectMeta` 的 output_dir 和常见 `build/Debug/Release` 目录选择最新产物；Flash 前找不到程序文件会直接报错，不自动构建。Flash 不依赖编译器/make，软件自带工具链缺失时不应阻止烧录。
+- pyOCD 目前没有内置；可继续用 `custom` 命令接 `pyocd flash`。
 - 构建前自动保存所有脏 Tab。
 - `BuildController` 用 `std::process`、线程和 `mpsc`，不使用 tokio。UI 每帧 `poll`，不阻塞。
 - stdout/stderr 各一个读线程；Windows 上停止用 `taskkill /PID <pid> /T /F`，随后 `Child::kill`。
@@ -190,6 +196,7 @@ docs/                  README 截图和使用教程
 - 右侧操作栏：纵向排列 Build、Clean/Rebuild/Flash、调试；不再放设置按钮，设置从构建卡片“配置”或 `Ctrl+,` 打开。
 - 构建结果显示在输出面板标题和日志中；底部不再保留重复的状态栏。
 - 构建输出面板顶部有 10px 拖动手柄，收起时也能向上拉出；高度存 `Settings.output_height`，最大到主区域顶部。
+- “工程信息 → 烧录配置”提供烧录工具下拉（自定义命令 / OpenOCD）。OpenOCD 模式显示工具路径下拉和浏览按钮，以及程序文件、芯片配置、接口配置；“编辑”打开独立烧录配置弹窗，含命令预览。工具/路径下拉修改后立即写入本机设置，弹窗中的字段点击保存后写入。
 - 关闭窗口、关闭 Tab、切换工程时都要处理未保存确认。
 - 不做弹窗堆叠；确认弹窗和设置弹窗互斥。
 - 无工程时左上角仍显示同一张构建卡片，使用“导入 / 配置”按钮；中间显示单行提示。第一次启动不写入任何工程文件。测试后如果产生 `%APPDATA%\SimpleEmbedded\settings.json`，提交前应清理，避免把测试工程路径带入首启体验。
@@ -197,10 +204,10 @@ docs/                  README 截图和使用教程
 ## 已知边界（当前版本）
 
 - 没有自定义工程格式、Keil 自动导入或内存布局编辑器；芯片支持包只读取元数据和 SVD，不导入 Keil 设备树、启动文件、链接脚本或烧录算法。Keil 工程可以通过手动命令或外部包装脚本接入。
-- 没有 LSP/语义级跳转；符号搜索、TODO、寄存器浏览器都是轻量索引。补全/定义/引用是启发式功能。
+- 没有 LSP/语义级跳转；符号搜索、TODO、寄存器浏览器都是轻量索引。补全/定义/引用是启发式功能；成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型。
 - 不支持多光标；Ctrl+Alt+左键只提供单一矩形列选择。分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
 - 调试只提供 gdb 控制台和基本执行控制，没有变量/调用栈/寄存器面板，也不会自动下载固件；需要用户提供与目标架构匹配的 gdb。
-- 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走用户配置的本地命令。
+- 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走本地自定义命令或内置 OpenOCD 配置。pyOCD 尚未内置，需要先用自定义命令接入。
 - 源码支持 UTF-8（含 BOM）和 GBK；构建输出在 Windows 上会尝试按 GBK 解码。
 - 不支持文件系统外部修改的自动合并。
 - 长构建日志会横向裁剪，但完整内容可复制。
@@ -216,7 +223,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器、支持包 `.pdsc` 解析与 `.pack` 导入、十六进制、数组生成、列编辑、gdb 路径检测。当前共 95 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD 配置与命令构造、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测。当前共 107 个测试。
 
 UI 改动后建议：
 

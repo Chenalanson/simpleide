@@ -23,6 +23,7 @@ use crate::config::{
 };
 use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
+use crate::flash::{self, FlashTool, OpenOcdConfig};
 use crate::formatting;
 use crate::git::{self, GitStatus};
 use crate::highlight::{self, Highlighter};
@@ -103,6 +104,24 @@ struct MetaDraft {
     library_dirs: String,
     defines: String,
     note: Option<String>,
+}
+
+struct FlashDraft {
+    tool: FlashTool,
+    command: String,
+    openocd: OpenOcdConfig,
+    error: Option<String>,
+}
+
+impl FlashDraft {
+    fn from_config(config: &BuildConfig) -> Self {
+        Self {
+            tool: config.flash_tool,
+            command: config.flash_command.clone(),
+            openocd: config.openocd.clone(),
+            error: None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -210,7 +229,13 @@ struct CompletionState {
     query: String,
     prefix_start: usize,
     cursor: usize,
-    items: Vec<String>,
+    selected: usize,
+    items: Vec<crate::completion::CompletionItem>,
+    member_chain: Option<String>,
+    anchor: Option<egui::Pos2>,
+    path: Option<PathBuf>,
+    last_revision: u64,
+    last_cursor: usize,
 }
 
 #[derive(Default)]
@@ -494,6 +519,10 @@ enum Action {
     AddMetaItem(MetaListField),
     EditBuildOptions,
     AddSupportPack,
+    EditFlashConfig,
+    SetFlashTool(FlashTool),
+    SetOpenOcdPath(String),
+    BrowseOpenOcd,
     ClearLog,
     CopyLog,
     Reveal(PathBuf),
@@ -517,6 +546,7 @@ pub struct App {
     toolchain_status: String,
     meta_draft: Option<MetaDraft>,
     meta_add: Option<MetaAddDraft>,
+    flash_draft: Option<FlashDraft>,
     build_options_draft: Option<BuildOptions>,
     build_options_tab: BuildOptionsTab,
     find: FindState,
@@ -528,6 +558,7 @@ pub struct App {
     array: ArrayState,
     debug: DebugState,
     completion: CompletionState,
+    member_index: Option<crate::completion::MemberIndex>,
     goto_line: GotoLineState,
     column_edit: ColumnEditState,
     column_selection: Option<ColumnSelectionState>,
@@ -583,6 +614,7 @@ impl App {
             toolchain_status: String::new(),
             meta_draft: None,
             meta_add: None,
+            flash_draft: None,
             build_options_draft: None,
             build_options_tab: BuildOptionsTab::default(),
             find: FindState::default(),
@@ -594,6 +626,7 @@ impl App {
             array: ArrayState::default(),
             debug: DebugState::default(),
             completion: CompletionState::default(),
+            member_index: None,
             goto_line: GotoLineState::default(),
             column_edit: ColumnEditState::default(),
             column_selection: None,
@@ -680,6 +713,8 @@ impl App {
         self.project_meta = ProjectMeta::detect(&root);
         self.support_packs = crate::support_pack::scan(&root);
         self.project = Some(Project::new(root.clone()));
+        self.member_index = None;
+        self.completion = CompletionState::default();
         self.build_config = config;
         self.tree = Some(FileTree::new(
             root.clone(),
@@ -1103,35 +1138,225 @@ impl App {
         self.set_toast("列编辑已应用", Severity::Success);
     }
 
-    fn open_completion(&mut self) {
-        let Some(doc) = self.active_document() else {
+    fn ensure_member_index(&mut self) {
+        if self.member_index.is_some() {
+            return;
+        }
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             return;
         };
-        let text = doc.buffer.as_string().to_owned();
-        let cursor = doc.cursor_index;
-        let (prefix_start, prefix) = crate::navigation::word_prefix(&text, cursor);
+        let ignore = IgnoreRules::load(
+            &root,
+            self.settings.respect_gitignore,
+            &self.settings.ignore_patterns,
+        );
+        self.member_index = Some(crate::completion::build(&root, &ignore));
+    }
+
+    fn completion_items(
+        &mut self,
+        context: &crate::completion::Context,
+    ) -> Vec<crate::completion::CompletionItem> {
+        if let Some(chain) = &context.member_chain {
+            self.ensure_member_index();
+            return self
+                .member_index
+                .as_ref()
+                .map(|index| index.resolve_members(chain))
+                .unwrap_or_default();
+        }
+
         self.ensure_symbols();
-        let lower = prefix.to_lowercase();
-        let mut names = BTreeSet::new();
+        let mut seen = BTreeSet::new();
+        let mut items = Vec::new();
         for symbol in &self.symbols.items {
-            if symbol.name.to_lowercase().starts_with(&lower) {
-                names.insert(symbol.name.clone());
+            if !seen.insert(symbol.name.clone()) {
+                continue;
             }
-            if names.len() >= 200 {
-                break;
-            }
+            let kind = match symbol.kind {
+                crate::symbols::SymbolKind::Function => crate::completion::CompletionKind::Function,
+                crate::symbols::SymbolKind::Struct => crate::completion::CompletionKind::Type,
+                crate::symbols::SymbolKind::Macro => crate::completion::CompletionKind::Macro,
+                crate::symbols::SymbolKind::Label => crate::completion::CompletionKind::Label,
+            };
+            items.push(crate::completion::CompletionItem {
+                name: symbol.name.clone(),
+                kind,
+                detail: None,
+            });
         }
-        if names.is_empty() {
-            self.set_toast("没有匹配的工程符号", Severity::Info);
+        items.sort_by_key(|item| item.name.to_lowercase());
+        items
+    }
+
+    fn open_completion(&mut self) {
+        let Some((path, cursor, revision, context)) = self.active_document().map(|doc| {
+            (
+                doc.path.clone(),
+                doc.cursor_index,
+                doc.buffer.revision(),
+                crate::completion::context_at(doc.buffer.as_string(), doc.cursor_index),
+            )
+        }) else {
+            return;
+        };
+        let items = self.completion_items(&context);
+        if items.is_empty() {
+            self.set_toast("没有可用的补全项", Severity::Info);
+            self.completion.open = false;
             return;
         }
-        self.completion = CompletionState {
-            open: true,
-            query: prefix,
-            prefix_start,
-            cursor,
-            items: names.into_iter().collect(),
+        self.completion.open = true;
+        self.completion.query = context.prefix;
+        self.completion.prefix_start = context.prefix_start;
+        self.completion.cursor = cursor;
+        self.completion.selected = 0;
+        self.completion.items = items;
+        self.completion.member_chain = context.member_chain;
+        self.completion.path = Some(path);
+        self.completion.last_revision = revision;
+        self.completion.last_cursor = cursor;
+    }
+
+    fn completion_filtered(&self) -> Vec<usize> {
+        let query = self.completion.query.to_lowercase();
+        self.completion
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.name.to_lowercase().starts_with(&query))
+            .map(|(index, _)| index)
+            .take(200)
+            .collect()
+    }
+
+    fn has_modal(&self) -> bool {
+        self.settings_draft.is_some()
+            || self.pending.is_some()
+            || self.meta_draft.is_some()
+            || self.meta_add.is_some()
+            || self.flash_draft.is_some()
+            || self.build_options_draft.is_some()
+    }
+
+    fn handle_completion_keys(&mut self, ctx: &egui::Context) {
+        if !self.completion.open {
+            return;
+        }
+        if self.has_modal() {
+            self.completion.open = false;
+            return;
+        }
+        let filtered = self.completion_filtered();
+        if filtered.is_empty() {
+            self.completion.open = false;
+            return;
+        }
+        self.completion.selected = self.completion.selected.min(filtered.len() - 1);
+        let mut delta = 0i32;
+        let mut accept = false;
+        let mut close = false;
+        ctx.input_mut(|input| {
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                delta = 1;
+            } else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                delta = -1;
+            }
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                || input.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
+            {
+                accept = true;
+            }
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                close = true;
+            }
+        });
+        if close {
+            self.completion.open = false;
+            self.focus_editor = true;
+            return;
+        }
+        if delta != 0 {
+            let count = filtered.len();
+            self.completion.selected = if delta > 0 {
+                (self.completion.selected + 1) % count
+            } else {
+                (self.completion.selected + count - 1) % count
+            };
+            ctx.request_repaint();
+            return;
+        }
+        if accept {
+            let index = self.completion.selected.min(filtered.len() - 1);
+            let name = self.completion.items[filtered[index]].name.clone();
+            self.insert_completion(ctx, &name);
+        }
+    }
+
+    fn update_completion(&mut self, ctx: &egui::Context) {
+        let Some((path, cursor, revision)) = self
+            .active_document()
+            .map(|doc| (doc.path.clone(), doc.cursor_index, doc.buffer.revision()))
+        else {
+            self.completion.open = false;
+            return;
         };
+        let editor_id = egui::Id::new(("simple_embedded_code_editor", &path));
+        let focused = ctx.memory(|memory| memory.has_focus(editor_id));
+        if !focused || self.has_modal() {
+            self.completion.open = false;
+            self.completion.path = Some(path);
+            self.completion.last_revision = revision;
+            self.completion.last_cursor = cursor;
+            return;
+        }
+        if self.completion.path.as_ref() != Some(&path) {
+            self.completion.open = false;
+            self.completion.path = Some(path);
+            self.completion.last_revision = revision;
+            self.completion.last_cursor = cursor;
+            return;
+        }
+
+        let changed = revision != self.completion.last_revision;
+        if changed {
+            let Some(context) = self
+                .active_document()
+                .map(|doc| crate::completion::context_at(doc.buffer.as_string(), cursor))
+            else {
+                self.completion.open = false;
+                return;
+            };
+            let trigger = context.member_chain.is_some() || context.prefix.chars().count() >= 2;
+            if trigger {
+                let items = self.completion_items(&context);
+                if items.is_empty() {
+                    self.completion.open = false;
+                } else {
+                    let query_changed = self.completion.query != context.prefix
+                        || self.completion.member_chain != context.member_chain;
+                    self.completion.open = true;
+                    self.completion.query = context.prefix;
+                    self.completion.prefix_start = context.prefix_start;
+                    self.completion.cursor = cursor;
+                    self.completion.items = items;
+                    self.completion.member_chain = context.member_chain;
+                    if query_changed {
+                        self.completion.selected = 0;
+                    }
+                    self.completion.path = Some(path.clone());
+                }
+            } else {
+                self.completion.open = false;
+            }
+            self.completion.last_revision = revision;
+            self.completion.last_cursor = cursor;
+        } else if self.completion.open && self.completion.cursor != cursor {
+            self.completion.open = false;
+            self.completion.last_cursor = cursor;
+        } else {
+            self.completion.last_cursor = cursor;
+        }
     }
 
     fn insert_completion(&mut self, ctx: &egui::Context, name: &str) {
@@ -1153,6 +1378,8 @@ impl App {
         doc.update_cursor(cursor);
         set_editor_cursor(ctx, &doc.path, cursor);
         self.completion.open = false;
+        self.completion.last_revision = doc.buffer.revision();
+        self.completion.last_cursor = cursor;
         self.focus_editor = true;
         self.find.dirty = true;
     }
@@ -1552,6 +1779,7 @@ impl App {
             }
         };
         if saved {
+            self.member_index = None;
             self.git_line_key = None;
             self.refresh_git_status();
         }
@@ -1622,6 +1850,7 @@ impl App {
         if let Some(tree) = &mut self.tree {
             tree.reveal(&path);
         }
+        self.member_index = None;
         self.git_line_key = None;
         self.refresh_git_status();
         self.find.dirty = true;
@@ -1649,6 +1878,7 @@ impl App {
             saved += 1;
         }
         if saved > 0 {
+            self.member_index = None;
             self.refresh_git_status();
         }
         Ok(saved)
@@ -2175,8 +2405,12 @@ impl App {
             return;
         };
         if !self.build_config.has_command(kind) {
-            self.set_toast(format!("{} 命令尚未配置", kind.label()), Severity::Warning);
-            self.open_settings();
+            self.set_toast(format!("{} 尚未配置", kind.label()), Severity::Warning);
+            if kind == TaskKind::Flash {
+                self.open_flash_config();
+            } else {
+                self.open_settings();
+            }
             return;
         }
         self.build.log.clear_diagnostics();
@@ -2210,8 +2444,13 @@ impl App {
                     }
                 }
                 Err(err) => {
-                    self.set_toast(err, Severity::Error);
-                    return;
+                    // Flashing does not depend on the compiler or make. Keep
+                    // OpenOCD usable even when the bundled toolchain is not
+                    // installed (its own path is resolved separately).
+                    if kind != TaskKind::Flash {
+                        self.set_toast(err, Severity::Error);
+                        return;
+                    }
                 }
             }
         }
@@ -2383,6 +2622,80 @@ impl App {
         Ok(synced)
     }
 
+    fn persist_build_config(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        self.settings.set_build_config(&root, &self.build_config);
+        self.settings.save();
+    }
+
+    fn apply_openocd_defaults(&self, openocd: &mut OpenOcdConfig) {
+        if openocd.executable.trim().is_empty() {
+            openocd.executable = "openocd".to_owned();
+        }
+        if openocd.program_file.trim().is_empty() {
+            openocd.program_file = "${ExecutableName}.hex".to_owned();
+        }
+        if openocd.target_config.trim().is_empty() {
+            if let Some(target) = flash::infer_target_config(self.project_meta.device.as_deref()) {
+                openocd.target_config = target;
+            }
+        }
+        if openocd.interface_config.trim().is_empty() {
+            openocd.interface_config =
+                flash::infer_interface_config(self.project_meta.flash_driver.as_deref())
+                    .unwrap_or_else(|| "stlink.cfg".to_owned());
+        }
+    }
+
+    fn open_flash_config(&mut self) {
+        let mut draft = FlashDraft::from_config(&self.build_config);
+        if draft.tool == FlashTool::OpenOcd {
+            self.apply_openocd_defaults(&mut draft.openocd);
+        }
+        self.flash_draft = Some(draft);
+    }
+
+    fn set_flash_tool(&mut self, tool: FlashTool) {
+        self.build_config.flash_tool = tool;
+        if tool == FlashTool::OpenOcd {
+            let mut openocd = self.build_config.openocd.clone();
+            self.apply_openocd_defaults(&mut openocd);
+            self.build_config.openocd = openocd;
+        }
+        self.persist_build_config();
+    }
+
+    fn set_openocd_path(&mut self, path: String) {
+        self.build_config.openocd.executable = path;
+        self.persist_build_config();
+    }
+
+    fn browse_openocd(&mut self) {
+        let mut dialog = rfd::FileDialog::new().set_title("选择 OpenOCD 可执行文件");
+        if cfg!(target_os = "windows") {
+            dialog = dialog.add_filter("OpenOCD", &["exe"]);
+        }
+        let current = self.build_config.openocd.executable.trim();
+        if let Some(parent) = Path::new(current)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty() && parent.is_dir())
+        {
+            dialog = dialog.set_directory(parent);
+        }
+        if let Some(path) = dialog.pick_file() {
+            self.set_openocd_path(util::display_path(&path));
+        }
+    }
+
+    fn save_flash_config(&mut self, draft: FlashDraft) {
+        self.build_config.flash_tool = draft.tool;
+        self.build_config.flash_command = draft.command.trim().to_owned();
+        self.build_config.openocd = draft.openocd.normalized();
+        self.persist_build_config();
+    }
+
     fn open_build_options(&mut self) {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             return;
@@ -2453,17 +2766,14 @@ impl App {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        let modal_open = self.settings_draft.is_some()
-            || self.pending.is_some()
-            || self.meta_draft.is_some()
-            || self.meta_add.is_some()
-            || self.build_options_draft.is_some();
+        let modal_open = self.has_modal();
         if modal_open {
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 self.settings_draft = None;
                 self.pending = None;
                 self.meta_draft = None;
                 self.meta_add = None;
+                self.flash_draft = None;
                 self.build_options_draft = None;
             }
             return;
@@ -2790,10 +3100,6 @@ impl App {
         if self.debug.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.debug.open = false;
         }
-        if self.completion.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.completion.open = false;
-            self.focus_editor = true;
-        }
         if self.goto_line.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.goto_line.open = false;
             self.focus_editor = true;
@@ -3002,6 +3308,7 @@ impl App {
                     if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
                         self.project_meta = ProjectMeta::detect(&root);
                     }
+                    self.member_index = None;
                     self.refresh_support_packs();
                     self.refresh_git_status();
                 }
@@ -3017,6 +3324,10 @@ impl App {
                 Action::AddMetaItem(field) => self.open_meta_add(field),
                 Action::EditBuildOptions => self.open_build_options(),
                 Action::AddSupportPack => self.add_support_pack(),
+                Action::EditFlashConfig => self.open_flash_config(),
+                Action::SetFlashTool(tool) => self.set_flash_tool(tool),
+                Action::SetOpenOcdPath(path) => self.set_openocd_path(path),
+                Action::BrowseOpenOcd => self.browse_openocd(),
                 Action::ClearLog => {
                     self.build.log.clear();
                 }
@@ -3185,6 +3496,7 @@ impl eframe::App for App {
         self.refresh_diagnostics();
         self.handle_close_request(&ctx);
         self.handle_shortcuts(&ctx);
+        self.handle_completion_keys(&ctx);
         self.handle_dropped_files(&ctx);
         self.style_native_window(&ctx, frame);
 
@@ -3195,6 +3507,7 @@ impl eframe::App for App {
         self.show_side_panel(ui, &mut actions);
         self.show_output_panel(ui, &mut actions);
         self.show_center(ui, &mut actions);
+        self.update_completion(&ctx);
 
         if self.settings_draft.is_some() {
             self.show_settings_modal(&ctx);
@@ -3212,15 +3525,15 @@ impl eframe::App for App {
             self.show_meta_add_modal(&ctx);
             actions.clear();
         }
+        if self.flash_draft.is_some() {
+            self.show_flash_modal(&ctx);
+            actions.clear();
+        }
         if self.build_options_draft.is_some() {
             self.show_build_options_modal(&ctx);
             actions.clear();
         }
-        let modal_open = self.settings_draft.is_some()
-            || self.pending.is_some()
-            || self.meta_draft.is_some()
-            || self.meta_add.is_some()
-            || self.build_options_draft.is_some();
+        let modal_open = self.has_modal();
         if self.project_search.open && !modal_open {
             self.show_project_search(&ctx, &mut actions);
         }
@@ -3256,6 +3569,7 @@ impl eframe::App for App {
             && self.pending.is_none()
             && self.meta_draft.is_none()
             && self.meta_add.is_none()
+            && self.flash_draft.is_none()
             && self.build_options_draft.is_none()
         {
             self.apply_actions(&ctx, actions);
@@ -3477,9 +3791,12 @@ impl App {
 
                         ui.add_space(6.0);
                         let flash_tip = if can_flash {
-                            "调用配置的烧录命令（在本地工程目录执行）"
+                            match self.build_config.flash_tool {
+                                FlashTool::OpenOcd => "使用 OpenOCD 烧录（本地工程目录）",
+                                FlashTool::Custom => "调用配置的烧录命令（本地工程目录）",
+                            }
                         } else if has_project {
-                            "尚未配置烧录命令，请打开设置填写"
+                            "尚未配置烧录，请在左侧“烧录配置”中设置"
                         } else {
                             "请先导入工程并配置构建环境"
                         };

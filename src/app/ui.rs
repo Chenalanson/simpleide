@@ -728,20 +728,155 @@ impl App {
         }
 
         meta_group(ui, "烧录配置", true, |ui| {
-            let flash = self.build_config.flash_command.trim();
-            meta_row(
-                ui,
-                "烧录命令",
-                if flash.is_empty() { "未配置" } else { flash },
-            );
-            if let Some(device) = &meta.device {
-                meta_row(ui, "芯片名称", device);
+            let mut tool = self.build_config.flash_tool;
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [70.0, 18.0],
+                    Label::new(
+                        RichText::new("烧录工具")
+                            .size(11.0)
+                            .color(theme::TEXT_FAINT),
+                    ),
+                );
+                egui::ComboBox::from_id_salt("simple_embedded_flash_tool")
+                    .selected_text(
+                        RichText::new(tool.label())
+                            .size(11.5)
+                            .color(theme::TEXT_DIM),
+                    )
+                    .width(190.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut tool, FlashTool::Custom, "自定义命令");
+                        ui.selectable_value(&mut tool, FlashTool::OpenOcd, "OpenOCD");
+                    });
+            });
+            if tool != self.build_config.flash_tool {
+                actions.push(Action::SetFlashTool(tool));
             }
-            if let Some(driver) = &meta.flash_driver {
-                meta_row(ui, "烧录驱动", driver);
+
+            if self.build_config.flash_tool == FlashTool::OpenOcd {
+                let current = self.build_config.openocd.executable.trim().to_owned();
+                let mut chosen = current.clone();
+                let mut browse = false;
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [70.0, 18.0],
+                        Label::new(
+                            RichText::new("工具路径")
+                                .size(11.0)
+                                .color(theme::TEXT_FAINT),
+                        ),
+                    );
+                    let short = if current.is_empty() || current.eq_ignore_ascii_case("openocd") {
+                        "openocd".to_owned()
+                    } else {
+                        Path::new(&current)
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| current.clone())
+                    };
+                    let response = egui::ComboBox::from_id_salt("simple_embedded_openocd_path")
+                        .selected_text(RichText::new(short).size(11.5).color(theme::TEXT_DIM))
+                        .width(174.0)
+                        .show_ui(ui, |ui| {
+                            for candidate in flash::openocd_candidates(&current) {
+                                let label = if candidate.eq_ignore_ascii_case("openocd") {
+                                    "openocd（PATH）".to_owned()
+                                } else {
+                                    candidate.clone()
+                                };
+                                ui.selectable_value(&mut chosen, candidate, label);
+                            }
+                        });
+                    response.response.on_hover_text(if current.is_empty() {
+                        "openocd"
+                    } else {
+                        current.as_str()
+                    });
+                    if ui
+                        .add(small_flat_button("浏览", theme::TEXT_FAINT))
+                        .on_hover_text("选择 openocd 可执行文件")
+                        .clicked()
+                    {
+                        browse = true;
+                    }
+                });
+                if browse {
+                    actions.push(Action::BrowseOpenOcd);
+                } else if chosen != current {
+                    actions.push(Action::SetOpenOcdPath(chosen));
+                }
+                if self
+                    .project
+                    .as_ref()
+                    .is_some_and(|project| !flash::openocd_available(&current, &project.root))
+                {
+                    ui.label(
+                        RichText::new("未找到 OpenOCD，请选择可执行文件")
+                            .size(9.0)
+                            .color(theme::WARNING),
+                    );
+                }
+
+                let openocd = &self.build_config.openocd;
+                let program_file = openocd.program_file.trim();
+                let target_config = openocd.target_config.trim();
+                let interface_config = openocd.interface_config.trim();
+                meta_row(
+                    ui,
+                    "程序文件",
+                    if program_file.is_empty() {
+                        "未配置"
+                    } else {
+                        program_file
+                    },
+                );
+                meta_row(
+                    ui,
+                    "芯片配置",
+                    if target_config.is_empty() {
+                        "未配置"
+                    } else {
+                        target_config
+                    },
+                );
+                meta_row(
+                    ui,
+                    "接口配置",
+                    if interface_config.is_empty() {
+                        "未配置"
+                    } else {
+                        interface_config
+                    },
+                );
+                if let Some(device) = &meta.device {
+                    meta_row(ui, "芯片名称", device);
+                }
+            } else {
+                let flash = self.build_config.flash_command.trim();
+                meta_row(
+                    ui,
+                    "烧录命令",
+                    if flash.is_empty() { "未配置" } else { flash },
+                );
+                if let Some(device) = &meta.device {
+                    meta_row(ui, "芯片名称", device);
+                }
+                if let Some(driver) = &meta.flash_driver {
+                    meta_row(ui, "烧录驱动", driver);
+                }
+                if let Some(artifact) = &meta.artifact {
+                    meta_row(ui, "程序文件", artifact);
+                }
             }
-            if let Some(artifact) = &meta.artifact {
-                meta_row(ui, "程序文件", artifact);
+
+            ui.add_space(2.0);
+            if ui
+                .add(small_flat_button("编辑", theme::ACCENT))
+                .on_hover_text("编辑烧录工具、程序文件和 OpenOCD 配置")
+                .clicked()
+            {
+                actions.push(Action::EditFlashConfig);
             }
         });
 
@@ -2662,91 +2797,104 @@ impl App {
     }
 
     pub(super) fn show_completion(&mut self, ctx: &egui::Context) {
-        let mut open = self.completion.open;
+        if !self.completion.open || self.has_modal() {
+            return;
+        }
+        let Some(anchor) = self.completion.anchor else {
+            return;
+        };
+        let filtered = self.completion_filtered();
+        if filtered.is_empty() {
+            self.completion.open = false;
+            return;
+        }
+        self.completion.selected = self.completion.selected.min(filtered.len() - 1);
+        let selected = self.completion.selected;
+        let row_height = 20.0;
+        let width = 360.0;
+        let visible = filtered.len().min(9);
+        let height = visible as f32 * row_height + 10.0;
+        let screen = ctx.content_rect();
+        let mut position = egui::pos2(anchor.x, anchor.y + 4.0);
+        if position.y + height > screen.bottom() - 6.0 {
+            position.y = (anchor.y - height - 6.0).max(screen.top() + 6.0);
+        }
+        position.x = position.x.clamp(
+            screen.left() + 6.0,
+            (screen.right() - width - 6.0).max(screen.left() + 6.0),
+        );
+
         let mut chosen = None;
-        let query = self.completion.query.to_lowercase();
-        let filtered = self
-            .completion
-            .items
-            .iter()
-            .filter(|name| name.to_lowercase().contains(&query))
-            .take(120)
-            .cloned()
-            .collect::<Vec<_>>();
-        egui::Window::new("符号补全")
-            .id(Id::new("simple_embedded_completion"))
-            .title_bar(false)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([420.0, 320.0])
-            .min_height(240.0)
-            .frame(
+        egui::Area::new(Id::new("simple_embedded_completion_popup"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(position)
+            .show(ctx, |ui| {
+                ui.set_width(width);
                 Frame::new()
                     .fill(theme::PANEL)
                     .stroke(Stroke::new(1.0_f32, theme::BORDER))
-                    .inner_margin(Margin::same(10))
-                    .corner_radius(6),
-            )
-            .show(ctx, |ui| {
-                ui.set_min_width(380.0);
-                ui.set_min_height(210.0);
-                ui.visuals_mut().override_text_color = Some(theme::TEXT);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("符号补全")
-                            .size(14.0)
-                            .strong()
-                            .color(theme::TEXT),
-                    );
-                    ui.label(
-                        RichText::new(format!("{} 项", filtered.len()))
-                            .size(10.5)
-                            .color(theme::TEXT_FAINT),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if window_close_button(ui) {
-                            open = false;
-                        }
-                    });
-                });
-                let query_response = ui.add(
-                    TextEdit::singleline(&mut self.completion.query)
-                        .id(Id::new("simple_embedded_completion_filter"))
-                        .font(FontId::monospace(12.0))
-                        .text_color(theme::TEXT)
-                        .background_color(theme::BG)
-                        .desired_width(360.0)
-                        .hint_text(RichText::new("过滤符号").color(theme::TEXT_FAINT)),
-                );
-                if query_response.lost_focus()
-                    && ui.input(|input| input.key_pressed(egui::Key::Enter))
-                {
-                    chosen = filtered.first().cloned();
-                }
-                ui.separator();
-                ScrollArea::vertical()
-                    .id_salt("simple_embedded_completion_list")
-                    .max_height(220.0)
-                    .auto_shrink([false, false])
+                    .corner_radius(6)
+                    .shadow(ui.style().visuals.popup_shadow)
+                    .inner_margin(Margin::symmetric(4, 4))
                     .show(ui, |ui| {
-                        for name in &filtered {
-                            if ui
-                                .selectable_label(
-                                    false,
-                                    RichText::new(name)
-                                        .monospace()
-                                        .size(12.0)
-                                        .color(theme::INFO),
-                                )
-                                .clicked()
-                            {
-                                chosen = Some(name.clone());
-                            }
-                        }
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ScrollArea::vertical()
+                            .id_salt("simple_embedded_completion_list")
+                            .max_height(row_height * 9.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for (row, index) in filtered.iter().enumerate() {
+                                    let item = &self.completion.items[*index];
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), row_height),
+                                        Sense::click(),
+                                    );
+                                    let response =
+                                        response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                                    if row == selected {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            CornerRadius::same(3),
+                                            Color32::from_rgb(36, 84, 108),
+                                        );
+                                    } else if response.hovered() {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            CornerRadius::same(3),
+                                            Color32::from_rgb(28, 49, 63),
+                                        );
+                                    }
+                                    let name = item.name.chars().take(40).collect::<String>();
+                                    ui.painter().text(
+                                        egui::pos2(rect.left() + 6.0, rect.center().y),
+                                        Align2::LEFT_CENTER,
+                                        name,
+                                        FontId::monospace(12.0),
+                                        theme::TEXT,
+                                    );
+                                    ui.painter().text(
+                                        egui::pos2(rect.right() - 6.0, rect.center().y),
+                                        Align2::RIGHT_CENTER,
+                                        item.kind.label(),
+                                        FontId::proportional(9.0),
+                                        item.kind.color(),
+                                    );
+                                    let hover = match &item.detail {
+                                        Some(detail) => format!("{}  {}", item.name, detail),
+                                        None => item.name.clone(),
+                                    };
+                                    if response.on_hover_text(hover).clicked() {
+                                        chosen = Some(*index);
+                                    }
+                                    if row == selected {
+                                        ui.scroll_to_rect(rect, None);
+                                    }
+                                }
+                            });
                     });
             });
-        self.completion.open = open;
-        if let Some(name) = chosen {
+        if let Some(index) = chosen {
+            let name = self.completion.items[index].name.clone();
             self.insert_completion(ctx, &name);
         }
     }
@@ -3114,6 +3262,8 @@ impl App {
         let mut response: Option<egui::Response> = None;
         let mut gutter: Option<(Arc<egui::Galley>, egui::Pos2)> = None;
         let mut scroll_output = None;
+        let mut completion_anchor = None;
+        let mut editor_clicked = false;
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.allocate_ui_with_layout(
@@ -3159,7 +3309,13 @@ impl App {
                                         ));
                                         state.store(ui.ctx(), output.response.response.id);
                                     }
+                                    let caret = output
+                                        .galley
+                                        .pos_from_cursor(egui::text::CCursor::new(doc.cursor_index))
+                                        .translate(output.galley_pos.to_vec2());
+                                    completion_anchor = Some(caret.left_bottom());
                                 }
+                                editor_clicked = output.response.response.clicked();
                                 if scroll_cursor {
                                     let caret = output
                                         .galley
@@ -3192,6 +3348,14 @@ impl App {
             }
         });
         let scroll_output = scroll_output.expect("scroll area is always created");
+        if is_active_pane {
+            if let Some(anchor) = completion_anchor {
+                self.completion.anchor = Some(anchor);
+            }
+            if editor_clicked {
+                self.completion.open = false;
+            }
+        }
 
         if let Some((galley, galley_pos)) = &gutter {
             let viewport = scroll_output.inner_rect;
@@ -3773,6 +3937,197 @@ impl App {
         }
     }
 
+    pub(super) fn show_flash_modal(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.flash_draft.take() else {
+            return;
+        };
+        let root = self.project.as_ref().map(|project| project.root.clone());
+        let mut close = false;
+        let mut save = false;
+
+        let modal = egui::Modal::new(Id::new("simple_embedded_flash_modal"))
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(20, 16)),
+            )
+            .backdrop_color(Color32::from_black_alpha(170));
+        modal.show(ctx, |ui| {
+            ui.set_width(560.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("烧录配置")
+                        .size(18.0)
+                        .strong()
+                        .color(theme::TEXT),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if window_close_button(ui) {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("保存在本机工程设置中；烧录始终在本地工程目录执行。")
+                    .size(10.5)
+                    .color(theme::TEXT_FAINT),
+            );
+            ui.add_space(10.0);
+
+            ui.horizontal(|ui| {
+                if segment_button(ui, draft.tool == FlashTool::Custom, "自定义命令") {
+                    draft.tool = FlashTool::Custom;
+                    draft.error = None;
+                }
+                if segment_button(ui, draft.tool == FlashTool::OpenOcd, "OpenOCD") {
+                    draft.tool = FlashTool::OpenOcd;
+                    self.apply_openocd_defaults(&mut draft.openocd);
+                    draft.error = None;
+                }
+            });
+            ui.add_space(10.0);
+
+            match draft.tool {
+                FlashTool::Custom => {
+                    form_line(
+                        ui,
+                        "命令",
+                        &mut draft.command,
+                        "例如 JLink.exe -CommanderScript flash.jlink",
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(
+                            "命令在工程根目录执行，留空则烧录按钮禁用；需要自行保证工具在 PATH 中。",
+                        )
+                        .size(9.5)
+                        .color(theme::TEXT_FAINT),
+                    );
+                }
+                FlashTool::OpenOcd => {
+                    settings_path_row(
+                        ui,
+                        "OpenOCD",
+                        &mut draft.openocd.executable,
+                        "选择 openocd 可执行文件",
+                        "openocd",
+                    );
+                    ui.add_space(4.0);
+                    form_line(
+                        ui,
+                        "程序文件",
+                        &mut draft.openocd.program_file,
+                        "${ExecutableName}.hex",
+                    );
+                    ui.add_space(4.0);
+                    form_line(
+                        ui,
+                        "芯片配置",
+                        &mut draft.openocd.target_config,
+                        "例如 stm32f1x.cfg",
+                    );
+                    ui.add_space(4.0);
+                    form_line(
+                        ui,
+                        "接口配置",
+                        &mut draft.openocd.interface_config,
+                        "例如 stlink.cfg",
+                    );
+                    ui.add_space(5.0);
+                    ui.label(
+                        RichText::new(
+                            "程序文件支持 ${ExecutableName}、${ProjectName}、${workspaceFolder}；芯片/接口只写文件名时自动补 target/ 或 interface/。",
+                        )
+                        .size(9.5)
+                        .color(theme::TEXT_FAINT),
+                    );
+                    if root.as_deref().is_some_and(|root| {
+                        !flash::openocd_available(&draft.openocd.executable, root)
+                    }) {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(
+                                "当前路径未找到 OpenOCD；可以点“浏览”选择 openocd.exe，或稍后再安装。",
+                            )
+                            .size(9.5)
+                            .color(theme::WARNING),
+                        );
+                    }
+                    if let Some(root) = &root {
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new("命令预览")
+                                .size(10.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                        ui.add_space(3.0);
+                        match flash::preview(&draft.openocd, root) {
+                            Ok(command) => {
+                                Frame::new()
+                                    .fill(theme::BG)
+                                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                                    .corner_radius(6)
+                                    .inner_margin(Margin::symmetric(7, 5))
+                                    .show(ui, |ui| {
+                                        ui.add(
+                                            Label::new(
+                                                RichText::new(command)
+                                                    .size(10.5)
+                                                    .monospace()
+                                                    .color(theme::TEXT_DIM),
+                                            )
+                                            .wrap(),
+                                        );
+                                    });
+                            }
+                            Err(err) => {
+                                ui.label(
+                                    RichText::new(format!("命令预览不可用：{err}"))
+                                        .size(9.5)
+                                        .color(theme::WARNING),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(error) = &draft.error {
+                ui.add_space(8.0);
+                ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+            }
+
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(theme::primary_button("保存")).clicked() {
+                        save = true;
+                    }
+                    if ui.add(theme::secondary_button("取消")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+
+        if save {
+            if draft.tool == FlashTool::OpenOcd {
+                draft.openocd = draft.openocd.normalized();
+                if !flash::openocd_ready(&draft.openocd) {
+                    draft.error = Some("OpenOCD 需要填写程序文件、芯片配置和接口配置".to_owned());
+                    self.flash_draft = Some(draft);
+                    return;
+                }
+            }
+            self.save_flash_config(draft);
+        } else if !close {
+            self.flash_draft = Some(draft);
+        }
+    }
+
     pub(super) fn show_meta_modal(&mut self, ctx: &egui::Context) {
         let Some(mut draft) = self.meta_draft.take() else {
             return;
@@ -4234,20 +4589,30 @@ impl App {
                             "例如 make clean && make",
                         );
                         ui.add_space(3.0);
-                        form_line(
-                            ui,
-                            "Flash",
-                            &mut draft.config.flash_command,
-                            "可选，例如 JLink.exe -CommanderScript flash.jlink",
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(
-                                "Flash 始终在本地工程目录执行，方便直接访问 J-Link / OpenOCD。留空则烧录按钮禁用。",
-                            )
-                            .size(9.0)
-                            .color(theme::TEXT_FAINT),
-                        );
+                        if draft.config.flash_tool == crate::flash::FlashTool::Custom {
+                            form_line(
+                                ui,
+                                "Flash",
+                                &mut draft.config.flash_command,
+                                "可选，例如 JLink.exe -CommanderScript flash.jlink",
+                            );
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(
+                                    "Flash 始终在本地工程目录执行；留空则烧录按钮禁用。",
+                                )
+                                .size(9.0)
+                                .color(theme::TEXT_FAINT),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new(
+                                    "当前烧录工具为 OpenOCD。工具路径、程序文件、芯片配置和接口配置请在左侧“工程信息 → 烧录配置”中编辑。",
+                                )
+                                .size(9.5)
+                                .color(theme::TEXT_FAINT),
+                            );
+                        }
 
                         ui.add_space(12.0);
                         settings_section(ui, "工具链路径 / 额外 PATH");

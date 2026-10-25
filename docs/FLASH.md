@@ -6,10 +6,10 @@
 
 ## 1. 先理解：这里的“烧录”是什么
 
-Simple embedded 不自带烧录算法，也不接管 J-Link / ST-Link 的协议。右侧操作栏的 **烧录** 按钮实际做的是：
+Simple embedded 不自带芯片烧录算法，也不接管 J-Link / ST-Link 的协议；内置的 OpenOCD 配置同样需要本机安装 `openocd`。右侧操作栏的 **烧录** 按钮实际做的是：
 
 1. 保存所有未保存的编辑器文件；
-2. 在**本地工程根目录**执行你在设置里填写的 **Flash** 命令；
+2. 在**本地工程根目录**执行你配置的烧录工具（自定义命令或 OpenOCD）；
 3. 把命令的 stdout/stderr 显示在底部构建输出面板。
 
 它**不会**自动先构建。正确顺序永远是：
@@ -21,25 +21,37 @@ Simple embedded 不自带烧录算法，也不接管 J-Link / ST-Link 的协议�
 另外两条容易忽略的规则：
 
 - **Flash 始终在本机执行**。即使构建目标选的是“远程 SSH”，烧录命令也不会通过 SSH 发到远端。
-- 左侧“工程信息 → 烧录配置”只是**显示**：烧录命令、芯片名称、Keil 的烧录驱动、产物文件。真正修改命令的地方是 **配置**。
+- 左侧“工程信息 → 烧录配置”现在可以直接切换烧录工具；OpenOCD 的工具路径、程序文件、芯片配置和接口配置也在那里编辑，自定义命令仍可在 **配置 → 构建** 中填写。
+- OpenOCD 使用独立参数启动，不经过 shell；程序文件路径有空格时不需要自己加引号。
 
 ---
 
 ## 2. 配置入口
 
-1. 点击左上角工程卡片里的 **配置**（或按 `Ctrl+,`）。
-2. 找到 **Flash** 一行。
-3. 填入完整的烧录命令，例如：
+### 2.1 OpenOCD（推荐先试）
+
+1. 在左侧 **工程信息 → 烧录配置** 中，把 **烧录工具** 切换为 **OpenOCD**。
+2. **工具路径** 下拉会列出 PATH、`Program Files`、PlatformIO 等常见位置；没有找到时点 **浏览** 选择 `openocd.exe`。
+3. 填写 **程序文件**、**芯片配置** 和 **接口配置**；默认值分别是 `${ExecutableName}.hex`、空的芯片配置和 `stlink.cfg`。选择 OpenOCD 时会根据工程芯片自动补一个 STM32 目标（例如 `stm32f1x.cfg`）。
+4. 点分组里的 **编辑**，在弹窗中检查全部字段和命令预览，然后 **保存**。
+5. 右侧操作栏的 **烧录** 按钮会变为可用。
+
+### 2.2 自定义命令
+
+1. 如果当前是 OpenOCD，先在 **工程信息 → 烧录配置** 把 **烧录工具** 切换为 **自定义命令**。
+2. 点击左上角工程卡片里的 **配置**（或按 `Ctrl+,`）。
+3. 在 **构建** 页找到 **Flash** 一行。
+4. 填入完整的烧录命令，例如：
 
    ```text
    "C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD -w build\test32.hex -v -rst
    ```
 
-4. 点击 **保存**。
-5. 右侧操作栏的 **烧录** 按钮会从灰色变为可用。
+5. 点击 **保存**。
+6. 右侧操作栏的 **烧录** 按钮会从灰色变为可用。
 
-> 命令的工作目录是**工程根目录**，所以 `build\test32.hex` 这种相对路径可以直接用。
-> 命令由 Windows 的 `cmd /S /C` 执行；路径有空格时要用英文双引号包起来。
+> 自定义命令的工作目录是**工程根目录**，所以 `build\test32.hex` 这种相对路径可以直接用。
+> 自定义命令由 Windows 的 `cmd /S /C` 执行；路径有空格时要用英文双引号包起来。
 
 ---
 
@@ -114,21 +126,30 @@ Flash 命令：
 
 ### 4.2 OpenOCD
 
-适用于 ST-Link、J-Link、CMSIS-DAP 等。命令：
+Simple embedded 已内置 OpenOCD 配置，不需要自己拼完整命令。适用于 ST-Link、J-Link、CMSIS-DAP 等。
 
-```text
-openocd -f interface/stlink.cfg -f target/stm32f1x.cfg -c "program build/test32.elf verify reset exit"
-```
+在 **工程信息 → 烧录配置** 中选择 **OpenOCD** 后填写：
+
+- **工具路径**：`openocd` 表示从 PATH 查找；也可以下拉选择检测到的 `openocd.exe`，或点 **浏览**。
+- **程序文件**：默认 `${ExecutableName}.hex`。会从工程输出目录和常见 `build/Debug/Release` 目录里选择最新产物；也可以写成 `build/test32.elf` 或 `${workspaceFolder}/build/test32.hex`。
+- **芯片配置**：只写 `stm32f1x.cfg` 会自动变成 `target/stm32f1x.cfg`；STM32G4 用 `stm32g4x.cfg`。
+- **接口配置**：只写 `stlink.cfg` 会自动变成 `interface/stlink.cfg`；J-Link 用 `jlink.cfg`，CMSIS-DAP 用 `cmsis-dap.cfg`。
+- **编辑** 弹窗底部会显示最终命令预览，例如：
+
+  ```text
+  openocd -f interface/stlink.cfg -f target/stm32f1x.cfg -c "program build/test32.hex verify reset exit"
+  ```
 
 说明：
 
-- `interface/stlink.cfg`：ST-Link。老版本 OpenOCD 可能叫 `interface/stlink-v2.cfg`。
-- `target/stm32f1x.cfg`：STM32F1 系列。STM32G4 用 `target/stm32g4x.cfg`。
-- J-Link 把接口文件换成 `interface/jlink.cfg`；CMSIS-DAP 换成 `interface/cmsis-dap.cfg`。
-- 最后一段 `program ... verify reset exit` 是 OpenOCD 的命令序列，必须整体放进引号。
-- 如果连接不稳定，可以在 `program` 前加 `adapter speed 1000`。
+- 工具路径下拉会检测 PATH、`Program Files`、PlatformIO 的 `tool-openocd` 等常见位置。
+- 程序文件必须已经存在；烧录前请先构建成功。
+- `.bin` 文件需要额外写起始地址，内置 OpenOCD 配置目前要求使用 `.hex`、`.elf` 或 `.axf`。
+- 目前只负责烧录，不会启动 OpenOCD gdb server；调试仍使用 gdb 控制台。
 
 ### 4.3 pyOCD
+
+> 当前版本还没有内置 pyOCD，以下命令请放在 **自定义命令** 中。
 
 安装：
 
@@ -136,7 +157,7 @@ openocd -f interface/stlink.cfg -f target/stm32f1x.cfg -c "program build/test32.
 pip install pyocd
 ```
 
-Flash 命令：
+在 **配置 → 构建 → Flash** 或 **烧录配置 → 编辑 → 自定义命令** 中填写：
 
 ```text
 pyocd flash -t stm32f103xb build/test32.elf
@@ -237,13 +258,17 @@ CubeMX 默认生成的 Makefile **没有** `flash` 目标，不要直接照抄�
 
 ## 5. 工具不在 PATH 里怎么办
 
-两种办法，任选一种：
+三种办法，任选一种：
 
-### 办法一：写绝对路径
+### 办法一：OpenOCD 工具路径下拉 / 浏览
 
-上面的示例都是绝对路径，最省事。路径有空格时一定加双引号。
+在 **烧录配置** 中展开 **工具路径**，选择检测到的 `openocd.exe`，或点 **浏览** 直接选文件。这样不需要改 PATH。
 
-### 办法二：在软件里加 PATH
+### 办法二：写绝对路径
+
+自定义命令的示例都是绝对路径，最省事。路径有空格时一定加双引号。
+
+### 办法三：在软件里加 PATH
 
 打开 **配置**，找到“附加 PATH”（额外工具路径），一行一个目录，例如：
 
@@ -263,13 +288,14 @@ C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin
 ### 烧录按钮是灰色的
 
 - 还没有打开工程；
-- Flash 命令为空；
-- 当前有构建/清理/烧录任务正在运行。
-- 命令填好后必须点 **保存**。
+- 当前有构建/清理/烧录任务正在运行；
+- **自定义命令**：Flash 命令为空；
+- **OpenOCD**：程序文件、芯片配置或接口配置还有一项为空；
+- 在弹窗里修改后需要点 **保存**。
 
 ### 提示 `不是内部或外部命令` / `'openocd' 不是可识别的命令`
 
-命令不在 PATH 里。用绝对路径，或者把工具目录加到“附加 PATH”。
+OpenOCD 不在 PATH 里。展开 **烧录配置 → 工具路径** 选择检测到的 `openocd.exe`，或点 **浏览**；自定义命令则改用绝对路径，或把工具目录加到“附加 PATH”。
 
 ### 提示找不到 ST-Link / J-Link
 
@@ -294,8 +320,9 @@ C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin
 
 ### 提示找不到 `build\test32.hex`
 
-- 先构建成功；
+- 先构建成功；OpenOCD 不会自动构建；
 - 检查 Makefile 的 `TARGET` 是不是 `test32`；
+- 确认 **程序文件** 的变量能解析到实际产物。默认 `${ExecutableName}.hex` 会从常见输出目录里找最新 `.hex`；只有 `.elf` 时改成 `${ExecutableName}.elf`；
 - Clean 之后产物会被删除，需要重新构建；
 - 输出面板里会打印最终产物路径。
 
@@ -312,9 +339,25 @@ C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin
 
 ## 7. 当前 `test32` 的最短配置
 
-假设你已经安装 STM32CubeProgrammer，并且工程构建成功：
+### 7.1 OpenOCD
 
-1. 打开 **配置**；
+假设已经安装 OpenOCD，并且工程构建成功：
+
+1. 在 **工程信息 → 烧录配置** 中把 **烧录工具** 选为 **OpenOCD**；
+2. **工具路径** 选 `openocd`（PATH）或浏览到 `openocd.exe`；
+3. 确认：
+   - 程序文件：`${ExecutableName}.hex`
+   - 芯片配置：`stm32f1x.cfg`
+   - 接口配置：`stlink.cfg`
+4. 点 **编辑** 检查预览，然后保存；
+5. 点 **构建**，确认生成 `build\test32.hex`；
+6. 点 **烧录**，观察输出面板。
+
+### 7.2 STM32CubeProgrammer（自定义命令）
+
+假设已经安装 STM32CubeProgrammer，并且工程构建成功：
+
+1. 打开 **配置**，把 **烧录工具** 保持为 **自定义命令**；
 2. Flash 填：
 
    ```text

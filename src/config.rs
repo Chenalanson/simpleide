@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::build::{RunSpec, TaskKind};
+use crate::flash::{FlashTool, OpenOcdConfig};
 use crate::util::{display_path, project_key, shell_quote_posix};
 
 pub const APP_NAME: &str = "Simple embedded";
@@ -143,7 +144,10 @@ pub struct BuildConfig {
     pub build_command: String,
     pub clean_command: String,
     pub rebuild_command: String,
+    /// Custom flash command. Used when `flash_tool` is `Custom`.
     pub flash_command: String,
+    pub flash_tool: FlashTool,
+    pub openocd: OpenOcdConfig,
     pub ssh_host: String,
     pub ssh_port: u16,
     pub remote_dir: String,
@@ -167,6 +171,8 @@ impl Default for BuildConfig {
             clean_command: String::new(),
             rebuild_command: String::new(),
             flash_command: String::new(),
+            flash_tool: FlashTool::Custom,
+            openocd: OpenOcdConfig::default(),
             ssh_host: String::new(),
             ssh_port: 22,
             remote_dir: String::new(),
@@ -190,6 +196,12 @@ impl BuildConfig {
     }
 
     pub fn has_command(&self, kind: TaskKind) -> bool {
+        if kind == TaskKind::Flash {
+            return match self.flash_tool {
+                FlashTool::Custom => !self.flash_command.trim().is_empty(),
+                FlashTool::OpenOcd => crate::flash::openocd_ready(&self.openocd),
+            };
+        }
         !self.command(kind).trim().is_empty()
     }
 
@@ -236,6 +248,18 @@ impl BuildConfig {
     }
 
     pub fn make_spec(&self, kind: TaskKind, project_root: &Path) -> Result<RunSpec, String> {
+        if kind == TaskKind::Flash && self.flash_tool == FlashTool::OpenOcd {
+            let mut spec = crate::flash::make_spec(&self.openocd, project_root)?;
+            spec.env_paths = self
+                .extra_paths
+                .iter()
+                .map(|path| path.trim())
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .collect();
+            return Ok(spec);
+        }
+
         let raw = self.command(kind).trim();
         if raw.is_empty() {
             return Err(format!("{} 命令尚未配置", kind.label()));
@@ -836,5 +860,41 @@ mod tests {
         } else {
             assert_eq!(spec.program, "sh");
         }
+    }
+
+    #[test]
+    fn old_settings_default_to_custom_flash() {
+        let config: BuildConfig = serde_json::from_str(
+            r#"{"build_command":"make","flash_command":"JLink.exe flash.jlink"}"#,
+        )
+        .unwrap();
+        assert_eq!(config.flash_tool, FlashTool::Custom);
+        assert!(config.has_command(TaskKind::Flash));
+    }
+
+    #[test]
+    fn openocd_flash_uses_direct_spec_even_over_ssh() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("build")).unwrap();
+        std::fs::write(dir.path().join("build/demo.hex"), b":00000001FF").unwrap();
+        let cfg = BuildConfig {
+            target: BuildTarget::Ssh,
+            build_command: "make".into(),
+            flash_tool: FlashTool::OpenOcd,
+            openocd: OpenOcdConfig {
+                executable: "openocd".into(),
+                program_file: "${ExecutableName}.hex".into(),
+                target_config: "stm32f1x.cfg".into(),
+                interface_config: "stlink.cfg".into(),
+            },
+            ssh_host: "dev@vm".into(),
+            remote_dir: "/home/dev/project".into(),
+            ..BuildConfig::default()
+        };
+        assert!(cfg.has_command(TaskKind::Flash));
+        let spec = cfg.make_spec(TaskKind::Flash, dir.path()).unwrap();
+        assert_eq!(spec.program, "openocd");
+        assert!(spec.display.contains("program build/demo.hex"));
+        assert!(!spec.display.starts_with("ssh"));
     }
 }

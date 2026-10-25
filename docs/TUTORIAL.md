@@ -154,7 +154,9 @@ Simple embedded 会自动检查工程根目录：
 - 右键标签页可 **关闭 / 关闭其他 / 关闭右侧标签页 / 关闭已保存 / 全部关闭**；**保存**、**另存为**；**复制路径 / 复制相对路径 / 复制痕迹导航路径**；**在文件资源管理器中显示**、**在资源管理器视图中显示**；以及 **向右拆分**、**拆分和移动 → 向上拆分**、**取消拆分**。两个拆分窗格都可编辑，点击窗格即可切换
 - 标签页下面是文件路径面包屑（如 `Core > Src > main.c`），从工程根目录开始
 - 最底部状态栏显示当前行/列、缩进、编码、行尾和语言，并集中放置只读、寄存器、数组、符号、格式化、自动换行、保存按钮
-- 当前编辑器只支持单光标和单一矩形列选择，不支持多个独立光标；补全仍可用 `Ctrl+Space`
+- 输入至少 2 个字符后会自动在光标旁弹出补全框；输入 `.` 或 `->` 时补全结构体成员。`↑` / `↓` 选择，`Enter` / `Tab` 插入，`Esc` 关闭；`Ctrl+Space` 可随时手动打开
+- 成员补全是轻量解析，不做完整 C/C++ 语义分析；刚修改的 struct 定义需要先保存，复杂宏展开、模板、继承或函数返回类型可能不会出现在候选里
+- 当前编辑器只支持单光标和单一矩形列选择，不支持多个独立光标
 - `F12` 跳到当前标识符的定义（在工程符号索引中查找）；`Shift+F12` 在工程中查找所有引用
 - 查找 / 替换：`Ctrl+F` 在编辑器右上角弹出浮层，`Ctrl+H` 直接展开替换；`Aa` 区分大小写，`ab` 全字匹配，`.*` 正则；`F3` / `Shift+F3` 上下一个
 - 查找浮层左侧的下拉箭头展开/收起替换行；`AB` 保留大小写；右侧 `≡` 打开全工程搜索；`Alt+C` / `Alt+W` / `Alt+R` / `Alt+P` 分别切换大小写、全字、正则和保留大小写
@@ -253,27 +255,35 @@ powershell -ExecutionPolicy Bypass -File scripts\package-tools.ps1
 
 ## 6. 配置烧录
 
-烧录命令**始终在本地工程目录执行**，这样 J-Link / ST-Link 等工具可以直接访问 USB；即使构建目标选的是远程 SSH，也不会把烧录命令发到远端。
+烧录**始终在本地工程目录执行**，这样 J-Link / ST-Link 等工具可以直接访问 USB；即使构建目标选的是远程 SSH，也不会把烧录命令发到远端。
 
-在 **配置 → Flash** 填写命令，例如：
+在左侧 **工程信息 → 烧录配置** 中配置：
+
+- **烧录工具**：下拉选择 **自定义命令** 或 **OpenOCD**。
+- **OpenOCD**：
+  - **工具路径**：下拉会列出 PATH、Program Files、PlatformIO 等位置的 OpenOCD；也可以点 **浏览** 选择 `openocd.exe`。
+  - **程序文件**：默认 `${ExecutableName}.hex`，会自动解析到当前工程最新的构建产物；也支持 `${ProjectName}`、`${workspaceFolder}`、`${workspaceRoot}`。
+  - **芯片配置**：例如 `stm32f1x.cfg`。只写文件名时会自动补成 `target/stm32f1x.cfg`。
+  - **接口配置**：例如 `stlink.cfg`。只写文件名时会自动补成 `interface/stlink.cfg`。
+  - 点分组里的 **编辑** 可以打开烧录配置弹窗，修改全部字段并查看最终命令预览。
+- **自定义命令**：点 **编辑**，或先把烧录工具切回 **自定义命令**，再打开 **配置 → 构建** 的 Flash 行，填写完整命令，例如：
+  ```text
+  JLink.exe -CommanderScript flash.jlink
+  ```
+
+OpenOCD 找不到程序文件时会直接报错，不会自动构建。正确顺序仍然是 **先构建成功，再烧录**。
+
+pyOCD 目前没有内置，可以先用自定义命令接入：
 
 ```text
-JLink.exe -CommanderScript flash.jlink
+pyocd flash -t stm32f103xb build/firmware.elf
 ```
-
-或者 OpenOCD：
-
-```text
-openocd -f interface/cmsis-dap.cfg -f target/stm32f4x.cfg -c "program build/firmware.elf verify reset exit"
-```
-
-Flash 命令留空时，右侧操作栏的 **烧录** 按钮会禁用。烧录前需要先构建成功；**烧录不会自动构建**。
 
 ST-Link、STM32CubeProgrammer、pyOCD、J-Link、Keil、`.bin` 地址、PATH 配置和常见错误，见单独的详细教程：
 
 **[docs/FLASH.md](FLASH.md)**
 
-> 当前版本没有内置 J-Link MCP 客户端。烧录就是一个可配置的本地命令，因此你可以接任意工具链或封装脚本。
+> 当前版本没有内置 J-Link / pyOCD MCP 客户端。自定义命令和 OpenOCD 都是本地执行，因此也可以接任意封装脚本。
 
 ---
 
