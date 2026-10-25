@@ -20,6 +20,7 @@ mod ignore;
 mod indent;
 mod log;
 mod makefile;
+mod memory;
 mod minimap;
 mod navigation;
 mod project_meta;

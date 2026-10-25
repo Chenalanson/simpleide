@@ -249,6 +249,35 @@ pub fn import(root: &Path, sources: &[PathBuf]) -> Result<Vec<PathBuf>, String> 
 
 /// Read the first SVD entry from a Keil/CMSIS `.pack` so the register browser
 /// can use the package without extracting it into the project.
+/// Read the package description from a `.pack` archive or a standalone
+/// `.pdsc`. Used for device memory information and SVds.
+pub fn read_pdsc(path: &Path) -> Option<String> {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if extension == "pack" {
+        let file = File::open(path).ok()?;
+        let mut archive = ZipArchive::new(file).ok()?;
+        let index = archive.file_names().enumerate().find_map(|(index, name)| {
+            name.ok()
+                .filter(|name| name.to_ascii_lowercase().ends_with(".pdsc"))
+                .map(|_| index)
+        })?;
+        let mut text = String::new();
+        archive
+            .by_index(index)
+            .ok()?
+            .take(MAX_PDSC_BYTES)
+            .read_to_string(&mut text)
+            .ok()?;
+        Some(text)
+    } else {
+        std::fs::read_to_string(path).ok()
+    }
+}
+
 pub fn read_first_svd(path: &Path) -> Option<(String, String)> {
     let file = File::open(path).ok()?;
     let mut archive = ZipArchive::new(file).ok()?;

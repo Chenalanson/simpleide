@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{
     self, Align, Button, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, RichText,
@@ -252,6 +252,7 @@ enum DebugSideTab {
     #[default]
     Variables,
     Registers,
+    Peripherals,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -297,6 +298,8 @@ struct DebugState {
     log: Vec<String>,
     starting: bool,
     pending_continue: bool,
+    /// Target is executing and the primary debug button should show pause.
+    running: bool,
     watch_tab: DebugSideTab,
     watches: Vec<WatchEntry>,
     watch_input: String,
@@ -308,6 +311,11 @@ struct DebugState {
     last_watch_refresh: Option<Instant>,
     auto_watch: bool,
     side_width: f32,
+    peripheral_filter: String,
+    peripheral_values: BTreeMap<u64, String>,
+    peripheral_refresh: Option<u64>,
+    peripheral_id: u64,
+    peripheral_last_refresh: Option<Instant>,
     /// Last source location reported by gdb, used for the execution marker.
     current_source: Option<(PathBuf, usize)>,
     /// Number of console lines already scanned for stop locations.
@@ -367,6 +375,14 @@ struct RenameEntryDraft {
 struct DeleteEntryDraft {
     path: PathBuf,
     is_dir: bool,
+}
+
+struct MemoryDraft {
+    regions: Vec<crate::config::MemoryRegionConfig>,
+    download_address: String,
+    auto: Option<crate::memory::ResolvedMemory>,
+    restored: bool,
+    error: Option<String>,
 }
 
 #[derive(Default)]
@@ -614,6 +630,7 @@ enum Action {
     OpenArrayGenerator,
     OpenDebug,
     DebugContinue,
+    DebugPause,
     DebugStepOver,
     DebugStepInto,
     DebugFinish,
@@ -645,6 +662,7 @@ enum Action {
     AddSupportPack,
     ImportSupportPack(PathBuf),
     EditFlashConfig,
+    EditMemoryLayout,
     SetFlashTool(FlashTool),
     SetOpenOcdPath(String),
     BrowseOpenOcd,
@@ -702,6 +720,9 @@ pub struct App {
     create_entry: Option<CreateEntryDraft>,
     rename_entry: Option<RenameEntryDraft>,
     delete_entry: Option<DeleteEntryDraft>,
+    memory_draft: Option<MemoryDraft>,
+    memory_layout: Option<crate::memory::ResolvedMemory>,
+    memory_usage_cache: Option<(PathBuf, SystemTime, Option<crate::memory::MemoryUsage>)>,
     file_clipboard: Option<FileClipboard>,
     image_preview: Option<ImagePreviewState>,
     output_view: OutputView,
@@ -779,6 +800,9 @@ impl App {
             create_entry: None,
             rename_entry: None,
             delete_entry: None,
+            memory_draft: None,
+            memory_layout: None,
+            memory_usage_cache: None,
             file_clipboard: None,
             image_preview: None,
             output_view: OutputView::default(),
@@ -923,6 +947,9 @@ impl App {
         self.debug.watch_refresh = None;
         self.debug.last_watch_refresh = None;
         self.debug.registers.clear();
+        self.debug.peripheral_values.clear();
+        self.debug.peripheral_refresh = None;
+        self.debug.peripheral_last_refresh = None;
         let mut config_in_project = from_project;
         if !from_project && config_error.is_none() {
             match crate::config::ProjectSettings::save(&root, &config, &self.project_debug) {
@@ -963,6 +990,7 @@ impl App {
         self.member_index = None;
         self.completion = CompletionState::default();
         self.build_config = config;
+        self.refresh_memory_layout();
         self.tree = Some(FileTree::new(
             root.clone(),
             self.settings.show_hidden,
@@ -1292,7 +1320,7 @@ impl App {
             self.settings.respect_gitignore,
             &self.settings.ignore_patterns,
         );
-        match crate::registers::scan_project(&root, &ignore) {
+        match crate::registers::scan_project(&root, &ignore, self.project_meta.device.as_deref()) {
             Ok(index) => {
                 self.registers.items = index.items;
                 self.registers.source = index.source;
@@ -1508,6 +1536,7 @@ impl App {
             || self.create_entry.is_some()
             || self.rename_entry.is_some()
             || self.delete_entry.is_some()
+            || self.memory_draft.is_some()
     }
 
     fn handle_completion_keys(&mut self, ctx: &egui::Context) {
@@ -1727,6 +1756,20 @@ impl App {
         let Some(target) = self.debug_target() else {
             return self.debug_start_error("未找到调试程序，请在设置中填写 ELF/AXF/EXE 路径");
         };
+        if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
+            if let Some(source) = newest_newer_source(&target, &root) {
+                self.set_toast(
+                    format!(
+                        "调试程序比 {} 旧，断点/变量可能不匹配；请先重新构建",
+                        util::display_path(&source)
+                    ),
+                    Severity::Warning,
+                );
+            }
+        }
+        if self.registers.items.is_empty() {
+            self.refresh_registers();
+        }
         let kind = crate::debugger::target_kind(&target);
         let configured_gdb = if self.project_debug.gdb_path.trim().is_empty() {
             self.settings.gdb_path.clone()
@@ -1804,6 +1847,7 @@ impl App {
         self.debug_start = Some(rx);
         self.debug.starting = true;
         self.debug.pending_continue = false;
+        self.debug.running = false;
         self.debug.open = true;
         self.debug.error = None;
         self.debug.log.clear();
@@ -1813,6 +1857,9 @@ impl App {
         self.debug.current_source = None;
         self.debug.log_scan = 0;
         self.debug.registers.clear();
+        self.debug.peripheral_values.clear();
+        self.debug.peripheral_refresh = None;
+        self.debug.peripheral_last_refresh = None;
         for watch in &mut self.debug.watches {
             watch.value.clear();
             watch.type_name.clear();
@@ -1859,6 +1906,7 @@ impl App {
                 self.debug.open = true;
                 self.debug.log_scan = 0;
                 self.debug.current_source = None;
+                self.debug.running = false;
                 self.refresh_debug_watch();
                 let continue_now = self.debug.pending_continue;
                 self.debug.pending_continue = false;
@@ -1870,6 +1918,7 @@ impl App {
                             session.send("run");
                             session.started = true;
                         }
+                        self.debug.running = true;
                     }
                 }
                 self.set_toast("调试会话已启动", Severity::Success);
@@ -1878,6 +1927,7 @@ impl App {
                 self.debug_start = None;
                 self.debug.starting = false;
                 self.debug.pending_continue = false;
+                self.debug.running = false;
                 self.debug.error = Some(err.clone());
                 self.debug.open = true;
                 self.set_toast(err, Severity::Error);
@@ -1887,6 +1937,7 @@ impl App {
                 self.debug_start = None;
                 self.debug.starting = false;
                 self.debug.pending_continue = false;
+                self.debug.running = false;
                 let message = "调试启动失败：后台线程已退出".to_owned();
                 self.debug.error = Some(message.clone());
                 self.debug.open = true;
@@ -1908,6 +1959,10 @@ impl App {
 
     fn debug_continue(&mut self) {
         self.focus_debug_output();
+        if self.debug.running {
+            self.debug_pause();
+            return;
+        }
         if self.debug.starting {
             self.debug.pending_continue = true;
             return;
@@ -1926,7 +1981,18 @@ impl App {
             } else {
                 session.send("continue");
             }
+            self.debug.running = true;
         }
+    }
+
+    fn debug_pause(&mut self) {
+        self.focus_debug_output();
+        let Some(session) = &mut self.debug.session else {
+            self.set_toast("调试会话尚未启动", Severity::Info);
+            return;
+        };
+        session.interrupt();
+        self.set_toast("正在暂停目标", Severity::Info);
     }
 
     fn debug_command(&mut self, command: &str) {
@@ -1940,15 +2006,29 @@ impl App {
             return;
         };
         session.send(command);
+        let command = command.trim().to_ascii_lowercase();
+        if [
+            "continue", "c", "run", "r", "step", "s", "next", "n", "finish",
+        ]
+        .iter()
+        .any(|value| command == *value || command.starts_with(&format!("{value} ")))
+        {
+            self.debug.running = true;
+        }
     }
 
     /// Step commands often only print the source text (`95  while (1)`) without
     /// `at file:line`. Ask gdb for the current frame afterwards so the editor
     /// can still follow the execution line.
     fn debug_step_command(&mut self, command: &str) {
+        if self.debug.running {
+            self.set_toast("目标正在运行，请先暂停", Severity::Info);
+            return;
+        }
         self.debug_command(command);
         if let Some(session) = &mut self.debug.session {
             session.send("frame");
+            self.debug.running = true;
         }
     }
 
@@ -1956,6 +2036,7 @@ impl App {
         if self.debug_start.take().is_some() {
             self.debug.starting = false;
             self.debug.pending_continue = false;
+            self.debug.running = false;
             self.debug.error = None;
             self.debug.log.push("[调试启动已取消]".to_owned());
             return;
@@ -1968,11 +2049,15 @@ impl App {
         }
         self.debug.starting = false;
         self.debug.pending_continue = false;
+        self.debug.running = false;
         self.debug.watch_refresh = None;
         self.debug.last_watch_refresh = None;
         self.debug.error = None;
         self.debug.current_source = None;
         self.debug.log_scan = 0;
+        self.debug.peripheral_values.clear();
+        self.debug.peripheral_refresh = None;
+        self.debug.peripheral_last_refresh = None;
     }
 
     /// Follow new gdb console output and open the file/line where the target
@@ -1990,6 +2075,16 @@ impl App {
         }
         let fresh = session.log[self.debug.log_scan..].to_vec();
         self.debug.log_scan = session.log.len();
+        if fresh.iter().any(|line| line.contains("Continuing.")) {
+            self.debug.running = true;
+        }
+        if fresh.iter().any(|line| {
+            line.contains("exited normally")
+                || line.contains("Program received signal")
+                || line.contains("Remote connection closed")
+        }) {
+            self.debug.running = false;
+        }
         let mut found = None;
         for line in fresh.iter().rev() {
             if let Some((path, line_no)) = crate::debugger::parse_stop_location(line) {
@@ -2026,6 +2121,7 @@ impl App {
         let Some(path) = self.resolve_debug_source(&raw) else {
             return;
         };
+        self.debug.running = false;
         self.debug.current_source = Some((path.clone(), line));
         self.jump_to_debug_source(ctx, &path, line);
         ctx.request_repaint();
@@ -2088,7 +2184,19 @@ impl App {
 
     fn refresh_debug_watch(&mut self) {
         if self.debug.watch_refresh.is_some() {
-            return;
+            let stale = self
+                .debug
+                .last_watch_refresh
+                .is_none_or(|last| last.elapsed() >= Duration::from_secs(4));
+            if !stale {
+                return;
+            }
+            // A lost END marker must not disable Live Watch forever.
+            self.debug.watch_refresh = None;
+            if let Some(session) = &mut self.debug.session {
+                session.watch_output.clear();
+                session.preg_output.clear();
+            }
         }
         let expressions = self
             .debug
@@ -2221,6 +2329,129 @@ impl App {
         }
     }
 
+    fn tick_debug_peripheral(&mut self) {
+        if self.debug.watch_tab != DebugSideTab::Peripherals
+            || !self.debug.auto_watch
+            || self.debug.starting
+            || self.debug.running
+            || !self.settings.output_open
+            || self.output_view != OutputView::Debug
+            || self.debug.session.is_none()
+            || self.debug.peripheral_refresh.is_some()
+        {
+            return;
+        }
+        let due = self
+            .debug
+            .peripheral_last_refresh
+            .is_none_or(|last| last.elapsed() >= Duration::from_millis(1500));
+        if due {
+            self.refresh_debug_peripheral();
+        }
+    }
+
+    fn refresh_debug_peripheral(&mut self) {
+        if self.debug.peripheral_refresh.is_some() {
+            let stale = self
+                .debug
+                .peripheral_last_refresh
+                .is_none_or(|last| last.elapsed() >= Duration::from_secs(4));
+            if !stale {
+                return;
+            }
+            self.debug.peripheral_refresh = None;
+            if let Some(session) = &mut self.debug.session {
+                session.preg_output.clear();
+            }
+        }
+        if self.registers.items.is_empty() {
+            return;
+        }
+        let filter = self.debug.peripheral_filter.trim().to_lowercase();
+        let selected = self
+            .registers
+            .items
+            .iter()
+            .filter(|item| {
+                filter.is_empty()
+                    || item.name.to_lowercase().contains(&filter)
+                    || item.description.to_lowercase().contains(&filter)
+                    || format!("0x{:08X}", item.address)
+                        .to_lowercase()
+                        .contains(&filter)
+            })
+            .take(160)
+            .map(|item| item.address)
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return;
+        }
+        let Some(session) = &mut self.debug.session else {
+            return;
+        };
+        self.debug.peripheral_id = self.debug.peripheral_id.wrapping_add(1).max(1);
+        let id = self.debug.peripheral_id;
+        session.preg_output.clear();
+        session.send(&format!("echo __SE_PREG_BEGIN_{id}__\\n"));
+        for address in selected {
+            session.send(&format!("echo __SE_PREG_V_{id}_{address:08X}__\\n"));
+            session.send(&format!("x/1xw 0x{address:08X}"));
+        }
+        session.send(&format!("echo __SE_PREG_END_{id}__\\n"));
+        self.debug.peripheral_refresh = Some(id);
+        self.debug.peripheral_last_refresh = Some(Instant::now());
+    }
+
+    fn poll_debug_peripheral(&mut self) {
+        let Some(id) = self.debug.peripheral_refresh else {
+            return;
+        };
+        let Some(session) = &mut self.debug.session else {
+            self.debug.peripheral_refresh = None;
+            return;
+        };
+        let end_marker = format!("__SE_PREG_END_{id}__");
+        let Some(end) = session
+            .preg_output
+            .iter()
+            .position(|line| line.contains(&end_marker))
+        else {
+            if session.preg_output.len() > 4000 {
+                session.preg_output.clear();
+                self.debug.peripheral_refresh = None;
+            }
+            return;
+        };
+        let lines = session.preg_output.drain(..=end).collect::<Vec<_>>();
+        self.debug.peripheral_refresh = None;
+        let prefix = format!("__SE_PREG_V_{id}_");
+        let mut current = None;
+        let mut values = BTreeMap::new();
+        for line in lines {
+            let marker = strip_gdb_prompts(line.trim());
+            if marker.contains(&end_marker) {
+                break;
+            }
+            if let Some(rest) = marker.strip_prefix(&prefix) {
+                if let Some(hex) = rest.split("__").next() {
+                    current = u64::from_str_radix(hex.trim(), 16).ok();
+                }
+                continue;
+            }
+            let Some(address) = current else {
+                continue;
+            };
+            if marker.contains("Cannot access memory") {
+                values.insert(address, "无法读取".to_owned());
+                current = None;
+            } else if let Some(value) = parse_memory_word(marker) {
+                values.insert(address, value);
+                current = None;
+            }
+        }
+        self.debug.peripheral_values = values;
+    }
+
     fn add_debug_watch(&mut self, expression: String) {
         let expression = expression.trim().replace(['\n', '\r'], " ");
         if expression.is_empty() {
@@ -2240,6 +2471,10 @@ impl App {
         self.debug.watch_input.clear();
         self.persist_debug_watches();
         self.debug.watch_refresh = None;
+        if let Some(session) = &mut self.debug.session {
+            session.watch_output.clear();
+            session.preg_output.clear();
+        }
         self.refresh_debug_watch();
     }
 
@@ -2250,6 +2485,10 @@ impl App {
         self.debug.watches.remove(index);
         self.persist_debug_watches();
         self.debug.watch_refresh = None;
+        if let Some(session) = &mut self.debug.session {
+            session.watch_output.clear();
+            session.preg_output.clear();
+        }
         self.refresh_debug_watch();
     }
 
@@ -3428,6 +3667,7 @@ impl App {
             }
         }
         self.settings.save();
+        self.refresh_memory_layout();
     }
 
     fn apply_openocd_defaults(&self, openocd: &mut OpenOcdConfig) {
@@ -3552,6 +3792,239 @@ impl App {
         self.persist_build_config();
     }
 
+    fn refresh_memory_layout(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.memory_layout = None;
+            return;
+        };
+        self.memory_layout = crate::memory::resolve(
+            &root,
+            &self.project_meta,
+            &self.support_packs,
+            &self.build_config.memory,
+        );
+    }
+
+    fn open_memory_layout(&mut self) {
+        self.refresh_memory_layout();
+        let auto = self.project.as_ref().map(|project| {
+            crate::memory::resolve(
+                &project.root,
+                &self.project_meta,
+                &self.support_packs,
+                &crate::config::MemoryConfig::default(),
+            )
+        });
+        let auto = auto.flatten();
+        let current = &self.build_config.memory;
+        let mut regions = if current.regions.is_empty() {
+            crate::memory::default_regions(auto.as_ref().map(|memory| memory.layout))
+        } else {
+            crate::memory::normalize_regions(current.regions.clone())
+        };
+        if current.regions.is_empty() {
+            if let Some(start) = crate::memory::parse_number(&current.ram_start) {
+                if let Some(region) = regions.iter_mut().find(|region| region.name == "IRAM1") {
+                    region.start = crate::memory::format_hex(start);
+                }
+            }
+            if let Some(size) = crate::memory::parse_number(&current.ram_size) {
+                if let Some(region) = regions.iter_mut().find(|region| region.name == "IRAM1") {
+                    region.size = crate::memory::format_capacity(size);
+                }
+            }
+            if let Some(start) = crate::memory::parse_number(&current.flash_start) {
+                if let Some(region) = regions.iter_mut().find(|region| region.name == "IROM1") {
+                    region.start = crate::memory::format_hex(start);
+                }
+            }
+            if let Some(size) = crate::memory::parse_number(&current.flash_size) {
+                if let Some(region) = regions.iter_mut().find(|region| region.name == "IROM1") {
+                    region.size = crate::memory::format_capacity(size);
+                }
+            }
+        }
+        let flash_start = crate::memory::primary_start(&regions, crate::config::MemoryKind::Rom)
+            .map(crate::memory::format_hex)
+            .unwrap_or_default();
+        let download_address = if current.download_address.trim().is_empty() {
+            flash_start
+        } else {
+            current.download_address.trim().to_owned()
+        };
+        self.memory_draft = Some(MemoryDraft {
+            regions,
+            download_address,
+            auto,
+            restored: false,
+            error: None,
+        });
+    }
+
+    fn save_memory_layout(&mut self, mut draft: MemoryDraft) {
+        let mut error = None;
+        for region in &mut draft.regions {
+            if !region.enabled {
+                continue;
+            }
+            let Some(start) = crate::memory::parse_number(&region.start) else {
+                error = Some(format!("{} 起始地址无效：{}", region.name, region.start));
+                break;
+            };
+            let Some(size) = crate::memory::parse_number(&region.size) else {
+                error = Some(format!("{} 大小无效：{}", region.name, region.size));
+                break;
+            };
+            if size == 0 {
+                error = Some(format!("{} 大小必须大于 0", region.name));
+                break;
+            }
+            region.start = crate::memory::format_hex(start);
+            region.size = crate::memory::format_capacity(size);
+        }
+        if error.is_none() {
+            let ram_total =
+                crate::memory::regions_total(&draft.regions, crate::config::MemoryKind::Ram);
+            let rom_total =
+                crate::memory::regions_total(&draft.regions, crate::config::MemoryKind::Rom);
+            if ram_total == 0 {
+                error = Some("至少需要启用一个 RAM 区域".to_owned());
+            } else if rom_total == 0 {
+                error = Some("至少需要启用一个 ROM / Flash 区域".to_owned());
+            }
+        }
+        if error.is_none() {
+            let mut has_startup = draft
+                .regions
+                .iter()
+                .any(|region| region.enabled && region.startup);
+            if !has_startup {
+                if let Some(region) = draft
+                    .regions
+                    .iter_mut()
+                    .find(|region| region.enabled && region.kind == crate::config::MemoryKind::Rom)
+                {
+                    region.startup = true;
+                    has_startup = true;
+                }
+            }
+            if !has_startup {
+                error = Some("请选择一个 ROM 启动区域".to_owned());
+            }
+        }
+        if let Some(error) = error {
+            draft.error = Some(error);
+            self.memory_draft = Some(draft);
+            return;
+        }
+
+        let download = crate::memory::parse_number(&draft.download_address);
+        if !draft.download_address.trim().is_empty() && download.is_none() {
+            draft.error = Some("下载起始地址无效".to_owned());
+            self.memory_draft = Some(draft);
+            return;
+        }
+
+        let ram_total =
+            crate::memory::regions_total(&draft.regions, crate::config::MemoryKind::Ram);
+        let rom_total =
+            crate::memory::regions_total(&draft.regions, crate::config::MemoryKind::Rom);
+        let ram_start =
+            crate::memory::primary_start(&draft.regions, crate::config::MemoryKind::Ram)
+                .map(crate::memory::format_hex)
+                .unwrap_or_default();
+        let flash_start =
+            crate::memory::primary_start(&draft.regions, crate::config::MemoryKind::Rom)
+                .map(crate::memory::format_hex)
+                .unwrap_or_default();
+        let config = crate::config::MemoryConfig {
+            regions: draft.regions.clone(),
+            ram_size: crate::memory::format_capacity(ram_total),
+            flash_size: crate::memory::format_capacity(rom_total),
+            ram_start,
+            flash_start,
+            download_address: download.map(crate::memory::format_hex).unwrap_or_default(),
+        };
+        self.build_config.memory = config;
+        self.persist_build_config();
+        self.refresh_memory_layout();
+        self.memory_draft = None;
+        self.set_toast("内存布局已保存", Severity::Success);
+    }
+
+    fn build_memory_usage(&mut self) -> Option<crate::memory::MemoryUsage> {
+        if self.build.is_running() {
+            return None;
+        }
+        let len = self.build.log.len();
+        let start = len.saturating_sub(200);
+        let mut text = String::new();
+        for index in start..len {
+            if let Some(line) = self.build.log.line_at(index) {
+                text.push_str(&line.plain);
+                text.push('\n');
+            }
+        }
+        if let Some(usage) = crate::memory::parse_size_output(&text) {
+            return Some(usage);
+        }
+
+        let target = self.debug_target()?;
+        let candidates = [
+            target.clone(),
+            target.with_extension("elf"),
+            target.with_extension("axf"),
+        ];
+        for candidate in candidates {
+            let Ok(metadata) = std::fs::metadata(&candidate) else {
+                continue;
+            };
+            let Ok(modified) = metadata.modified() else {
+                continue;
+            };
+            if let Some((path, time, usage)) = &self.memory_usage_cache {
+                if same_path(path, &candidate) && *time == modified {
+                    return *usage;
+                }
+            }
+            let usage = crate::memory::usage_from_elf(&candidate);
+            if usage.is_some() {
+                self.memory_usage_cache = Some((candidate, modified, usage));
+                return usage;
+            }
+        }
+        None
+    }
+
+    fn memory_usage_summary(&mut self) -> Option<String> {
+        let usage = self.build_memory_usage()?;
+        Some(crate::memory::format_usage(
+            usage,
+            self.memory_layout.as_ref().map(|memory| memory.layout),
+        ))
+    }
+
+    fn memory_layout_summary(&self) -> Option<String> {
+        let resolved = self.memory_layout.as_ref()?;
+        let layout = resolved.layout;
+        let mut parts = Vec::new();
+        if layout.flash.is_valid() {
+            parts.push(format!(
+                "Flash {} @ {}",
+                crate::memory::format_size(layout.flash.size),
+                crate::memory::format_hex(layout.flash.start)
+            ));
+        }
+        if layout.ram.is_valid() {
+            parts.push(format!(
+                "RAM {} @ {}",
+                crate::memory::format_size(layout.ram.size),
+                crate::memory::format_hex(layout.ram.start)
+            ));
+        }
+        (!parts.is_empty()).then(|| format!("{}（{}）", parts.join(" · "), resolved.source))
+    }
+
     fn open_build_options(&mut self) {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             return;
@@ -3633,6 +4106,7 @@ impl App {
                 self.create_entry = None;
                 self.rename_entry = None;
                 self.delete_entry = None;
+                self.memory_draft = None;
             }
             return;
         }
@@ -3691,6 +4165,7 @@ impl App {
             chord_split_up,
             split_in_group,
             goto_line_open,
+            memory_layout_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -3747,6 +4222,7 @@ impl App {
                     && input.modifiers.shift
                     && input.key_pressed(egui::Key::Backslash),
                 command && !input.modifiers.shift && input.key_pressed(egui::Key::G),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::M),
             )
         });
 
@@ -3895,6 +4371,9 @@ impl App {
             } else {
                 self.set_toast("请先打开一个文件", Severity::Info);
             }
+        }
+        if memory_layout_open {
+            self.open_memory_layout();
         }
         if chord_k {
             self.chord_k_at = Some(Instant::now());
@@ -4524,6 +5003,7 @@ impl App {
             packs = crate::support_pack::scan_keil_installed(self.project_meta.device.as_deref());
         }
         self.support_packs = packs;
+        self.refresh_memory_layout();
     }
 
     fn add_support_pack(&mut self) {
@@ -4603,6 +5083,7 @@ impl App {
                     self.focus_debug_output();
                 }
                 Action::DebugContinue => self.debug_continue(),
+                Action::DebugPause => self.debug_pause(),
                 Action::DebugStepOver => self.debug_step_command("next"),
                 Action::DebugStepInto => self.debug_step_command("step"),
                 Action::DebugFinish => self.debug_step_command("finish"),
@@ -4691,6 +5172,7 @@ impl App {
                 Action::AddSupportPack => self.add_support_pack(),
                 Action::ImportSupportPack(path) => self.import_support_pack_files(vec![path]),
                 Action::EditFlashConfig => self.open_flash_config(),
+                Action::EditMemoryLayout => self.open_memory_layout(),
                 Action::SetFlashTool(tool) => self.set_flash_tool(tool),
                 Action::SetOpenOcdPath(path) => self.set_openocd_path(path),
                 Action::BrowseOpenOcd => self.browse_openocd(),
@@ -4935,8 +5417,98 @@ fn parse_register_line(line: &str) -> Option<RegisterValue> {
     })
 }
 
+fn parse_memory_word(line: &str) -> Option<String> {
+    let token = line.split_whitespace().last()?;
+    let hex = token
+        .strip_prefix("0x")
+        .or_else(|| token.strip_prefix("0X"))?;
+    if hex.is_empty() || !hex.chars().all(|character| character.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(token.to_owned())
+}
+
 fn gdb_source_path(path: &Path) -> String {
     util::display_path(path).replace('\\', "/")
+}
+
+/// Find the newest user source file that is newer than the debug program.
+fn newest_newer_source(target: &Path, root: &Path) -> Option<PathBuf> {
+    let target_time = std::fs::metadata(target)
+        .and_then(|metadata| metadata.modified())
+        .ok()?;
+    let mut newest: Option<(SystemTime, PathBuf)> = None;
+    let mut visited = 0usize;
+    walk_sources(root, target, 0, &mut visited, &mut newest);
+    newest
+        .filter(|(time, _)| *time > target_time)
+        .map(|(_, path)| path)
+}
+
+fn walk_sources(
+    dir: &Path,
+    target: &Path,
+    depth: usize,
+    visited: &mut usize,
+    newest: &mut Option<(SystemTime, PathBuf)>,
+) {
+    if depth > 8 || *visited > 5000 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        *visited += 1;
+        if *visited > 5000 {
+            return;
+        }
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if matches!(
+                name.as_str(),
+                ".git"
+                    | ".svn"
+                    | ".opencode"
+                    | ".simple-embedded"
+                    | "build"
+                    | "target"
+                    | "dist"
+                    | "out"
+                    | "debug"
+                    | "release"
+                    | ".vscode"
+            ) {
+                continue;
+            }
+            walk_sources(&path, target, depth + 1, visited, newest);
+            continue;
+        }
+        if !file_type.is_file() || path == target {
+            continue;
+        }
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !matches!(
+            extension.as_str(),
+            "c" | "h" | "cpp" | "hpp" | "cc" | "hh" | "s" | "asm" | "ld"
+        ) {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+            continue;
+        };
+        if newest.as_ref().is_none_or(|(time, _)| modified > *time) {
+            *newest = Some((modified, path));
+        }
+    }
 }
 
 /// Find the newest build output when the project does not pin a debug program.
@@ -5086,6 +5658,8 @@ impl eframe::App for App {
         self.poll_debug_location(&ctx);
         self.poll_debug_watch();
         self.tick_debug_watch();
+        self.poll_debug_peripheral();
+        self.tick_debug_peripheral();
         if self.debug.starting {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -5141,6 +5715,10 @@ impl eframe::App for App {
             self.show_delete_entry_modal(&ctx);
             actions.clear();
         }
+        if self.memory_draft.is_some() {
+            self.show_memory_layout_modal(&ctx);
+            actions.clear();
+        }
         let modal_open = self.has_modal();
         if self.project_search.open && !modal_open {
             self.show_project_search(&ctx, &mut actions);
@@ -5185,6 +5763,7 @@ impl eframe::App for App {
             && self.create_entry.is_none()
             && self.rename_entry.is_none()
             && self.delete_entry.is_none()
+            && self.memory_draft.is_none()
         {
             self.apply_actions(&ctx, actions);
         }
@@ -5474,6 +6053,7 @@ impl App {
             .unwrap_or(false);
         let debug_has_session = self.debug.session.is_some();
         let debug_starting = self.debug.starting;
+        let memory_summary = self.memory_usage_summary();
         let mut auto_scroll = self.settings.auto_scroll_output;
         let mut toggle_output = false;
         let (status_color, status_text) = if debug_view {
@@ -5615,6 +6195,19 @@ impl App {
                                             .size(11.0)
                                             .color(theme::ERROR),
                                     );
+                                }
+                                if !debug_view {
+                                    if let Some(summary) = &memory_summary {
+                                        ui.add_space(8.0);
+                                        ui.label(
+                                            RichText::new(summary)
+                                                .size(11.0)
+                                                .color(theme::SUCCESS),
+                                        )
+                                        .on_hover_text(
+                                            "Flash = text + data，RAM = data + bss；总量来自链接脚本或芯片支持包",
+                                        );
+                                    }
                                 }
 
                                 if !debug_view {

@@ -158,9 +158,10 @@ Simple embedded 已内置 OpenOCD 配置，不需要自己拼完整命令。适�
 
 说明：
 
+- 程序文件：默认 `${ExecutableName}.hex`；使用 `.bin` 时按“内存布局”里的下载起始地址烧录（OpenOCD 生成 `program ... 0x08000000 verify reset exit`，pyOCD 生成 `--base-address 0x08000000`）。
 - 工具路径下拉会检测 PATH、`Program Files`、PlatformIO 的 `tool-openocd` 等常见位置。
 - 程序文件必须已经存在；烧录前请先构建成功。
-- `.bin` 文件需要额外写起始地址，内置 OpenOCD 配置目前要求使用 `.hex`、`.elf` 或 `.axf`。
+- `.bin` 文件使用“工程信息 → 烧录配置 → 内存布局”里的下载起始地址；OpenOCD 会生成 `program build/test32.bin 0x08000000 verify reset exit`。
 - 调试时会用同一组 OpenOCD 参数启动 gdb server，并由 arm-none-eabi-gdb 连接；烧录和调试不要同时占用同一个探针。
 
 ### 4.3 pyOCD

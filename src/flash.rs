@@ -163,11 +163,15 @@ pub fn infer_interface_config(driver: Option<&str>) -> Option<String> {
 
 /// Build a direct `openocd` invocation. The program is passed as one Tcl
 /// command through `-c`, so it must exist before the flash starts.
-pub fn make_spec(config: &OpenOcdConfig, root: &Path) -> Result<RunSpec, String> {
+pub fn make_spec(
+    config: &OpenOcdConfig,
+    root: &Path,
+    load_address: Option<&str>,
+) -> Result<RunSpec, String> {
     let program = resolve_program_file(&config.program_file, root, true)?;
     let interface = resolve_script(root, &config.interface_config, "interface")?;
     let target = resolve_script(root, &config.target_config, "target")?;
-    let program_command = format!("program {} verify reset exit", tcl_word(&program.command));
+    let program_command = openocd_program_command(&program, load_address)?;
     let executable = resolve_executable(effective_executable(config), root);
     let args: Vec<OsString> = vec![
         "-f".into(),
@@ -194,13 +198,39 @@ pub fn make_spec(config: &OpenOcdConfig, root: &Path) -> Result<RunSpec, String>
     })
 }
 
+fn openocd_program_command(
+    program: &ResolvedProgram,
+    load_address: Option<&str>,
+) -> Result<String, String> {
+    let is_bin = program.command.to_ascii_lowercase().ends_with(".bin");
+    if is_bin {
+        let address = load_address
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "烧录 .bin 需要在“内存布局”里设置下载起始地址".to_owned())?;
+        return Ok(format!(
+            "program {} {} verify reset exit",
+            tcl_word(&program.command),
+            tcl_word(address)
+        ));
+    }
+    Ok(format!(
+        "program {} verify reset exit",
+        tcl_word(&program.command)
+    ))
+}
+
 /// Same composition as [`make_spec`] but does not require the build output to
 /// exist yet. Used by the configuration modal for a live preview.
-pub fn preview(config: &OpenOcdConfig, root: &Path) -> Result<String, String> {
+pub fn preview(
+    config: &OpenOcdConfig,
+    root: &Path,
+    load_address: Option<&str>,
+) -> Result<String, String> {
     let program = resolve_program_file(&config.program_file, root, false)?;
     let interface = resolve_script(root, &config.interface_config, "interface")?;
     let target = resolve_script(root, &config.target_config, "target")?;
-    let program_command = format!("program {} verify reset exit", tcl_word(&program.command));
+    let program_command = openocd_program_command(&program, load_address)?;
     let executable = resolve_executable(effective_executable(config), root);
     Ok(format!(
         "{} -f {} -f {} -c \"{}\"",
@@ -284,7 +314,11 @@ pub fn pyocd_server_spec(config: &PyOcdConfig, root: &Path, port: u16) -> Result
 }
 
 /// Build a direct `pyocd flash` invocation.
-pub fn make_pyocd_spec(config: &PyOcdConfig, root: &Path) -> Result<RunSpec, String> {
+pub fn make_pyocd_spec(
+    config: &PyOcdConfig,
+    root: &Path,
+    load_address: Option<&str>,
+) -> Result<RunSpec, String> {
     let program = resolve_program_file(&config.program_file, root, true)?;
     let target = config.target.trim();
     if target.is_empty() {
@@ -292,13 +326,25 @@ pub fn make_pyocd_spec(config: &PyOcdConfig, root: &Path) -> Result<RunSpec, Str
     }
     let pack = resolve_pack(config, root, true)?;
     let executable = resolve_executable(effective_pyocd_executable(config), root);
+    let base_address = pyocd_base_address(&program, load_address)?;
     let mut args: Vec<OsString> = vec!["flash".into(), "-t".into(), target.into()];
     if let Some(pack) = &pack {
         args.push("--pack".into());
         args.push(pack.clone().into());
     }
+    if let Some(address) = &base_address {
+        args.push("--base-address".into());
+        args.push(address.clone().into());
+    }
     args.push(program.command.clone().into());
-    let display = pyocd_display(config, target, pack.as_deref(), &program.command, root);
+    let display = pyocd_display(
+        config,
+        target,
+        pack.as_deref(),
+        base_address.as_deref(),
+        &program.command,
+        root,
+    );
     Ok(RunSpec {
         program: executable.into_os_string(),
         args,
@@ -311,26 +357,47 @@ pub fn make_pyocd_spec(config: &PyOcdConfig, root: &Path) -> Result<RunSpec, Str
 
 /// Same composition as [`make_pyocd_spec`] without requiring the output or
 /// pack file to exist yet.
-pub fn preview_pyocd(config: &PyOcdConfig, root: &Path) -> Result<String, String> {
+pub fn preview_pyocd(
+    config: &PyOcdConfig,
+    root: &Path,
+    load_address: Option<&str>,
+) -> Result<String, String> {
     let program = resolve_program_file(&config.program_file, root, false)?;
     let target = config.target.trim();
     if target.is_empty() {
         return Err("pyOCD 目标芯片不能为空".to_owned());
     }
     let pack = resolve_pack(config, root, false)?;
+    let base_address = pyocd_base_address(&program, load_address)?;
     Ok(pyocd_display(
         config,
         target,
         pack.as_deref(),
+        base_address.as_deref(),
         &program.command,
         root,
     ))
+}
+
+fn pyocd_base_address(
+    program: &ResolvedProgram,
+    load_address: Option<&str>,
+) -> Result<Option<String>, String> {
+    if !program.command.to_ascii_lowercase().ends_with(".bin") {
+        return Ok(None);
+    }
+    let address = load_address
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "烧录 .bin 需要在“内存布局”里设置下载起始地址".to_owned())?;
+    Ok(Some(address.to_owned()))
 }
 
 fn pyocd_display(
     config: &PyOcdConfig,
     target: &str,
     pack: Option<&str>,
+    base_address: Option<&str>,
     program: &str,
     root: &Path,
 ) -> String {
@@ -342,6 +409,9 @@ fn pyocd_display(
     );
     if let Some(pack) = pack {
         display.push_str(&format!(" --pack {pack}"));
+    }
+    if let Some(address) = base_address {
+        display.push_str(&format!(" --base-address {address}"));
     }
     display.push(' ');
     display.push_str(program);
@@ -636,13 +706,6 @@ fn resolve_program_file(
     } else {
         root.join(&path)
     };
-    if absolute
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("bin"))
-    {
-        return Err("内置烧录配置不支持 .bin，请改用 .hex、.elf 或 .axf".to_owned());
-    }
     if require_exists && !absolute.is_file() {
         let hint = if template.contains("${ExecutableName}") {
             "，请先构建或修改程序文件"
@@ -796,7 +859,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("build")).unwrap();
         std::fs::write(dir.path().join("build/demo.hex"), b":00000001FF").unwrap();
 
-        let spec = make_spec(&sample_config(), dir.path()).unwrap();
+        let spec = make_spec(&sample_config(), dir.path(), None).unwrap();
         assert_eq!(spec.program, OsString::from("openocd"));
         let args = spec
             .args
@@ -874,7 +937,7 @@ mod tests {
             target_config: "board.cfg".to_owned(),
             ..sample_config()
         };
-        let preview = preview(&config, dir.path()).unwrap();
+        let preview = preview(&config, dir.path(), None).unwrap();
         assert!(preview.contains("-f interface/stlink.cfg"));
         assert!(preview.contains("-f board.cfg"));
         assert!(preview.contains("program {build/my demo.hex} verify reset exit"));
@@ -883,11 +946,50 @@ mod tests {
     #[test]
     fn reports_missing_program_file_on_flash() {
         let dir = tempfile::tempdir().unwrap();
-        let error = make_spec(&sample_config(), dir.path())
+        let error = make_spec(&sample_config(), dir.path(), None)
             .err()
             .expect("missing program file should fail");
         assert!(error.contains("找不到程序文件"));
-        assert!(preview(&sample_config(), dir.path()).is_ok());
+        assert!(preview(&sample_config(), dir.path(), None).is_ok());
+    }
+
+    #[test]
+    fn raw_bin_uses_the_configured_download_address() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("build")).unwrap();
+        std::fs::write(dir.path().join("build/demo.bin"), b"\x00").unwrap();
+        let config = OpenOcdConfig {
+            program_file: "${ExecutableName}.bin".to_owned(),
+            ..sample_config()
+        };
+        let spec = make_spec(&config, dir.path(), Some("0x08000000")).unwrap();
+        assert!(spec.args.iter().any(|arg| arg
+            .to_string_lossy()
+            .contains("program build/demo.bin 0x08000000")));
+        let error = make_spec(&config, dir.path(), None)
+            .err()
+            .expect("bin without address should fail");
+        assert!(error.contains("下载起始地址"));
+    }
+
+    #[test]
+    fn pyocd_raw_bin_passes_base_address() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("build")).unwrap();
+        std::fs::write(dir.path().join("build/demo.bin"), b"\x00").unwrap();
+        let config = PyOcdConfig {
+            program_file: "${ExecutableName}.bin".to_owned(),
+            ..sample_pyocd()
+        };
+        let spec = make_pyocd_spec(&config, dir.path(), Some("0x08000000")).unwrap();
+        assert!(spec
+            .args
+            .iter()
+            .any(|arg| arg.to_string_lossy() == "--base-address"));
+        assert!(spec
+            .args
+            .iter()
+            .any(|arg| arg.to_string_lossy() == "0x08000000"));
     }
 
     #[test]
@@ -915,7 +1017,7 @@ mod tests {
         std::fs::write(dir.path().join("demo.pack"), b"pack").unwrap();
 
         let config = sample_pyocd();
-        let spec = make_pyocd_spec(&config, dir.path()).unwrap();
+        let spec = make_pyocd_spec(&config, dir.path(), None).unwrap();
         assert_eq!(spec.program, OsString::from("pyocd"));
         let args = spec
             .args
@@ -923,7 +1025,7 @@ mod tests {
             .map(|value| value.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert_eq!(args, vec!["flash", "-t", "stm32f103xb", "build/demo.hex"]);
-        assert!(preview_pyocd(&config, dir.path())
+        assert!(preview_pyocd(&config, dir.path(), None)
             .unwrap()
             .contains("pyocd flash -t stm32f103xb build/demo.hex"));
 
@@ -931,7 +1033,7 @@ mod tests {
             pack: "demo.pack".to_owned(),
             ..sample_pyocd()
         };
-        let spec = make_pyocd_spec(&config, dir.path()).unwrap();
+        let spec = make_pyocd_spec(&config, dir.path(), None).unwrap();
         let args = spec
             .args
             .iter()

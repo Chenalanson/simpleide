@@ -54,12 +54,123 @@
       "linker_ro_base": "",
       "linker_rw_base": "",
       "linker_options": ""
+    },
+    "memory": {
+      "flash_start": "0x08000000",
+      "flash_size": "64K",
+      "ram_start": "0x20000000",
+      "ram_size": "20K",
+      "download_address": "0x08000000",
+      "regions": [
+        {
+          "name": "IRAM1",
+          "kind": "ram",
+          "on_chip": true,
+          "enabled": true,
+          "start": "0x20000000",
+          "size": "20K",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "IRAM2",
+          "kind": "ram",
+          "on_chip": true,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "RAM1",
+          "kind": "ram",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "RAM2",
+          "kind": "ram",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "RAM3",
+          "kind": "ram",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "IROM1",
+          "kind": "rom",
+          "on_chip": true,
+          "enabled": true,
+          "start": "0x08000000",
+          "size": "64K",
+          "no_init": false,
+          "startup": true
+        },
+        {
+          "name": "IROM2",
+          "kind": "rom",
+          "on_chip": true,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "ROM1",
+          "kind": "rom",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "ROM2",
+          "kind": "rom",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "ROM3",
+          "kind": "rom",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        }
+      ]
     }
   },
   "debug": {
     "program": "D:\\embeed\\examples\\test32\\build\\test32.axf",
     "gdb_path": "C:\\complier\\arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi\\bin\\arm-none-eabi-gdb.exe",
     "auto_refresh": true,
-    "watches": []
+    "watches": [
+      "i"
+    ]
   }
 }

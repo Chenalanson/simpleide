@@ -19,6 +19,7 @@ const SERVER_START_TIMEOUT: Duration = Duration::from_secs(8);
 pub enum DebugEvent {
     Line(String),
     Watch(String),
+    Preg(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +50,8 @@ pub struct DebugSession {
     pub log: Vec<String>,
     /// Lines captured between Live Watch markers. Hidden from the normal log.
     pub watch_output: Vec<String>,
+    /// Lines captured between peripheral-register markers.
+    pub preg_output: Vec<String>,
     pub started: bool,
     server: Option<Child>,
 }
@@ -146,6 +149,7 @@ impl DebugSession {
             rx,
             log: Vec::new(),
             watch_output: Vec::new(),
+            preg_output: Vec::new(),
             started: false,
             server: None,
         };
@@ -159,6 +163,15 @@ impl DebugSession {
     pub fn send(&mut self, command: &str) {
         if let Some(stdin) = &mut self.stdin {
             let _ = writeln!(stdin, "{command}");
+            let _ = stdin.flush();
+        }
+    }
+
+    /// Interrupt a running target. GDB treats Ctrl+C on stdin as an interrupt
+    /// request even when the CLI prompt is not active.
+    pub fn interrupt(&mut self) {
+        if let Some(stdin) = &mut self.stdin {
+            let _ = stdin.write_all(&[3]);
             let _ = stdin.flush();
         }
     }
@@ -177,6 +190,10 @@ impl DebugSession {
                     self.watch_output
                         .push(line.trim_end_matches('\r').to_owned());
                 }
+                DebugEvent::Preg(line) => {
+                    self.preg_output
+                        .push(line.trim_end_matches('\r').to_owned());
+                }
             }
         }
         if self.log.len() > MAX_LOG_LINES {
@@ -186,6 +203,10 @@ impl DebugSession {
         if self.watch_output.len() > MAX_LOG_LINES * 4 {
             let excess = self.watch_output.len() - MAX_LOG_LINES * 4;
             self.watch_output.drain(..excess);
+        }
+        if self.preg_output.len() > MAX_LOG_LINES * 4 {
+            let excess = self.preg_output.len() - MAX_LOG_LINES * 4;
+            self.preg_output.drain(..excess);
         }
     }
 
@@ -218,7 +239,21 @@ impl Drop for DebugSession {
 fn forward_gdb(reader: impl Read, tx: Sender<DebugEvent>) {
     let reader = BufReader::new(reader);
     let mut in_watch = false;
+    let mut in_preg = false;
     for line in reader.lines().map_while(Result::ok) {
+        if line.contains("__SE_PREG_BEGIN_") {
+            in_preg = true;
+            let _ = tx.send(DebugEvent::Preg(line));
+            continue;
+        }
+        if in_preg {
+            let is_end = line.contains("__SE_PREG_END_");
+            let _ = tx.send(DebugEvent::Preg(line));
+            if is_end {
+                in_preg = false;
+            }
+            continue;
+        }
         if line.contains("__SE_WATCH_BEGIN_") {
             in_watch = true;
             let _ = tx.send(DebugEvent::Watch(line));
@@ -239,6 +274,11 @@ fn forward_gdb(reader: impl Read, tx: Sender<DebugEvent>) {
 fn forward_server(reader: impl Read, tx: Sender<DebugEvent>, label: &'static str) {
     let reader = BufReader::new(reader);
     for line in reader.lines().map_while(Result::ok) {
+        // Peripheral-register polling intentionally probes optional blocks;
+        // OpenOCD reports each unmapped word as a failed read.
+        if line.contains("Error: Failed to read memory at 0x") {
+            continue;
+        }
         let _ = tx.send(DebugEvent::Line(format!("[{label}] {line}")));
     }
 }
@@ -656,9 +696,26 @@ mod tests {
             match event {
                 DebugEvent::Line(_) => lines += 1,
                 DebugEvent::Watch(_) => watches += 1,
+                DebugEvent::Preg(_) => {}
             }
         }
         assert_eq!(lines, 2);
         assert_eq!(watches, 3);
+    }
+
+    #[test]
+    fn separates_peripheral_register_output() {
+        let input =
+            b"__SE_PREG_BEGIN_2__\n__SE_PREG_V_2_40010800__\n0x40010800:\t0x44444444\n__SE_PREG_END_2__\n";
+        let (tx, rx) = channel();
+        forward_gdb(&input[..], tx);
+        let mut preg = Vec::new();
+        for event in rx.try_iter() {
+            if let DebugEvent::Preg(line) = event {
+                preg.push(line);
+            }
+        }
+        assert_eq!(preg.len(), 4);
+        assert!(preg.iter().any(|line| line.contains("0x44444444")));
     }
 }

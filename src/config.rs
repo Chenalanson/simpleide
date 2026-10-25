@@ -173,6 +173,55 @@ pub struct BuildConfig {
     pub meta_defines: Option<Vec<String>>,
     /// Compiler options edited in the project info tree.
     pub build_options: BuildOptions,
+    /// Editable Flash/RAM layout and optional raw-binary download address.
+    pub memory: MemoryConfig,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryConfig {
+    pub flash_start: String,
+    pub flash_size: String,
+    pub ram_start: String,
+    pub ram_size: String,
+    pub download_address: String,
+    pub regions: Vec<MemoryRegionConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryKind {
+    #[default]
+    Ram,
+    Rom,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryRegionConfig {
+    pub name: String,
+    pub kind: MemoryKind,
+    pub on_chip: bool,
+    pub enabled: bool,
+    pub start: String,
+    pub size: String,
+    pub no_init: bool,
+    pub startup: bool,
+}
+
+impl Default for MemoryRegionConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            kind: MemoryKind::Ram,
+            on_chip: true,
+            enabled: false,
+            start: String::new(),
+            size: String::new(),
+            no_init: false,
+            startup: false,
+        }
+    }
 }
 
 impl Default for BuildConfig {
@@ -195,11 +244,16 @@ impl Default for BuildConfig {
             meta_library_dirs: None,
             meta_defines: None,
             build_options: BuildOptions::default(),
+            memory: MemoryConfig::default(),
         }
     }
 }
 
 impl BuildConfig {
+    pub fn download_address(&self) -> Option<String> {
+        crate::memory::effective_download_address(&self.memory)
+    }
+
     pub fn command(&self, kind: TaskKind) -> &str {
         match kind {
             TaskKind::Build => &self.build_command,
@@ -305,9 +359,18 @@ impl BuildConfig {
 
     pub fn make_spec(&self, kind: TaskKind, project_root: &Path) -> Result<RunSpec, String> {
         if kind == TaskKind::Flash {
+            let load_address = self.download_address();
             let spec = match self.flash_tool {
-                FlashTool::OpenOcd => Some(crate::flash::make_spec(&self.openocd, project_root)?),
-                FlashTool::PyOcd => Some(crate::flash::make_pyocd_spec(&self.pyocd, project_root)?),
+                FlashTool::OpenOcd => Some(crate::flash::make_spec(
+                    &self.openocd,
+                    project_root,
+                    load_address.as_deref(),
+                )?),
+                FlashTool::PyOcd => Some(crate::flash::make_pyocd_spec(
+                    &self.pyocd,
+                    project_root,
+                    load_address.as_deref(),
+                )?),
                 FlashTool::Custom => None,
             };
             if let Some(mut spec) = spec {
@@ -1324,6 +1387,23 @@ mod tests {
                 target_config: "stm32f1x.cfg".into(),
                 interface_config: "stlink.cfg".into(),
             },
+            memory: MemoryConfig {
+                flash_start: "0x08000000".into(),
+                flash_size: "0x00010000".into(),
+                ram_start: "0x20000000".into(),
+                ram_size: "0x00005000".into(),
+                download_address: "0x08000000".into(),
+                regions: vec![MemoryRegionConfig {
+                    name: "IROM1".into(),
+                    kind: MemoryKind::Rom,
+                    on_chip: true,
+                    enabled: true,
+                    start: "0x08000000".into(),
+                    size: "64K".into(),
+                    no_init: false,
+                    startup: true,
+                }],
+            },
             ..BuildConfig::default()
         };
         let debug = ProjectDebugSettings {
@@ -1342,6 +1422,10 @@ mod tests {
             "C:/tools/openocd.exe".to_owned()
         );
         assert_eq!(loaded.build.openocd.target_config, "stm32f1x.cfg");
+        assert_eq!(loaded.build.memory.flash_size, "0x00010000");
+        assert_eq!(loaded.build.memory.download_address, "0x08000000");
+        assert_eq!(loaded.build.memory.regions.len(), 1);
+        assert!(loaded.build.memory.regions[0].startup);
         assert_eq!(loaded.debug.program, "build/demo.axf");
         assert_eq!(loaded.debug.gdb_path, "C:/tools/arm-none-eabi-gdb.exe");
         assert!(loaded.debug.auto_refresh);

@@ -51,6 +51,7 @@ src/project_meta.rs    Makefile / Keil .uvprojx 工程元数据提取
 src/editor.rs          EditorBuffer（String + revision）和 Document
 src/file_tree.rs       惰性目录树
 src/flash.rs           烧录工具配置、OpenOCD / pyOCD 检测与命令构造
+src/memory.rs          ELF / 链接脚本 / PDSC 内存区域与固件占用统计
 src/completion.rs      轻量成员索引、补全上下文和候选类型
 src/highlight.rs       syntect 高亮和 galley 缓存
 src/minimap.rs         编辑器右侧代码预览、缩略行缓存和滚动跳转
@@ -118,9 +119,10 @@ docs/                  README 截图和使用教程
 - `symbols.rs` 用轻量正则索引 C/C++ 函数、struct/union/enum/class、宏和汇编标签，最多 2000 条；`Ctrl+Shift+O` 或工具栏“符号”打开过滤窗口。它不是完整的 C++ 解析器或 LSP，复杂声明可能漏检，不要宣称语义级准确。
 - `hexview.rs` 读取最多 32 MB 文件，按 16 字节一行显示偏移/十六进制/ASCII；文件树右键或 `Ctrl+Shift+H` 打开当前文件，可从窗口把字节转给数组生成器。
 - `arraygen.rs` 把选中文本或当前文件（最多 8 KB）生成 `const uint8_t` C 数组；工具栏“数组”或 `Ctrl+Shift+A` 打开，变量名会被清洗成合法标识符，支持复制。
-- `registers.rs` 优先用正则解析工程内 `.svd` 的 peripheral/baseAddress/register/addressOffset/description；没有可用 SVD 时回退扫描 `.h/.c` 中 `*_BASE` / `*_ADDR` / `*_ADDRESS` 宏。`Ctrl+Shift+R` 或工具栏“寄存器”打开，最多 2000 项并去重。它是只读浏览器，不读写芯片寄存器。
-- `debugger.rs` 启动本机 gdb CLI（非 MI），通过 stdin/stdout 转发命令并收集控制台输出；`DebugState` 保存会话、断点、日志和当前暂停位置。右侧“调试”或 `F5` 启动/继续，`F9` 或点击行号左侧空白切换断点，`F10` 下一步，`F11` 单步，`Shift+F11` 跳出，`Shift+F5` 停止。调试控制是编辑器右上角的小浮层 `show_debug_overlay`，使用 `Painter` 绘制继续/停止/单步图案；调试日志显示在底部输出面板的“调试输出”页，可在页底输入 gdb 命令。
+- `registers.rs` 优先用正则解析工程内 `.svd`、`.pack` 内 SVD，或已安装 Keil DFP 的 `SVD/*.svd` 的 peripheral/baseAddress/register/addressOffset/description，支持 `derivedFrom` 继承；没有可用 SVD 时回退扫描 `.h/.c` 中 `*_BASE` / `*_ADDR` / `*_ADDRESS` 宏。`Ctrl+Shift+R` 或工具栏“寄存器”打开浏览窗口，最多 2000 项并去重；调试侧栏“外设”页复用同一索引显示实时值。
+- `debugger.rs` 启动本机 gdb CLI（非 MI），通过 stdin/stdout 转发命令并收集控制台输出；`DebugState` 保存会话、断点、日志、当前暂停位置和 `running` 状态。右侧“调试”或 `F5` 启动/继续；目标运行中浮层主按钮显示暂停图案并发送中断请求，状态显示“运行中”，暂停后显示“已暂停”。`F9` 或点击行号左侧空白切换断点，`F10` 下一步，`F11` 单步，`Shift+F11` 跳出，`Shift+F5` 停止。调试控制是编辑器右上角的小浮层 `show_debug_overlay`，使用 `Painter` 绘制继续/暂停/停止/单步图案；调试日志显示在底部输出面板的“调试输出”页，可在页底输入 gdb 命令。
 - 行号左侧的 gutter 点击范围覆盖整列（含断点红点），不要求先移动光标；断点按 `(路径, 行号)` 保存。gutter 行号使用与编辑器相同的 `galley.cursor_from_pos` 命中测试，避免滚动后行号偏移。`poll_debug_location` 只扫描新到达的 gdb 日志，用 `debugger::parse_stop_location` 解析 `... at file:line`，命中后自动打开对应文件、滚动到当前行并在 gutter 画黄色执行箭头和整行浅黄底；每次新停止都会重新跳转，即使上次已停在同一行。`next` / `step` / `finish` 后会额外发送 `frame`，因为 gdb 单步通常只回显源码行（`95  while (1)`）而不带 `at file:line`。gdb 报告 `No compiled code for line N in file ...` 时会移除对应断点并提示。日志扫描游标 `DebugState.log_scan` 在启动/停止时重置。
+- 调试侧栏有 变量 / 寄存器 / 外设 三个页签。“外设”页从工程内 `.svd`、`.pack` 内 SVD 或已安装 Keil DFP 的 `SVD/*.svd` 读取外设寄存器（支持 `derivedFrom` 继承），按名称/地址/说明过滤，取前 160 个用 `x/1xw` 读取实时值并以 `__SE_PREG_*` 标记路由到独立输出；目标停止且自动刷新开启时每 1.5 秒更新。OpenOCD 对未映射外设的 `Failed to read memory` 行会被过滤，读取失败的寄存器显示“无法读取”。
 - 调试按目标类型分流：PE `.exe` 使用普通 gdb；ELF/AXF 进入 ARM 远程流程。ARM 流程复用 `BuildConfig.flash_tool` 的 OpenOCD / pyOCD 参数，用 `flash::openocd_server_spec` / `flash::pyocd_server_spec` 在空闲本地端口启动 GDB server，再由 `arm-none-eabi-gdb` `target extended-remote` 连接，依次执行 `monitor reset halt` / `load` / 再次复位，最后应用断点并 `continue`。启动在后台线程完成，通过 `debug_start` 通道回到 UI；停止/切换工程时同时结束 gdb 和 server。`debug_target` 优先使用工程的 `debug.program`；路径失效或为空时按修改时间在 `build/`、`Debug/`、`Release/`、`out/` 和工程根目录查找最新 ELF/AXF/EXE/OUT。打开工程时若 `debug.program` 为空会自动回填检测结果并写入工程配置。
 - ARM gdb 由 `detect_arm_gdb` 自动检测：优先使用设置里的路径，其次搜索编译器目录、`extra_paths`、PATH 和常见 GNU Arm Toolchain 目录。设置 → 调试提供 gdb 路径浏览和自动检测按钮；`gdb_path` 既可填 exe，也可填 `bin` 目录。不要用 MinGW gdb 调 ARM 目标，否则会报 error 193。
 - `navigation.rs` 提供标识符/前缀提取与字符区间替换；`F12` 在 `symbols.rs` 索引中找定义，`Shift+F12` 用全工程正则搜索列引用。
@@ -196,7 +198,7 @@ docs/                  README 截图和使用教程
 ```
 
 - 打开工程时优先读取工程的 `.simple-embedded/settings.json`；不存在时回退到用户目录里的每工程配置，并自动迁移写入工程文件。迁移成功后删除用户目录里的旧条目，避免删除工程配置后被旧缓存恢复；只有工程文件写入失败时才保留用户目录回退。
-- 工程文件是普通 JSON（`ProjectSettings { version, build, debug }`），保存 Build/Clean/Rebuild/Flash/SSH、OpenOCD/pyOCD、并行任务数、C/C++ 属性覆盖、构建选项，以及调试程序 `debug.program` 和 gdb 路径 `debug.gdb_path`。可以手改，也可以和源码一起提交。
+- 工程文件是普通 JSON（`ProjectSettings { version, build, debug }`），保存 Build/Clean/Rebuild/Flash/SSH、OpenOCD/pyOCD、并行任务数、C/C++ 属性覆盖、构建选项、内存布局 `build.memory`，以及调试程序 `debug.program` 和 gdb 路径 `debug.gdb_path`。可以手改，也可以和源码一起提交。
 - 全局设置继续保存最近工程、编辑器偏好、输出面板状态等；`Settings::load` 容忍 UTF-8 BOM，解析失败会回退默认值并输出到 stderr。
 - Makefile 备份位于 `%APPDATA%\SimpleEmbedded\backups\<工程名>-<hash>\`，默认保留最近 12 份。
 - 自动检测结果只是初值；用户可以随时在设置里改。修改设置后必须点击保存。
@@ -208,22 +210,23 @@ docs/                  README 截图和使用教程
 - 用户界面使用中文；保持现有深色配色和 `docs/` 截图风格。
 - 界面不显示 emoji/生僻符号；使用 `Painter` 画图形或已验证的字符。
 - 右侧操作栏：纵向排列 Build、Clean/Rebuild/Flash、调试；不再放设置按钮，设置从构建卡片“配置”或 `Ctrl+,` 打开。
-- 构建结果显示在输出面板标题和日志中；输出面板可切换“构建输出 / 调试输出”，底部不再保留重复的状态栏。
+- 构建结果和内存占用显示在输出面板标题和日志中；构建视图标题显示 `Flash 已用 / 总量 (百分比) · RAM 已用 / 总量 (百分比)`，占用来自 `text/data/bss` 或 ELF 段，容量来自链接脚本 / PDSC / 工程信息。输出面板可切换“构建输出 / 调试输出”，底部不再保留重复的状态栏。
 - 构建输出面板顶部有 10px 拖动手柄，收起时也能向上拉出；高度存 `Settings.output_height`，最大到主区域顶部。
 - 调试控制是编辑器右上角的小浮层，位置参考查找浮层；停止、单步等使用 `Painter` 绘制的图案按钮。调试信息放在输出面板“调试输出”页，不在独立窗口里。
-- “工程信息 → 烧录配置”提供烧录工具下拉（自定义命令 / OpenOCD / pyOCD）。OpenOCD 模式显示工具路径、程序文件、芯片配置和接口配置；pyOCD 模式显示工具路径、程序文件、目标芯片和可选 Pack；“编辑”打开独立烧录配置弹窗，含命令预览。工具/路径下拉修改后立即写入工程 `.simple-embedded/settings.json`，弹窗中的字段点击保存后写入。
+- “工程信息 → 烧录配置”提供烧录工具下拉（自定义命令 / OpenOCD / pyOCD）。OpenOCD 模式显示工具路径、程序文件、芯片配置和接口配置；pyOCD 模式显示工具路径、程序文件、目标芯片和可选 Pack；“编辑”打开独立烧录配置弹窗，含命令预览。分组还显示 Flash/RAM 容量和 **内存布局...** 按钮：弹窗采用 Cortex-Debug 风格两列网格，Read/Write 侧为 IRAM1/2 与 RAM1-3（Default、起始地址、大小、NoInit），Read/Only 侧为 IROM1/2 与 ROM1-3（Default、起始地址、大小、启动），底部显示 RAM Total / ROM Total；自动值优先来自链接脚本，其次来自匹配 PDSC 的 `<memory>`；保存到工程配置但不改写链接脚本。工具/路径下拉修改后立即写入工程 `.simple-embedded/settings.json`，弹窗中的字段点击保存后写入。
 - 关闭窗口、关闭 Tab、切换工程时都要处理未保存确认。
 - 不做弹窗堆叠；确认弹窗和设置弹窗互斥。
 - 无工程时左上角仍显示同一张构建卡片，使用“导入 / 配置 / 工作区”按钮；中间显示单行提示。第一次启动且未打开工程时不写入任何工程文件；打开工程会创建/更新 `.simple-embedded/settings.json`。测试后如果产生 `%APPDATA%\SimpleEmbedded\settings.json` 或临时工程配置，提交前应清理，避免把测试工程路径带入首启体验。
 
 ## 已知边界（当前版本）
 
-- 没有 `.eide`/`.mini-ide` 等专有工程格式、Keil 自动导入或内存布局编辑器；`.simple-embedded/settings.json` 和 `.se-workspace` 都是普通 JSON。芯片支持包只读取元数据和 SVD，不导入 Keil 设备树、启动文件、链接脚本或烧录算法。Keil 工程可以通过手动命令或外部包装脚本接入。
+- 没有 `.eide`/`.mini-ide` 等专有工程格式、Keil 自动导入或链接脚本生成器；`.simple-embedded/settings.json` 和 `.se-workspace` 都是普通 JSON。芯片支持包只读取元数据、SVD 和器件内存区域，不导入 Keil 设备树、启动文件、链接脚本或烧录算法。Keil 工程可以通过手动命令或外部包装脚本接入。
 - 没有 LSP/语义级跳转；符号搜索、TODO、寄存器浏览器都是轻量索引。补全/定义/引用是启发式功能；成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型。
+- 内存布局的起始地址/大小只写入工程 `.simple-embedded/settings.json`，不会自动改写链接脚本；Flash/RAM 总量优先来自链接脚本，其次来自芯片支持包。`.bin` 使用内存布局里的下载起始地址。
 - 不支持多光标；Ctrl+Alt+左键只提供单一矩形列选择。分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
 - 调试支持主机 gdb 和 ARM GDB server：ARM ELF/AXF 会复用 OpenOCD / pyOCD 配置启动 server，连接 arm-none-eabi-gdb 并 `load` 程序；调试侧栏提供变量 Live Watch 和只读寄存器表，通过 gdb `echo` 标记解析输出，但没有调用栈、内存或外设寄存器编辑面板。调试控制浮层可关闭但不会自动停止会话。
 - 工作区只使用第一个 folder，不实现 VS Code 的多根工作区、任务和扩展配置；双击关联写入 HKCU，移动程序后需要重新关联。
-- 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走本地自定义命令、内置 OpenOCD 或内置 pyOCD。内置烧录只支持 `.hex` / `.elf` / `.axf`，不支持直接烧录需要基地址的 `.bin`。
+- 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走本地自定义命令、内置 OpenOCD 或内置 pyOCD。内置烧录支持 `.hex` / `.elf` / `.axf`，以及按内存布局下载地址烧录的 `.bin`。
 - 源码支持 UTF-8（含 BOM）和 GBK；构建输出在 Windows 上会尝试按 GBK 解码。
 - 不支持文件系统外部修改的自动合并。
 - 长构建日志会横向裁剪，但完整内容可复制。
@@ -239,7 +242,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射。当前共 134 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址。当前共 143 个测试。
 
 UI 改动后建议：
 

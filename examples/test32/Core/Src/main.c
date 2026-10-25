@@ -87,6 +87,8 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
+  uint8_t i = 0;
+  uint8_t qi = 0;
 
   /* USER CODE END 2 */
 
@@ -97,6 +99,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    i ++;
+    HAL_Delay(100);
+    if(i>100)i=0;
  //ABCDEFG
  
   }

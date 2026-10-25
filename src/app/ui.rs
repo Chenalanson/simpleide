@@ -4,8 +4,8 @@ use super::*;
 use crate::config::autodetect;
 use crate::makefile;
 use eframe::egui::{
-    self, Align, Align2, Button, Color32, FontId, Frame, Id, Label, Layout, Margin, RichText,
-    ScrollArea, Sense, Shape, Stroke, TextEdit,
+    self, Align, Align2, Button, Checkbox, Color32, FontId, Frame, Id, Label, Layout, Margin,
+    RadioButton, RichText, ScrollArea, Sense, Shape, Stroke, TextEdit,
 };
 
 impl App {
@@ -1086,14 +1086,54 @@ impl App {
                 }
             }
 
-            ui.add_space(2.0);
-            if ui
-                .add(small_flat_button("编辑", theme::ACCENT))
-                .on_hover_text("编辑烧录工具、程序文件、OpenOCD / pyOCD 参数")
-                .clicked()
-            {
-                actions.push(Action::EditFlashConfig);
+            let memory_hint = self
+                .memory_layout_summary()
+                .unwrap_or_else(|| "设置 Flash / RAM 起始地址、大小和下载起始地址".to_owned());
+            if let Some(resolved) = &self.memory_layout {
+                let layout = resolved.layout;
+                if layout.flash.is_valid() {
+                    meta_row(
+                        ui,
+                        "Flash",
+                        &format!(
+                            "{} @ {}",
+                            crate::memory::format_size(layout.flash.size),
+                            crate::memory::format_hex(layout.flash.start)
+                        ),
+                    );
+                }
+                if layout.ram.is_valid() {
+                    meta_row(
+                        ui,
+                        "RAM",
+                        &format!(
+                            "{} @ {}",
+                            crate::memory::format_size(layout.ram.size),
+                            crate::memory::format_hex(layout.ram.start)
+                        ),
+                    );
+                }
+            } else {
+                meta_row(ui, "内存布局", "未识别，可手动填写");
             }
+
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add(small_flat_button("编辑", theme::ACCENT))
+                    .on_hover_text("编辑烧录工具、程序文件、OpenOCD / pyOCD 参数")
+                    .clicked()
+                {
+                    actions.push(Action::EditFlashConfig);
+                }
+                if ui
+                    .add(small_flat_button("内存布局...", theme::TEXT_DIM))
+                    .on_hover_text(memory_hint)
+                    .clicked()
+                {
+                    actions.push(Action::EditMemoryLayout);
+                }
+            });
         });
 
         meta_group(ui, "C/C++ 属性", true, |ui| {
@@ -3064,6 +3104,161 @@ impl App {
         }
     }
 
+    pub(super) fn show_memory_layout_modal(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.memory_draft.take() else {
+            return;
+        };
+        let source = self
+            .memory_layout
+            .as_ref()
+            .map(|memory| memory.source.clone())
+            .unwrap_or_else(|| "手动设置".to_owned());
+        let mut close = false;
+        let mut save = false;
+        let mut restore = false;
+        let modal = egui::Modal::new(Id::new("simple_embedded_memory_layout_modal"))
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(20, 16)),
+            )
+            .backdrop_color(Color32::from_black_alpha(150));
+        modal.show(ctx, |ui| {
+            ui.set_width(860.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("内存布局")
+                        .size(18.0)
+                        .strong()
+                        .color(theme::TEXT),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "来源：{}",
+                        if draft.restored {
+                            draft
+                                .auto
+                                .as_ref()
+                                .map(|auto| auto.source.as_str())
+                                .unwrap_or("自动识别")
+                        } else {
+                            source.as_str()
+                        }
+                    ))
+                    .size(10.0)
+                    .color(theme::TEXT_FAINT),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if window_close_button(ui) {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("地址和大小支持 0x08000000、65536、64K、1M 等写法；Default 勾选的区域计入总量。")
+                    .size(10.0)
+                    .color(theme::TEXT_FAINT),
+            );
+            ui.add_space(8.0);
+
+            ui.columns(2, |columns| {
+                memory_column(
+                    &mut columns[0],
+                    "Read/Write Memory Areas",
+                    crate::config::MemoryKind::Ram,
+                    &mut draft.regions[..5],
+                );
+                memory_column(
+                    &mut columns[1],
+                    "Read/Only Memory Areas",
+                    crate::config::MemoryKind::Rom,
+                    &mut draft.regions[5..],
+                );
+            });
+
+            ui.add_space(8.0);
+            ui.columns(2, |columns| {
+                memory_total(
+                    &mut columns[0],
+                    "RAM Total",
+                    crate::config::MemoryKind::Ram,
+                    &draft.regions[..5],
+                );
+                memory_total(
+                    &mut columns[1],
+                    "ROM Total",
+                    crate::config::MemoryKind::Rom,
+                    &draft.regions[5..],
+                );
+            });
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("下载起始地址")
+                        .size(11.0)
+                        .color(theme::TEXT_DIM),
+                );
+                let response = ui.add(
+                    TextEdit::singleline(&mut draft.download_address)
+                        .desired_width(170.0)
+                        .hint_text("留空使用启动 ROM 地址"),
+                );
+                if response.changed() {
+                    draft.restored = false;
+                }
+            });
+            ui.add_space(3.0);
+            ui.label(
+                RichText::new(
+                    "烧录 .bin 时使用此地址；.hex / .elf / .axf 使用文件内记录的地址。修改内存布局不会自动改写链接脚本。",
+                )
+                .size(9.5)
+                .color(theme::TEXT_FAINT),
+            );
+            if let Some(error) = &draft.error {
+                ui.add_space(5.0);
+                ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+            }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(theme::primary_button("保存")).clicked() {
+                        save = true;
+                    }
+                    if ui.add(theme::secondary_button("取消")).clicked() {
+                        close = true;
+                    }
+                    if ui.add(theme::secondary_button("恢复自动识别")).clicked() {
+                        restore = true;
+                    }
+                });
+            });
+        });
+        if restore {
+            if let Some(auto) = draft.auto.clone() {
+                draft.regions = crate::memory::default_regions(Some(auto.layout));
+                draft.download_address =
+                    crate::memory::primary_start(&draft.regions, crate::config::MemoryKind::Rom)
+                        .map(crate::memory::format_hex)
+                        .unwrap_or_default();
+                draft.restored = true;
+            } else {
+                draft.regions = crate::memory::default_regions(None);
+                draft.download_address.clear();
+                draft.restored = true;
+            }
+            draft.error = None;
+            self.memory_draft = Some(draft);
+        } else if save {
+            self.save_memory_layout(draft);
+        } else if !close {
+            self.memory_draft = Some(draft);
+        }
+    }
     pub(super) fn show_image_preview(&mut self, ctx: &egui::Context) {
         let Some(state) = self.image_preview.take() else {
             return;
@@ -3123,7 +3318,11 @@ impl App {
         let mut add_watch = false;
         let mut remove_watch = None;
         let has_session = self.debug.session.is_some();
-        let pending = self.debug.watch_refresh.is_some();
+        let pending = if self.debug.watch_tab == DebugSideTab::Peripherals {
+            self.debug.peripheral_refresh.is_some()
+        } else {
+            self.debug.watch_refresh.is_some()
+        };
         Frame::new()
             .fill(theme::PANEL)
             .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
@@ -3147,6 +3346,16 @@ impl App {
                     ) {
                         self.debug.watch_tab = DebugSideTab::Registers;
                     }
+                    if debug_side_tab(
+                        ui,
+                        "外设",
+                        self.debug.watch_tab == DebugSideTab::Peripherals,
+                    ) {
+                        self.debug.watch_tab = DebugSideTab::Peripherals;
+                        if self.registers.items.is_empty() {
+                            self.refresh_registers();
+                        }
+                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let refresh_label = if pending { "刷新中" } else { "刷新" };
                         let color = if pending {
@@ -3159,7 +3368,7 @@ impl App {
                                 has_session && !pending,
                                 small_flat_button(refresh_label, color),
                             )
-                            .on_hover_text("刷新变量和寄存器")
+                            .on_hover_text("刷新当前页面数据")
                             .clicked()
                         {
                             refresh = true;
@@ -3436,6 +3645,140 @@ impl App {
                                 }
                             });
                     }
+                    DebugSideTab::Peripherals => {
+                        ui.add(
+                            TextEdit::singleline(&mut self.debug.peripheral_filter)
+                                .id(Id::new("simple_embedded_peripheral_filter"))
+                                .desired_width(f32::INFINITY)
+                                .hint_text("搜索外设寄存器名、地址或说明"),
+                        );
+                        ui.add_space(3.0);
+                        if self.registers.items.is_empty() {
+                            let message = self.registers.error.as_deref().unwrap_or(
+                                "未找到 SVD/寄存器定义；请把芯片支持包（.pack）放到工程根目录",
+                            );
+                            ui.label(RichText::new(message).size(10.5).color(theme::WARNING));
+                            return;
+                        }
+                        let filter = self.debug.peripheral_filter.trim().to_lowercase();
+                        let rows = self
+                            .registers
+                            .items
+                            .iter()
+                            .filter(|item| {
+                                filter.is_empty()
+                                    || item.name.to_lowercase().contains(&filter)
+                                    || item.description.to_lowercase().contains(&filter)
+                                    || format!("0x{:08X}", item.address)
+                                        .to_lowercase()
+                                        .contains(&filter)
+                            })
+                            .take(160)
+                            .collect::<Vec<_>>();
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(&self.registers.source)
+                                    .size(9.5)
+                                    .color(theme::TEXT_FAINT),
+                            );
+                            if rows.len() == 160 {
+                                ui.label(
+                                    RichText::new("仅显示前 160 个")
+                                        .size(9.0)
+                                        .color(theme::WARNING),
+                                );
+                            }
+                        });
+                        ui.add_space(3.0);
+                        let remaining = ui.available_height();
+                        ScrollArea::vertical()
+                            .id_salt("simple_embedded_peripheral_list")
+                            .max_height(remaining)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                if rows.is_empty() {
+                                    ui.label(
+                                        RichText::new("没有匹配的外设寄存器")
+                                            .size(10.5)
+                                            .color(theme::TEXT_FAINT),
+                                    );
+                                    return;
+                                }
+                                let width = ui.available_width();
+                                let spacing = ui.spacing().item_spacing.x;
+                                let address_width = 84.0;
+                                let value_width = 76.0;
+                                let name_width =
+                                    (width - address_width - value_width - spacing * 2.0)
+                                        .max(70.0);
+                                ui.horizontal(|ui| {
+                                    for (label, size) in [
+                                        ("寄存器", name_width),
+                                        ("地址", address_width),
+                                        ("值", value_width),
+                                    ] {
+                                        ui.add_sized(
+                                            [size, 16.0],
+                                            Label::new(
+                                                RichText::new(label)
+                                                    .size(9.5)
+                                                    .color(theme::TEXT_FAINT),
+                                            ),
+                                        );
+                                    }
+                                });
+                                for item in rows {
+                                    let value = self
+                                        .debug
+                                        .peripheral_values
+                                        .get(&item.address)
+                                        .map(String::as_str)
+                                        .unwrap_or("—");
+                                    ui.horizontal(|ui| {
+                                        let name = ui.add_sized(
+                                            [name_width, 18.0],
+                                            Label::new(
+                                                RichText::new(&item.name)
+                                                    .monospace()
+                                                    .size(10.0)
+                                                    .color(theme::TEXT),
+                                            )
+                                            .truncate(),
+                                        );
+                                        name.on_hover_text(if item.description.is_empty() {
+                                            &item.name
+                                        } else {
+                                            &item.description
+                                        });
+                                        ui.add_sized(
+                                            [address_width, 18.0],
+                                            Label::new(
+                                                RichText::new(format!("0x{:08X}", item.address))
+                                                    .monospace()
+                                                    .size(9.5)
+                                                    .color(theme::TEXT_FAINT),
+                                            ),
+                                        );
+                                        let color = if value == "无法读取" {
+                                            theme::ERROR
+                                        } else if value == "—" {
+                                            theme::TEXT_FAINT
+                                        } else {
+                                            theme::SUCCESS
+                                        };
+                                        ui.add_sized(
+                                            [value_width, 18.0],
+                                            Label::new(
+                                                RichText::new(value)
+                                                    .monospace()
+                                                    .size(10.0)
+                                                    .color(color),
+                                            ),
+                                        );
+                                    });
+                                }
+                            });
+                    }
                 }
             });
         if auto != self.debug.auto_watch {
@@ -3446,12 +3789,22 @@ impl App {
             }
             if auto {
                 self.debug.watch_refresh = None;
-                self.refresh_debug_watch();
+                self.debug.peripheral_refresh = None;
+                if self.debug.watch_tab == DebugSideTab::Peripherals {
+                    self.refresh_debug_peripheral();
+                } else {
+                    self.refresh_debug_watch();
+                }
             }
         }
         if refresh {
-            self.debug.watch_refresh = None;
-            self.refresh_debug_watch();
+            if self.debug.watch_tab == DebugSideTab::Peripherals {
+                self.debug.peripheral_refresh = None;
+                self.refresh_debug_peripheral();
+            } else {
+                self.debug.watch_refresh = None;
+                self.refresh_debug_watch();
+            }
         }
         if add_watch {
             let expression = if self.debug.watch_input.trim().is_empty() {
@@ -3467,12 +3820,13 @@ impl App {
     }
 
     pub(super) fn show_debug_overlay(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
-        let running = self
+        let process_running = self
             .debug
             .session
             .as_mut()
             .map(|session| session.is_running())
             .unwrap_or(false);
+        let target_running = self.debug.running;
         let started = self
             .debug
             .session
@@ -3485,10 +3839,12 @@ impl App {
         } else if starting {
             (theme::ACCENT, "启动中")
         } else if has_session {
-            if running {
-                (theme::SUCCESS, "已连接")
-            } else {
+            if !process_running {
                 (theme::TEXT_FAINT, "已停止")
+            } else if target_running {
+                (theme::ACCENT, "运行中")
+            } else {
+                (theme::SUCCESS, "已暂停")
             }
         } else {
             (theme::TEXT_FAINT, "未启动")
@@ -3547,24 +3903,32 @@ impl App {
                             ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
                         }
                         ui.horizontal(|ui| {
-                            let continue_tip = if starting {
-                                "启动完成后继续 (F5)"
-                            } else if !has_session {
-                                "启动调试 (F5)"
-                            } else if started {
-                                "继续 (F5)"
+                            if target_running {
+                                if debug_icon_button(ui, DebugIcon::Pause, true, "暂停 (F5)")
+                                    .clicked()
+                                {
+                                    action = Some(Action::DebugPause);
+                                }
                             } else {
-                                "运行 (F5)"
-                            };
-                            if debug_icon_button(ui, DebugIcon::Continue, true, continue_tip)
-                                .clicked()
-                            {
-                                action = Some(Action::DebugContinue);
+                                let continue_tip = if starting {
+                                    "启动完成后继续 (F5)"
+                                } else if !has_session {
+                                    "启动调试 (F5)"
+                                } else if started {
+                                    "继续 (F5)"
+                                } else {
+                                    "运行 (F5)"
+                                };
+                                if debug_icon_button(ui, DebugIcon::Continue, true, continue_tip)
+                                    .clicked()
+                                {
+                                    action = Some(Action::DebugContinue);
+                                }
                             }
                             if debug_icon_button(
                                 ui,
                                 DebugIcon::StepOver,
-                                has_session && !starting,
+                                has_session && !starting && !target_running,
                                 "下一步 (F10)",
                             )
                             .clicked()
@@ -3574,7 +3938,7 @@ impl App {
                             if debug_icon_button(
                                 ui,
                                 DebugIcon::StepInto,
-                                has_session && !starting,
+                                has_session && !starting && !target_running,
                                 "单步进入 (F11)",
                             )
                             .clicked()
@@ -3584,7 +3948,7 @@ impl App {
                             if debug_icon_button(
                                 ui,
                                 DebugIcon::StepOut,
-                                has_session && !starting,
+                                has_session && !starting && !target_running,
                                 "跳出 (Shift+F11)",
                             )
                             .clicked()
@@ -4830,6 +5194,7 @@ impl App {
             return;
         };
         let root = self.project.as_ref().map(|project| project.root.clone());
+        let download_address = self.build_config.download_address();
         let mut close = false;
         let mut save = false;
 
@@ -4957,7 +5322,7 @@ impl App {
                                 .color(theme::TEXT_DIM),
                         );
                         ui.add_space(3.0);
-                        match flash::preview(&draft.openocd, root) {
+                        match flash::preview(&draft.openocd, root, download_address.as_deref()) {
                             Ok(command) => {
                                 Frame::new()
                                     .fill(theme::BG)
@@ -5045,7 +5410,11 @@ impl App {
                                 .color(theme::TEXT_DIM),
                         );
                         ui.add_space(3.0);
-                        match flash::preview_pyocd(&draft.pyocd, root) {
+                        match flash::preview_pyocd(
+                            &draft.pyocd,
+                            root,
+                            download_address.as_deref(),
+                        ) {
                             Ok(command) => {
                                 Frame::new()
                                     .fill(theme::BG)
@@ -7139,9 +7508,157 @@ fn window_close_button(ui: &mut egui::Ui) -> bool {
     response.clicked()
 }
 
+fn memory_column(
+    ui: &mut egui::Ui,
+    title: &str,
+    kind: crate::config::MemoryKind,
+    regions: &mut [crate::config::MemoryRegionConfig],
+) {
+    ui.vertical_centered(|ui| {
+        ui.label(RichText::new(title).size(12.0).strong().color(theme::TEXT));
+    });
+    ui.add_space(5.0);
+    let mut startup = None;
+    if let Some(index) = memory_section(ui, "On-Chip", kind, &mut regions[..2]) {
+        startup = Some(index);
+    }
+    ui.add_space(7.0);
+    if let Some(index) = memory_section(ui, "Off-Chip", kind, &mut regions[2..]) {
+        startup = Some(index + 2);
+    }
+    if let Some(index) = startup {
+        for region in regions.iter_mut() {
+            region.startup = false;
+        }
+        regions[index].startup = true;
+    }
+}
+
+fn memory_section(
+    ui: &mut egui::Ui,
+    title: &str,
+    kind: crate::config::MemoryKind,
+    regions: &mut [crate::config::MemoryRegionConfig],
+) -> Option<usize> {
+    ui.vertical_centered(|ui| {
+        ui.label(RichText::new(title).size(11.0).color(theme::TEXT_DIM));
+    });
+    ui.add_space(3.0);
+    const DEFAULT_W: f32 = 20.0;
+    const NAME_W: f32 = 44.0;
+    const START_W: f32 = 100.0;
+    const SIZE_W: f32 = 76.0;
+    const TAIL_W: f32 = 40.0;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.add_sized(
+            [DEFAULT_W, 16.0],
+            Label::new(RichText::new("默认").size(9.5).color(theme::TEXT_FAINT)),
+        );
+        ui.add_sized([NAME_W, 16.0], Label::new(""));
+        ui.add_sized(
+            [START_W, 16.0],
+            Label::new(RichText::new("起始地址").size(9.5).color(theme::TEXT_FAINT)),
+        );
+        ui.add_sized(
+            [SIZE_W, 16.0],
+            Label::new(RichText::new("大小").size(9.5).color(theme::TEXT_FAINT)),
+        );
+        ui.add_sized(
+            [TAIL_W, 16.0],
+            Label::new(
+                RichText::new(if kind == crate::config::MemoryKind::Ram {
+                    "NoInit"
+                } else {
+                    "启动"
+                })
+                .size(9.5)
+                .color(theme::TEXT_FAINT),
+            ),
+        );
+    });
+    ui.add_space(2.0);
+    let mut startup = None;
+    for (index, region) in regions.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.add_sized(
+                [DEFAULT_W, 20.0],
+                Checkbox::without_text(&mut region.enabled),
+            );
+            ui.add_sized(
+                [NAME_W, 20.0],
+                Label::new(
+                    RichText::new(&region.name)
+                        .size(10.5)
+                        .color(if region.enabled {
+                            theme::TEXT
+                        } else {
+                            theme::TEXT_FAINT
+                        }),
+                ),
+            );
+            ui.add_sized(
+                [START_W, 20.0],
+                TextEdit::singleline(&mut region.start)
+                    .font(FontId::monospace(10.5))
+                    .hint_text("0x0"),
+            );
+            ui.add_sized(
+                [SIZE_W, 20.0],
+                TextEdit::singleline(&mut region.size)
+                    .font(FontId::monospace(10.5))
+                    .hint_text("0x0"),
+            );
+            match kind {
+                crate::config::MemoryKind::Ram => {
+                    ui.add_sized([TAIL_W, 20.0], Checkbox::without_text(&mut region.no_init));
+                }
+                crate::config::MemoryKind::Rom => {
+                    if ui
+                        .add_sized([TAIL_W, 20.0], RadioButton::new(region.startup, ""))
+                        .clicked()
+                    {
+                        startup = Some(index);
+                    }
+                }
+            }
+        });
+        ui.add_space(3.0);
+    }
+    startup
+}
+
+fn memory_total(
+    ui: &mut egui::Ui,
+    label: &str,
+    kind: crate::config::MemoryKind,
+    regions: &[crate::config::MemoryRegionConfig],
+) {
+    let total = crate::memory::regions_total(regions, kind);
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("{label}:"))
+                .size(11.5)
+                .strong()
+                .color(theme::TEXT_DIM),
+        );
+        ui.label(
+            RichText::new(format!(
+                "{} ({} Bytes)",
+                crate::memory::format_size(total),
+                total
+            ))
+            .size(11.5)
+            .color(theme::TEXT),
+        );
+    });
+}
+
 #[derive(Clone, Copy)]
 enum DebugIcon {
     Continue,
+    Pause,
     StepOver,
     StepInto,
     StepOut,
@@ -7204,6 +7721,18 @@ fn paint_debug_icon(painter: &egui::Painter, rect: egui::Rect, icon: DebugIcon, 
                 CornerRadius::same(1),
                 color,
             );
+        }
+        DebugIcon::Pause => {
+            for offset in [-3.0_f32, 2.5] {
+                painter.rect_filled(
+                    egui::Rect::from_center_size(
+                        center + egui::vec2(offset, 0.0),
+                        egui::vec2(4.0, 12.0),
+                    ),
+                    CornerRadius::same(1),
+                    color,
+                );
+            }
         }
         DebugIcon::StepOver => {
             painter.add(egui::Shape::line(

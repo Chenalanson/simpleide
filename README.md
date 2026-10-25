@@ -39,7 +39,7 @@
 - 外设寄存器浏览器：工程内 SVD、芯片支持包内 SVD / CMSIS 头文件宏回退
 - Tab / Shift+Tab 缩进、选中行整块缩进、回车自动缩进，可配置空格或 Tab 与缩进宽度
 - 右侧代码预览小地图，可点击或拖动跳转；缩进参考线会高亮当前缩进层级，二者均可在设置中关闭
-- 调试：ARM 目标自动复用烧录配置的 OpenOCD / pyOCD 参数启动 GDB server，再用 arm-none-eabi-gdb 连接并加载 ELF/AXF；主机 EXE 使用普通 gdb。点击行号左侧或 F9 设置断点，F5 继续、F10/F11 单步、Shift+F5 停止；暂停时自动打开并高亮当前执行行，右侧提供变量 Live Watch 和只读寄存器表，可输入任意 gdb 命令
+- 调试：ARM 目标自动复用烧录配置的 OpenOCD / pyOCD 参数启动 GDB server，再用 arm-none-eabi-gdb 连接并加载 ELF/AXF；主机 EXE 使用普通 gdb。启动后按钮显示运行状态，运行中主按钮变为暂停图案；点击行号左侧或 F9 设置断点，F5 继续/暂停、F10/F11 单步、Shift+F5 停止；暂停时自动打开并高亮当前执行行，右侧提供变量 Live Watch、CPU 寄存器和外设寄存器实时值（需工程内有 SVD，或安装 Keil DFP 包），可输入任意 gdb 命令
 - 轻量导航/补全：F12 跳定义、Shift+F12 查引用；输入 2 个字符后自动在光标旁弹出补全，输入 `.` / `->` 时补全结构体成员；↑↓ 选择，Enter/Tab 插入，Esc 关闭，Ctrl+Space 手动打开
 - 多行粘贴自动对齐当前缩进；`Ctrl+Alt+左键拖动` 矩形列选择，可复制、删除或直接输入替换
 - 标签页右键菜单：关闭其他/右侧/已保存/全部；保存、另存为；复制完整路径、相对路径或面包屑路径；在文件资源管理器 / 资源管理器视图中显示；向右拆分、拆分和移动 → 向上拆分、取消拆分。两个拆分窗格都可编辑
@@ -51,7 +51,8 @@
 - 构建输出面板顶部可拖动调高度，收起后也能向上拉出；高度会保存
 - 本地构建或远程 SSH 构建（复用系统 OpenSSH）
 - 并行构建：设置 → 构建 → 并行任务数；Make 注入 `MAKEFLAGS=-jN`，Cargo 注入 `CARGO_BUILD_JOBS`，CMake 注入 `CMAKE_BUILD_PARALLEL_LEVEL`，命令里已有 `-j` 时不重复添加
-- 烧录工具可选 **自定义命令** / **OpenOCD** / **pyOCD**：支持工具路径下拉/浏览、`${ExecutableName}.hex` 等程序文件变量、OpenOCD 芯片/接口 cfg 自动补全、pyOCD 目标芯片与可选 Pack、命令预览；Flash 始终在本地工程目录执行
+- 烧录工具可选 **自定义命令** / **OpenOCD** / **pyOCD**：支持工具路径下拉/浏览、`${ExecutableName}.hex` 等程序文件变量、OpenOCD 芯片/接口 cfg 自动补全、pyOCD 目标芯片与可选 Pack、命令预览；Flash 始终在本地工程目录执行。工程信息 → 烧录配置 → **内存布局** 可设置 Flash/RAM 起始地址、大小和 .bin 下载起始地址
+- 构建输出标题栏显示 Flash / RAM 占用和芯片容量百分比；容量优先读取链接脚本，其次读取匹配的芯片支持包 `.pdsc`，没有 `size` 输出时直接解析 ELF 段大小
 - 每工程独立的构建、烧录、C/C++ 和调试配置保存在工程内 `.simple-embedded/settings.json`（包括 `debug.gdb_path`）；用户目录作为旧配置迁移和全局偏好存储
 - 工作区文件：构建卡片“工作区”可生成 `<工程名>.se-workspace` 并关联双击打开；也可从“工作区 → 打开工作区文件…”选择 `.se-workspace` / `.code-workspace`
 - 设置分为 构建 / 构建工具链 / 编辑器 / 调试 / 其他：构建页可设置命令和并行任务数；构建工具链可浏览编译器和 make，或一键把当前工具复制到软件自带目录，之后不依赖系统 PATH
@@ -236,7 +237,7 @@ examples/blink/  可直接打开的演示工程
 - 不支持多光标；Ctrl+Alt+左键只提供单一矩形列选择。分屏两个窗格都可编辑，但同一个文件不能在两个窗格重复打开
 - 远程构建不支持交互式密码；请使用 SSH key
 - 当前没有接入 `ssh-mcp` / `jlink-mcp`，远程构建走 OpenSSH；烧录走本地自定义命令、内置 OpenOCD 或内置 pyOCD
-- OpenOCD / pyOCD 直接以参数启动，不经过 shell；烧录使用 `program` / `flash`，调试时启动 `gdbserver` 并由 arm-none-eabi-gdb 连接。内置烧录只支持 `.hex` / `.elf` / `.axf`，不支持需要基地址的 `.bin`
+- OpenOCD / pyOCD 直接以参数启动，不经过 shell；烧录使用 `program` / `flash`，调试时启动 `gdbserver` 并由 arm-none-eabi-gdb 连接。内置烧录支持 `.hex` / `.elf` / `.axf`，也支持带起始地址的 `.bin`（地址来自内存布局）
 - 并行构建只对 Make / Cargo / CMake 自动注入环境变量；自定义脚本和直接调用 Ninja 需要自己添加并行参数
 
 ## 开发
