@@ -118,7 +118,7 @@ docs/                  README 截图和使用教程
 - 标签页右键菜单还提供关闭其他、关闭右侧标签页、关闭已保存、全部关闭；批量关闭遇到未保存文件时走 `PendingAction::CloseTabs` 确认。快捷键：Ctrl+F4 关闭当前，Ctrl+\ 向右拆分，Ctrl+K U 关闭已保存，Ctrl+K W 全部关闭，Ctrl+K Ctrl+\ 向上拆分。
 - 查找是编辑器右上角的约 560px 浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / `Ctrl+H` 打开，不占用独立行；替换行通过左侧下拉箭头展开，宽度不变。`Ctrl+G` 打开跳行浮层。
 - 面包屑栏只显示从工程根目录开始的路径（`doc.rel_path` 的 `/` 替换为 ` > `）和未保存标记；编码、行尾、语言、只读、寄存器、数组、符号、格式化、自动换行、保存移到最底部状态栏。补全和列编辑不出现在可见工具栏。
-- 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::GUTTER` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。
+- 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::GUTTER` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。编辑器卡底部两角由 `paint_bottom_corners` 补绘 `GUTTER` 圆角，输出面板原生日志区使用 `EDITOR_BG` 并撑满可用空间。
 - 最底部状态栏是贯穿整个窗口宽度的矩形条（无圆角、无外圈间隙），内容靠右排列：右侧操作按钮 + 行列/缩进/编码/行尾/语言信息。
 - `column.rs` 仍保留旧列编辑算法；`column_select.rs` + `ColumnSelectionState` 提供 Ctrl+Alt+鼠标左键拖动的矩形列选择，蓝色高亮，Ctrl+C 复制、Delete/Backspace 删除、直接输入替换。列编辑对话框已不在任何可见入口暴露。
 - 目前没有多光标；列选择是单一矩形区域，不支持多个独立光标。

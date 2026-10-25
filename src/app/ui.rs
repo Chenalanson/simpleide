@@ -787,6 +787,7 @@ impl App {
                 if self.goto_line.open {
                     self.show_goto_overlay(&ctx, editor_rect);
                 }
+                paint_bottom_corners(ui, editor_rect, 8.0, theme::GUTTER);
             });
     }
 
@@ -4955,4 +4956,39 @@ impl App {
                     });
             });
     }
+}
+
+fn paint_bottom_corners(ui: &egui::Ui, rect: egui::Rect, radius: f32, color: Color32) {
+    let radius = radius
+        .min(rect.width() * 0.5)
+        .min(rect.height() * 0.5)
+        .max(0.0);
+    if radius <= 0.0 {
+        return;
+    }
+    let painter = ui.painter().with_clip_rect(rect);
+    let steps = 8usize;
+    let mut left = Vec::with_capacity(steps + 2);
+    left.push(egui::pos2(rect.left(), rect.bottom()));
+    for step in 0..=steps {
+        let t = step as f32 / steps as f32;
+        let angle = std::f32::consts::PI - t * std::f32::consts::FRAC_PI_2;
+        left.push(egui::pos2(
+            rect.left() + radius + radius * angle.cos(),
+            rect.bottom() - radius + radius * angle.sin(),
+        ));
+    }
+    painter.add(egui::Shape::convex_polygon(left, color, Stroke::NONE));
+
+    let mut right = Vec::with_capacity(steps + 2);
+    right.push(egui::pos2(rect.right(), rect.bottom()));
+    for step in 0..=steps {
+        let t = step as f32 / steps as f32;
+        let angle = std::f32::consts::FRAC_PI_2 - t * std::f32::consts::FRAC_PI_2;
+        right.push(egui::pos2(
+            rect.right() - radius + radius * angle.cos(),
+            rect.bottom() - radius + radius * angle.sin(),
+        ));
+    }
+    painter.add(egui::Shape::convex_polygon(right, color, Stroke::NONE));
 }

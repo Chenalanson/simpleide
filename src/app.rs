@@ -3398,8 +3398,16 @@ impl App {
                 if open {
                     Frame::new()
                         .fill(theme::EDITOR_BG)
+                        .corner_radius(CornerRadius {
+                            nw: 0,
+                            ne: 0,
+                            sw: 8,
+                            se: 8,
+                        })
                         .inner_margin(Margin::symmetric(10, 5))
                         .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.set_min_height(ui.available_height());
                             if !self.build.log.is_empty() {
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 let row_height = 18.0;
