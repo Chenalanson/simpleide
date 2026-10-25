@@ -2,6 +2,7 @@
 /dist
 /tools
 /examples/blink/build
+/examples/test32/build
 *.log
 /.opencode/
 .simple-embedded/

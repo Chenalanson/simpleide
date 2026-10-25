@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "name": "test32",
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": ".simple-embedded/settings.json"
+}

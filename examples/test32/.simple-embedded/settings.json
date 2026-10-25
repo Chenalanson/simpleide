@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "build": {
+    "target": "Local",
+    "build_command": "mingw32-make",
+    "clean_command": "mingw32-make clean",
+    "rebuild_command": "mingw32-make clean && mingw32-make",
+    "flash_command": "",
+    "flash_tool": "openocd",
+    "openocd": {
+      "executable": "C:\\openocd-20260302\\OpenOCD-20260302-0.12.0\\bin\\openocd.exe",
+      "program_file": "${ExecutableName}.hex",
+      "target_config": "stm32f1x.cfg",
+      "interface_config": "stlink.cfg"
+    },
+    "pyocd": {
+      "executable": "pyocd",
+      "target": "stm32f103xb",
+      "pack": "",
+      "program_file": "${ExecutableName}.hex"
+    },
+    "build_jobs": 0,
+    "ssh_host": "",
+    "ssh_port": 22,
+    "remote_dir": "",
+    "extra_paths": [
+      "C:\\complier\\mingw64\\bin",
+      "C:\\complier\\arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi\\bin"
+    ],
+    "meta_includes": null,
+    "meta_library_dirs": null,
+    "meta_defines": null,
+    "build_options": {
+      "c_standard": "c99",
+      "cpp_standard": "c++03",
+      "optimization": "-Og",
+      "warning": "-Wall",
+      "lto": false,
+      "function_sections": true,
+      "split_load_store": false,
+      "plain_char_signed": false,
+      "short_enums": false,
+      "rtti": false,
+      "use_microlib": true,
+      "big_endian": false,
+      "debug_info": "enable",
+      "assembler_defines": [],
+      "assembler_type": "arm-auto (auto detect)",
+      "assembler_options": "",
+      "linker_output_format": "AXF",
+      "linker_no_binary": false,
+      "linker_binary_excludes": [],
+      "linker_xo_base": "",
+      "linker_ro_base": "",
+      "linker_rw_base": "",
+      "linker_options": ""
+    }
+  },
+  "debug": {
+    "program": "D:\\embeed\\examples\\test32\\build\\test32.axf",
+    "gdb_path": "C:\\complier\\arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi\\bin\\arm-none-eabi-gdb.exe",
+    "auto_refresh": true,
+    "watches": []
+  }
+}
