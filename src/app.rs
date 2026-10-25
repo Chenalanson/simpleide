@@ -38,6 +38,12 @@ struct Project {
     name: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SplitDirection {
+    Right,
+    Up,
+}
+
 impl Project {
     fn new(root: PathBuf) -> Self {
         let name = root
@@ -163,6 +169,14 @@ impl Default for ColumnEditState {
 }
 
 #[derive(Default)]
+struct GotoLineState {
+    open: bool,
+    input: String,
+    error: Option<String>,
+    focus_input: bool,
+}
+
+#[derive(Default)]
 struct CompletionState {
     open: bool,
     query: String,
@@ -222,6 +236,8 @@ struct FindState {
     replacement: String,
     case_sensitive: bool,
     use_regex: bool,
+    whole_word: bool,
+    preserve_case: bool,
     matches: Vec<FindMatch>,
     active: usize,
     error: Option<String>,
@@ -241,6 +257,8 @@ impl Default for FindState {
             replacement: String::new(),
             case_sensitive: false,
             use_regex: false,
+            whole_word: false,
+            preserve_case: false,
             matches: Vec::new(),
             active: 0,
             error: None,
@@ -278,10 +296,15 @@ impl FindState {
         if self.query.is_empty() {
             return;
         }
-        let pattern = if self.use_regex {
+        let base = if self.use_regex {
             self.query.clone()
         } else {
             regex::escape(&self.query)
+        };
+        let pattern = if self.whole_word {
+            format!(r"\b(?:{base})\b")
+        } else {
+            base
         };
         let compiled = regex::RegexBuilder::new(&pattern)
             .case_insensitive(!self.case_sensitive)
@@ -382,6 +405,10 @@ enum BuildOptionsTab {
 enum PendingAction {
     OpenProject(PathBuf),
     CloseTab(usize),
+    CloseTabs {
+        paths: Vec<PathBuf>,
+        focus: Option<PathBuf>,
+    },
     CloseWindow,
 }
 
@@ -420,6 +447,11 @@ enum Action {
     DebugSend(String),
     SelectTab(usize),
     CloseTab(usize),
+    CloseOtherTabs(usize),
+    CloseTabsToRight(usize),
+    CloseSavedTabs,
+    CloseAllTabs,
+    SplitTab(PathBuf, SplitDirection),
     SaveActive,
     Run(TaskKind),
     StopTask,
@@ -460,8 +492,13 @@ pub struct App {
     array: ArrayState,
     debug: DebugState,
     completion: CompletionState,
+    goto_line: GotoLineState,
     column_edit: ColumnEditState,
     split_path: Option<PathBuf>,
+    split_direction: SplitDirection,
+    split_cache: highlight::SharedLayoutCache,
+    scroll_to_cursor: bool,
+    chord_k_at: Option<Instant>,
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
     diagnostics_revision: u64,
@@ -516,8 +553,13 @@ impl App {
             array: ArrayState::default(),
             debug: DebugState::default(),
             completion: CompletionState::default(),
+            goto_line: GotoLineState::default(),
             column_edit: ColumnEditState::default(),
             split_path: None,
+            split_direction: SplitDirection::Right,
+            split_cache: highlight::new_cache(),
+            scroll_to_cursor: false,
+            chord_k_at: None,
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
             diagnostics_revision: u64::MAX,
@@ -758,6 +800,7 @@ impl App {
         doc.update_cursor(char_index);
         set_editor_cursor(ctx, &doc.path, char_index);
         self.focus_editor = true;
+        self.scroll_to_cursor = true;
         self.set_toast(
             format!("已跳转到 {} 第 {} 行", util::display_path(&path), line),
             Severity::Info,
@@ -1206,6 +1249,16 @@ impl App {
         self.debug.error = None;
     }
 
+    fn split_active(&mut self, direction: SplitDirection) {
+        let Some(doc) = self.active_document() else {
+            return;
+        };
+        let path = doc.path.clone();
+        self.split_path = Some(path);
+        self.split_direction = direction;
+        self.split_cache = highlight::new_cache();
+    }
+
     fn toggle_breakpoint(&mut self) {
         let Some(doc) = self.active_document() else {
             return;
@@ -1626,7 +1679,7 @@ impl App {
             return;
         };
         let text = doc.buffer.as_string().to_owned();
-        let replacement = if self.find.use_regex {
+        let mut replacement = if self.find.use_regex {
             self.find
                 .compiled
                 .as_ref()
@@ -1642,6 +1695,12 @@ impl App {
         } else {
             self.find.replacement.clone()
         };
+        if self.find.preserve_case {
+            replacement = preserve_case_replacement(
+                &text[matched.start_byte..matched.end_byte],
+                &replacement,
+            );
+        }
         let mut new_text = String::with_capacity(text.len() + replacement.len());
         new_text.push_str(&text[..matched.start_byte]);
         new_text.push_str(&replacement);
@@ -1676,7 +1735,34 @@ impl App {
             return;
         }
         let text = doc.buffer.as_string().to_owned();
-        let new_text = if let Some(regex) = &self.find.compiled {
+        let new_text = if self.find.preserve_case {
+            let mut result = String::with_capacity(text.len());
+            let mut cursor = 0usize;
+            for matched in &self.find.matches {
+                if matched.start_byte < cursor || matched.end_byte > text.len() {
+                    continue;
+                }
+                result.push_str(&text[cursor..matched.start_byte]);
+                let original = &text[matched.start_byte..matched.end_byte];
+                let expanded = if self.find.use_regex {
+                    self.find
+                        .compiled
+                        .as_ref()
+                        .map(|regex| {
+                            regex
+                                .replace(original, self.find.replacement.as_str())
+                                .into_owned()
+                        })
+                        .unwrap_or_else(|| self.find.replacement.clone())
+                } else {
+                    self.find.replacement.clone()
+                };
+                result.push_str(&preserve_case_replacement(original, &expanded));
+                cursor = matched.end_byte;
+            }
+            result.push_str(&text[cursor..]);
+            result
+        } else if let Some(regex) = &self.find.compiled {
             if self.find.use_regex {
                 regex
                     .replace_all(&text, self.find.replacement.as_str())
@@ -1711,6 +1797,92 @@ impl App {
         } else {
             self.close_tab_now(index);
         }
+    }
+
+    fn request_close_paths(&mut self, paths: Vec<PathBuf>, focus: Option<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        let has_dirty = self
+            .tabs
+            .iter()
+            .any(|doc| doc.is_dirty() && paths.iter().any(|path| same_path(path, &doc.path)));
+        if has_dirty {
+            self.pending = Some(PendingDialog {
+                action: PendingAction::CloseTabs { paths, focus },
+                error: None,
+            });
+        } else {
+            self.close_tab_paths_now(&paths, focus.as_deref());
+        }
+    }
+
+    fn request_close_others(&mut self, index: usize) {
+        let Some(keep) = self.tabs.get(index).map(|doc| doc.path.clone()) else {
+            return;
+        };
+        let paths = self
+            .tabs
+            .iter()
+            .filter(|doc| !same_path(&doc.path, &keep))
+            .map(|doc| doc.path.clone())
+            .collect::<Vec<_>>();
+        self.request_close_paths(paths, Some(keep));
+    }
+
+    fn request_close_to_right(&mut self, index: usize) {
+        let Some(focus) = self.tabs.get(index).map(|doc| doc.path.clone()) else {
+            return;
+        };
+        let paths = self
+            .tabs
+            .iter()
+            .skip(index + 1)
+            .map(|doc| doc.path.clone())
+            .collect::<Vec<_>>();
+        self.request_close_paths(paths, Some(focus));
+    }
+
+    fn request_close_all(&mut self) {
+        let paths = self.tabs.iter().map(|doc| doc.path.clone()).collect();
+        self.request_close_paths(paths, None);
+    }
+
+    fn close_saved_tabs(&mut self) {
+        let paths = self
+            .tabs
+            .iter()
+            .filter(|doc| !doc.is_dirty())
+            .map(|doc| doc.path.clone())
+            .collect::<Vec<_>>();
+        self.close_tab_paths_now(&paths, None);
+    }
+
+    fn close_tab_paths_now(&mut self, paths: &[PathBuf], focus: Option<&Path>) {
+        if paths.is_empty() {
+            return;
+        }
+        let current = self.active_document().map(|doc| doc.path.clone());
+        let focus = focus
+            .filter(|path| self.tabs.iter().any(|doc| same_path(&doc.path, path)))
+            .map(Path::to_path_buf);
+        self.tabs
+            .retain(|doc| !paths.iter().any(|path| same_path(path, &doc.path)));
+        if self
+            .split_path
+            .as_ref()
+            .is_some_and(|path| paths.iter().any(|removed| same_path(path, removed)))
+        {
+            self.split_path = None;
+        }
+        self.active = focus
+            .and_then(|path| self.tabs.iter().position(|doc| same_path(&doc.path, &path)))
+            .or_else(|| {
+                current
+                    .and_then(|path| self.tabs.iter().position(|doc| same_path(&doc.path, &path)))
+            })
+            .or_else(|| (!self.tabs.is_empty()).then_some(0));
+        self.focus_editor = self.active.is_some();
     }
 
     fn close_tab_now(&mut self, index: usize) {
@@ -2026,6 +2198,13 @@ impl App {
             return;
         }
 
+        if self
+            .chord_k_at
+            .is_some_and(|at| at.elapsed() > Duration::from_millis(1500))
+        {
+            self.chord_k_at = None;
+        }
+        let chord_active = self.chord_k_at.is_some();
         let (
             open,
             save,
@@ -2062,6 +2241,13 @@ impl App {
             references_jump,
             completion_open,
             column_edit_open,
+            close_tab_f4,
+            split_right,
+            chord_k,
+            chord_close_saved,
+            chord_close_all,
+            chord_split_up,
+            goto_line_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
             (
@@ -2101,6 +2287,13 @@ impl App {
                 input.key_pressed(egui::Key::F12) && input.modifiers.shift,
                 command && input.key_pressed(egui::Key::Space),
                 input.modifiers.alt && input.key_pressed(egui::Key::C),
+                command && input.key_pressed(egui::Key::F4),
+                command && input.key_pressed(egui::Key::Backslash),
+                command && input.key_pressed(egui::Key::K),
+                chord_active && input.key_pressed(egui::Key::U),
+                chord_active && input.key_pressed(egui::Key::W),
+                chord_active && command && input.key_pressed(egui::Key::Backslash),
+                command && !input.modifiers.shift && input.key_pressed(egui::Key::G),
             )
         });
 
@@ -2142,6 +2335,9 @@ impl App {
             self.find.focus_query = true;
         }
         if find_replace {
+            ctx.input_mut(|input| {
+                input.consume_key(egui::Modifiers::COMMAND, egui::Key::H);
+            });
             self.find.open = true;
             self.find.replace_open = true;
             self.find.focus_query = true;
@@ -2210,6 +2406,38 @@ impl App {
         if column_edit_open {
             self.open_column_edit(ctx);
         }
+        if goto_line_open {
+            if self.active_document().is_some() {
+                self.goto_line.open = true;
+                self.goto_line.input.clear();
+                self.goto_line.error = None;
+                self.goto_line.focus_input = true;
+                self.find.open = false;
+            } else {
+                self.set_toast("请先打开一个文件", Severity::Info);
+            }
+        }
+        if chord_k {
+            self.chord_k_at = Some(Instant::now());
+        }
+        if chord_close_saved {
+            self.chord_k_at = None;
+            self.close_saved_tabs();
+        } else if chord_close_all {
+            self.chord_k_at = None;
+            self.request_close_all();
+        } else if chord_split_up {
+            self.chord_k_at = None;
+            self.split_active(SplitDirection::Up);
+        }
+        if close_tab_f4 {
+            if let Some(index) = self.active {
+                self.request_close_tab(index);
+            }
+        }
+        if split_right && !chord_split_up {
+            self.split_active(SplitDirection::Right);
+        }
         if format_document {
             self.format_current_document();
         }
@@ -2250,6 +2478,10 @@ impl App {
         }
         if self.completion.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.completion.open = false;
+            self.focus_editor = true;
+        }
+        if self.goto_line.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.goto_line.open = false;
             self.focus_editor = true;
         }
         if self.column_edit.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -2364,6 +2596,15 @@ impl App {
                     }
                 }
                 Action::CloseTab(index) => self.request_close_tab(index),
+                Action::CloseOtherTabs(index) => self.request_close_others(index),
+                Action::CloseTabsToRight(index) => self.request_close_to_right(index),
+                Action::CloseSavedTabs => self.close_saved_tabs(),
+                Action::CloseAllTabs => self.request_close_all(),
+                Action::SplitTab(path, direction) => {
+                    self.split_path = Some(path);
+                    self.split_direction = direction;
+                    self.split_cache = highlight::new_cache();
+                }
                 Action::SaveActive => {
                     self.save_active();
                 }
@@ -2484,6 +2725,32 @@ fn build_result_status(last: &LastBuild) -> (Color32, String) {
         BuildOutcome::Cancelled => (theme::WARNING, format!("{}已停止", last.kind.verb())),
         BuildOutcome::Error(_) => (theme::ERROR, format!("{}无法执行", last.kind.verb())),
     }
+}
+
+fn preserve_case_replacement(original: &str, replacement: &str) -> String {
+    if replacement.is_empty() {
+        return String::new();
+    }
+    let letters = original
+        .chars()
+        .filter(|ch| ch.is_alphabetic())
+        .collect::<Vec<_>>();
+    if letters.is_empty() {
+        return replacement.to_owned();
+    }
+    if letters.iter().all(|ch| ch.is_uppercase()) {
+        return replacement.to_uppercase();
+    }
+    if letters.iter().all(|ch| ch.is_lowercase()) {
+        return replacement.to_lowercase();
+    }
+    if letters[0].is_uppercase() && letters.iter().skip(1).all(|ch| ch.is_lowercase()) {
+        let mut chars = replacement.chars();
+        if let Some(first) = chars.next() {
+            return format!("{}{}", first.to_uppercase(), chars.as_str().to_lowercase());
+        }
+    }
+    replacement.to_owned()
 }
 
 fn gdb_source_path(path: &Path) -> String {
@@ -3284,5 +3551,25 @@ mod tests {
         assert_eq!(find.active, 0);
         assert!(find.select_next(0, false));
         assert_eq!(find.active, 2);
+    }
+
+    #[test]
+    fn find_whole_word_respects_identifier_boundaries() {
+        let mut find = FindState {
+            open: true,
+            query: "foo".to_owned(),
+            whole_word: true,
+            ..Default::default()
+        };
+        find.rebuild("foo foobar foo_bar foo", 1);
+        assert_eq!(find.matches.len(), 2);
+    }
+
+    #[test]
+    fn preserve_case_matches_original_style() {
+        assert_eq!(preserve_case_replacement("FOO", "bar"), "BAR");
+        assert_eq!(preserve_case_replacement("foo", "BAR"), "bar");
+        assert_eq!(preserve_case_replacement("Foo", "bar"), "Bar");
+        assert_eq!(preserve_case_replacement("fOo", "bar"), "bar");
     }
 }

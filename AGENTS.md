@@ -96,8 +96,9 @@ docs/                  README 截图和使用教程
 - 左侧行号与当前行高亮；`Settings.relative_line_numbers` 切换相对行号，`Settings.ruler_column` 可选 80/120 列标尺，`Settings.show_whitespace` 显示空格/Tab/换行标记。
 - 书签按 `Document.bookmarks` 保存在内存中；`Ctrl+F2` 切换，`F2` / `Shift+F2` 前后跳转，书签行在行号栏左侧显示强调色竖条。
 - `brackets.rs` 提供 C 风格注释/字符串感知的括号匹配；光标靠近括号时高亮配对，`Ctrl+]` 跳到配对括号。
-- 查找/替换由 `FindState` 管理，支持大小写和正则；匹配范围通过 `LayoutSpec.search_ranges` 进入高亮缓存，替换使用 `EditorBuffer::set_text`。当前文件内查找由查找栏完成。
-- `search.rs` 负责全工程搜索：按 `IgnoreRules` 剪枝目录，跳过 2 MB 以上文件和二进制文件，最多 500 条结果；`Ctrl+Shift+F` 或查找栏“全工程”打开结果窗口，点击跳转。
+- 查找/替换由 `FindState` 管理，支持大小写、全字匹配（`ab`）、正则和替换时保留大小写（`AB`）；匹配范围通过 `LayoutSpec.search_ranges` 进入高亮缓存，替换使用 `EditorBuffer::set_text`。当前文件内查找由右上角浮层完成。
+- `Ctrl+G` 打开 `show_goto_overlay`：输入行号后回车，`goto_line_apply` 校验范围并设置光标/滚动到目标行；Esc 关闭。
+- `search.rs` 负责全工程搜索：按 `IgnoreRules` 剪枝目录，跳过 2 MB 以上文件和二进制文件，最多 500 条结果；`Ctrl+Shift+F` 或查找浮层 `≡` 打开结果窗口，点击跳转。
 - `ignore.rs` 实现 gitignore 风格匹配（`*`、`**`、`?`、目录、否定规则）。资源管理器读取工程根 `.gitignore`，也可在设置中追加分号分隔的忽略规则；`Settings.respect_gitignore` 控制是否启用。
 - `indent.rs` 负责缩进：`Tab` / `Shift+Tab` 插删缩进单元（选中多行时整块处理），回车调用 `auto_indent` 保持缩进并在左括号后增加一级。`Settings.use_spaces` / `indent_width` 控制缩进风格。
 - 自动保存由 `App::tick_autosave` 的脏文档签名驱动：编辑停止 `Settings.autosave_delay_ms` 后调用 `save_all_dirty`，并在无输入时请求重绘；默认关闭。
@@ -112,7 +113,11 @@ docs/                  README 截图和使用教程
 - `debugger.rs` 启动本机 gdb CLI（非 MI），通过 stdin/stdout 转发命令并收集控制台输出；`DebugState` 保存会话、断点和日志。右侧“调试”或 `F5` 启动/继续，`F9` 切换断点，`F10` 下一步，`F11` 单步，`Shift+F11` 跳出，`Shift+F5` 停止。调试程序默认取设置路径，否则从 `build/`、`Debug/`、`Release/` 等目录挑最新的 ELF/AXF/EXE；gdb 架构必须与目标匹配（ARM 需 arm-none-eabi-gdb）。
 - `navigation.rs` 提供标识符/前缀提取与字符区间替换；`F12` 在 `symbols.rs` 索引中找定义，`Shift+F12` 用全工程正则搜索列引用，工具栏“补全”或 `Ctrl+Space` 打开符号补全。全部是轻量启发式，不是 LSP。
 - 粘贴由编辑器在 TextEdit 前拦截 `Event::Paste`：`indent::adjust_pasted` 统一换行并按当前行缩进对齐后续行，同时保留粘贴内容相对缩进；只读或编辑器未聚焦时不拦截。
-- 分屏是 `App::split_path` + `show_split_preview`：左侧仍是当前可编辑文件，右侧用 `highlight::layout_cached` 绘制只读语法高亮预览（带行号），不能编辑或跳转；关闭分屏或关闭对应 Tab 会清除。
+- 分屏只从标签页右键菜单进入：`向右拆分` / `拆分和移动 → 向上拆分`。`App::split_path` + `split_direction` + `show_split_preview` 显示另一个文件的只读语法高亮预览（带行号），不能编辑或跳转；关闭分屏或关闭对应 Tab 会清除。工具栏不再放分屏按钮。
+- 标签页右键菜单还提供关闭其他、关闭右侧标签页、关闭已保存、全部关闭；批量关闭遇到未保存文件时走 `PendingAction::CloseTabs` 确认。快捷键：Ctrl+F4 关闭当前，Ctrl+\ 向右拆分，Ctrl+K U 关闭已保存，Ctrl+K W 全部关闭，Ctrl+K Ctrl+\ 向上拆分。
+- 查找是编辑器右上角的浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / 工具栏“查找”打开，不再占用独立行；替换输入和按钮在浮层内展开。
+- 编辑器工具栏左侧显示从工程根目录开始的面包屑（`doc.rel_path` 的 `/` 替换为 ` > `），右侧保留编码、只读、补全、格式化等按钮。
+- 左侧项目栏整体使用带边框和圆角的 `Frame`（`Panel::left` 的 frame，圆角 8），内部仍是构建卡片、资源管理器、工程信息。
 - `column.rs` 提供列编辑：对选中行范围在指定 1-based 列插入/删除/替换，短行补空格；工具栏“列编辑”或 `Alt+C` 打开。它是按钮式批量操作，不是鼠标矩形选区或多光标。
 - `log.rs` 的 `parse_location` 解析 `file:line:col`；日志行带位置时可点击跳转。`LogStore` 维护最多 1000 条问题诊断，`App::refresh_diagnostics` 解析为本地路径并在行号栏右侧画红/黄竖条；输出面板可过滤全部/错误/警告。
 - 当前版本未内置 LSP；补全、跳转和引用搜索是轻量符号索引，调试是基础 gdb 控制台，不是完整 IDE 调试前端。后续增强在 `xiug` 分支分批接入，不要伪造未接通的能力。
@@ -197,7 +202,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器、十六进制、数组生成、列编辑、gdb 路径检测。当前共 80 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器、十六进制、数组生成、列编辑、gdb 路径检测。当前共 82 个测试。
 
 UI 改动后建议：
 

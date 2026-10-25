@@ -28,6 +28,8 @@ impl App {
             .frame(
                 Frame::new()
                     .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                    .corner_radius(8)
                     .inner_margin(Margin::same(0)),
             )
             .show_inside(ui, |ui| {
@@ -576,26 +578,158 @@ impl App {
 
                 self.show_tab_strip(ui, actions);
                 self.show_editor_toolbar(ui, actions);
-                if self.find.open {
-                    self.show_find_bar(ui);
-                }
                 ui.separator();
+                let editor_rect = ui.available_rect_before_wrap();
                 let split_index = self
                     .split_path
                     .as_ref()
-                    .and_then(|path| self.tabs.iter().position(|doc| same_path(&doc.path, path)))
-                    .filter(|index| Some(*index) != self.active);
+                    .and_then(|path| self.tabs.iter().position(|doc| same_path(&doc.path, path)));
                 if let Some(index) = split_index {
-                    ui.columns(2, |columns| {
-                        self.show_code_editor(&mut columns[0]);
-                        self.show_split_preview(&mut columns[1], index);
-                    });
+                    match self.split_direction {
+                        SplitDirection::Right => {
+                            ui.columns(2, |columns| {
+                                self.show_code_editor(&mut columns[0]);
+                                self.show_split_preview(&mut columns[1], index);
+                            });
+                        }
+                        SplitDirection::Up => {
+                            let available = ui.available_height();
+                            let top = (available * 0.5).clamp(120.0, (available - 80.0).max(120.0));
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), top),
+                                Layout::top_down(Align::Min),
+                                |ui| {
+                                    self.show_split_preview(ui, index);
+                                },
+                            );
+                            ui.separator();
+                            self.show_code_editor(ui);
+                        }
+                    }
                 } else {
                     if self.split_path.is_some() {
                         self.split_path = None;
                     }
                     self.show_code_editor(ui);
                 }
+                let ctx = ui.ctx().clone();
+                if self.find.open {
+                    self.show_find_overlay(&ctx, editor_rect);
+                }
+                if self.goto_line.open {
+                    self.show_goto_overlay(&ctx, editor_rect);
+                }
+            });
+    }
+
+    fn show_goto_overlay(&mut self, ctx: &egui::Context, editor_rect: egui::Rect) {
+        let line_count = self
+            .active_document()
+            .map(|doc| doc.buffer.as_string().split('\n').count().max(1))
+            .unwrap_or(1);
+        let width = 420.0_f32.min((editor_rect.width() - 24.0).max(260.0));
+        let position = egui::pos2(editor_rect.left() + 48.0, editor_rect.top() + 8.0);
+        let mut apply = false;
+        egui::Area::new(Id::new("simple_embedded_goto_line"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(position)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(theme::PANEL_RAISED)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .corner_radius(5)
+                    .inner_margin(Margin::same(6))
+                    .show(ui, |ui| {
+                        ui.set_width(width);
+                        let response = ui.add(
+                            TextEdit::singleline(&mut self.goto_line.input)
+                                .id(Id::new("simple_embedded_goto_line_input"))
+                                .font(FontId::monospace(12.0))
+                                .text_color(theme::TEXT)
+                                .background_color(theme::BG)
+                                .desired_width(width)
+                                .hint_text(String::new()),
+                        );
+                        if self.goto_line.focus_input {
+                            response.request_focus();
+                            self.goto_line.focus_input = false;
+                        }
+                        if response.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                        {
+                            apply = true;
+                        }
+                        ui.add_space(4.0);
+                        if let Some(error) = &self.goto_line.error {
+                            ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                        } else {
+                            Frame::new()
+                                .fill(theme::ACCENT_SOFT)
+                                .corner_radius(3)
+                                .inner_margin(Margin::symmetric(7, 4))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "键入要跳转的行号(从 1 到 {line_count})。"
+                                        ))
+                                        .size(10.5)
+                                        .color(theme::TEXT),
+                                    );
+                                });
+                        }
+                    });
+            });
+        if apply {
+            self.goto_line_apply(ctx);
+        }
+    }
+
+    fn goto_line_apply(&mut self, ctx: &egui::Context) {
+        let Some(doc) = self.active_document() else {
+            return;
+        };
+        let text = doc.buffer.as_string().to_owned();
+        let line_count = text.split('\n').count().max(1);
+        let input = self.goto_line.input.trim().to_owned();
+        let Ok(line) = input.parse::<usize>() else {
+            self.goto_line.error = Some("请输入数字行号".to_owned());
+            self.goto_line.focus_input = true;
+            return;
+        };
+        if line == 0 || line > line_count {
+            self.goto_line.error = Some(format!("行号必须在 1 到 {line_count} 之间"));
+            self.goto_line.focus_input = true;
+            return;
+        }
+        let char_index = crate::util::char_index_at_line(&text, line);
+        let Some(doc) = self.tabs.get_mut(self.active.unwrap_or(0)) else {
+            return;
+        };
+        doc.update_cursor(char_index);
+        set_editor_cursor(ctx, &doc.path, char_index);
+        self.goto_line.open = false;
+        self.goto_line.error = None;
+        self.focus_editor = true;
+        self.scroll_to_cursor = true;
+    }
+
+    fn show_find_overlay(&mut self, ctx: &egui::Context, editor_rect: egui::Rect) {
+        let desired: f32 = if self.find.replace_open { 650.0 } else { 470.0 };
+        let width = desired.min((editor_rect.width() - 24.0).max(300.0));
+        let position = egui::pos2(editor_rect.right() - width - 12.0, editor_rect.top() + 8.0);
+        egui::Area::new(Id::new("simple_embedded_find_overlay"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(position)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(theme::PANEL_RAISED)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .corner_radius(6)
+                    .inner_margin(Margin::symmetric(8, 5))
+                    .show(ui, |ui| {
+                        ui.set_width(width - 16.0);
+                        self.show_find_bar(ui);
+                    });
             });
     }
 
@@ -710,6 +844,48 @@ impl App {
                                 } else if response.clicked() {
                                     actions.push(Action::SelectTab(index));
                                 }
+                                if response.secondary_clicked() {
+                                    actions.push(Action::SelectTab(index));
+                                }
+                                response.context_menu(|ui| {
+                                    if ui.button("关闭    Ctrl+F4").clicked() {
+                                        actions.push(Action::CloseTab(index));
+                                        ui.close();
+                                    }
+                                    if ui.button("关闭其他").clicked() {
+                                        actions.push(Action::CloseOtherTabs(index));
+                                        ui.close();
+                                    }
+                                    if ui.button("关闭右侧标签页").clicked() {
+                                        actions.push(Action::CloseTabsToRight(index));
+                                        ui.close();
+                                    }
+                                    if ui.button("关闭已保存    Ctrl+K U").clicked() {
+                                        actions.push(Action::CloseSavedTabs);
+                                        ui.close();
+                                    }
+                                    if ui.button("全部关闭    Ctrl+K W").clicked() {
+                                        actions.push(Action::CloseAllTabs);
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui.button("向右拆分    Ctrl+\\").clicked() {
+                                        actions.push(Action::SplitTab(
+                                            doc.path.clone(),
+                                            SplitDirection::Right,
+                                        ));
+                                        ui.close();
+                                    }
+                                    ui.menu_button("拆分和移动", |ui| {
+                                        if ui.button("向上拆分    Ctrl+K Ctrl+\\").clicked() {
+                                            actions.push(Action::SplitTab(
+                                                doc.path.clone(),
+                                                SplitDirection::Up,
+                                            ));
+                                            ui.close();
+                                        }
+                                    });
+                                });
                                 response.on_hover_text(util::display_path(&doc.path));
                             }
                         });
@@ -724,7 +900,7 @@ impl App {
         let Some(doc) = self.tabs.get(active) else {
             return;
         };
-        let path = doc.rel_path.clone();
+        let breadcrumb = doc.rel_path.replace('/', " > ");
         let full_path = util::display_path(&doc.path);
         let language = doc.language.clone();
         let newline = doc.newline_label();
@@ -732,7 +908,6 @@ impl App {
         let word_wrap = self.settings.word_wrap;
         let encoding = doc.encoding;
         let read_only = doc.read_only;
-        let split_on = self.split_path.is_some();
 
         Frame::new()
             .fill(theme::EDITOR_BG)
@@ -742,8 +917,12 @@ impl App {
                 ui.horizontal(|ui| {
                     let response = ui.add_sized(
                         [ui.available_width().min(400.0), 22.0],
-                        Label::new(RichText::new(&path).size(12.0).color(theme::TEXT_FAINT))
-                            .truncate(),
+                        Label::new(
+                            RichText::new(&breadcrumb)
+                                .size(12.0)
+                                .color(theme::TEXT_FAINT),
+                        )
+                        .truncate(),
                     );
                     response.on_hover_text(&full_path);
                     if dirty {
@@ -785,19 +964,6 @@ impl App {
                             .clicked()
                         {
                             actions.push(Action::ToggleWrap);
-                        }
-                        if ui
-                            .add(
-                                Button::new(
-                                    RichText::new("查找").size(12.0).color(theme::TEXT_DIM),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("查找 / 替换 (Ctrl+F)")
-                            .clicked()
-                        {
-                            self.find.open = true;
-                            self.find.focus_query = true;
                         }
                         if ui
                             .add(
@@ -871,28 +1037,6 @@ impl App {
                         {
                             actions.push(Action::OpenColumnEdit);
                         }
-                        if ui
-                            .add(
-                                Button::new(RichText::new("分屏").size(12.0).color(if split_on {
-                                    theme::ACCENT
-                                } else {
-                                    theme::TEXT_DIM
-                                }))
-                                .frame(false),
-                            )
-                            .on_hover_text("并排显示另一个已打开文件（只读预览）")
-                            .clicked()
-                        {
-                            if split_on {
-                                self.split_path = None;
-                            } else if self.tabs.len() < 2 {
-                                self.set_toast("至少打开两个文件才能分屏", Severity::Info);
-                            } else {
-                                let active = self.active.unwrap_or(0);
-                                let next = (active + 1) % self.tabs.len();
-                                self.split_path = Some(self.tabs[next].path.clone());
-                            }
-                        }
                         let read_only_color = if read_only {
                             theme::WARNING
                         } else {
@@ -948,148 +1092,196 @@ impl App {
         let mut previous = false;
         let mut replace_current = false;
         let mut replace_all = false;
-        Frame::new()
-            .fill(theme::PANEL)
-            .inner_margin(Margin::symmetric(12, 5))
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("查找").size(11.5).color(theme::TEXT_DIM));
-                    let query = ui.add(
-                        TextEdit::singleline(&mut self.find.query)
-                            .id(Id::new("simple_embedded_find_query"))
-                            .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
-                            .desired_width(220.0)
-                            .hint_text("查找内容"),
-                    );
-                    if self.find.focus_query {
-                        query.request_focus();
-                        self.find.focus_query = false;
-                    }
-                    if query.changed() {
-                        self.find.dirty = true;
-                    }
-                    if query.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                        next = true;
-                    }
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let available = ui.available_width();
+        ui.horizontal(|ui| {
+            let (chevron_rect, chevron_response) =
+                ui.allocate_exact_size(egui::vec2(24.0, 28.0), Sense::click());
+            let chevron_fill = if self.find.replace_open {
+                theme::ACCENT_SOFT
+            } else if chevron_response.hovered() {
+                theme::SURFACE
+            } else {
+                theme::PANEL_RAISED
+            };
+            ui.painter().rect(
+                chevron_rect,
+                CornerRadius::same(4),
+                chevron_fill,
+                Stroke::new(1.0_f32, theme::ACCENT),
+                egui::StrokeKind::Inside,
+            );
+            let center = chevron_rect.center();
+            let (from_y, to_y) = if self.find.replace_open {
+                (2.0, -2.0)
+            } else {
+                (-2.0, 2.0)
+            };
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x - 4.0, center.y + from_y),
+                    egui::pos2(center.x, center.y + to_y),
+                ],
+                Stroke::new(1.4_f32, theme::ACCENT),
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x, center.y + to_y),
+                    egui::pos2(center.x + 4.0, center.y + from_y),
+                ],
+                Stroke::new(1.4_f32, theme::ACCENT),
+            );
+            if chevron_response
+                .on_hover_text(if self.find.replace_open {
+                    "收起替换"
+                } else {
+                    "展开替换"
+                })
+                .clicked()
+            {
+                self.find.replace_open = !self.find.replace_open;
+            }
+            let query_width = (available - 260.0).clamp(140.0, 420.0);
+            let query = ui.add(
+                TextEdit::singleline(&mut self.find.query)
+                    .id(Id::new("simple_embedded_find_query"))
+                    .font(FontId::monospace(12.0))
+                    .text_color(theme::TEXT)
+                    .background_color(theme::BG)
+                    .desired_width(query_width)
+                    .hint_text(RichText::new("查找").color(theme::TEXT_FAINT)),
+            );
+            if self.find.focus_query {
+                query.request_focus();
+                self.find.focus_query = false;
+            }
+            if query.changed() {
+                self.find.dirty = true;
+            }
+            if query.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                next = true;
+            }
 
-                    if ui
-                        .selectable_label(self.find.case_sensitive, RichText::new("Aa").size(11.0))
-                        .on_hover_text("区分大小写")
-                        .clicked()
-                    {
-                        self.find.case_sensitive = !self.find.case_sensitive;
-                        self.find.dirty = true;
-                    }
-                    if ui
-                        .selectable_label(self.find.use_regex, RichText::new(".*").size(11.0))
-                        .on_hover_text("正则表达式")
-                        .clicked()
-                    {
-                        self.find.use_regex = !self.find.use_regex;
-                        self.find.dirty = true;
-                    }
+            if ui
+                .selectable_label(self.find.case_sensitive, RichText::new("Aa").size(11.0))
+                .on_hover_text("区分大小写")
+                .clicked()
+            {
+                self.find.case_sensitive = !self.find.case_sensitive;
+                self.find.dirty = true;
+            }
+            if ui
+                .selectable_label(self.find.whole_word, RichText::new("ab").size(11.0))
+                .on_hover_text("全字匹配")
+                .clicked()
+            {
+                self.find.whole_word = !self.find.whole_word;
+                self.find.dirty = true;
+            }
+            if ui
+                .selectable_label(self.find.use_regex, RichText::new(".*").size(11.0))
+                .on_hover_text("正则表达式")
+                .clicked()
+            {
+                self.find.use_regex = !self.find.use_regex;
+                self.find.dirty = true;
+            }
 
-                    if let Some(active) = self.active {
-                        if let Some(doc) = self.tabs.get(active) {
-                            self.find
-                                .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
-                        }
-                    }
+            if let Some(active) = self.active {
+                if let Some(doc) = self.tabs.get(active) {
+                    self.find
+                        .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+                }
+            }
 
-                    let status = if let Some(error) = &self.find.error {
-                        error.clone()
-                    } else if self.find.query.is_empty() {
-                        "0/0".to_owned()
-                    } else {
-                        format!(
-                            "{}/{}",
-                            if self.find.matches.is_empty() {
-                                0
-                            } else {
-                                self.find.active + 1
-                            },
-                            self.find.matches.len()
-                        )
-                    };
-                    let status_color = if self.find.error.is_some() {
-                        theme::ERROR
-                    } else {
-                        theme::TEXT_FAINT
-                    };
-                    ui.label(RichText::new(status).size(10.5).color(status_color));
+            let status = if let Some(error) = &self.find.error {
+                error.clone()
+            } else if self.find.query.is_empty() {
+                String::new()
+            } else if self.find.matches.is_empty() {
+                "无结果".to_owned()
+            } else {
+                format!("{}/{}", self.find.active + 1, self.find.matches.len())
+            };
+            let status_color = if self.find.error.is_some() {
+                theme::ERROR
+            } else {
+                theme::TEXT_FAINT
+            };
+            ui.label(RichText::new(status).size(10.5).color(status_color));
 
-                    if ui
-                        .add(small_flat_button("上一个", theme::TEXT_DIM))
-                        .clicked()
-                    {
-                        previous = true;
-                    }
-                    if ui
-                        .add(small_flat_button("下一个", theme::TEXT_DIM))
-                        .clicked()
-                    {
-                        next = true;
-                    }
-                    if ui
-                        .add(small_flat_button("全工程", theme::TEXT_DIM))
-                        .on_hover_text("全工程搜索 (Ctrl+Shift+F)")
-                        .clicked()
-                    {
-                        self.project_search.open = true;
-                        self.project_search.focus_query = true;
-                    }
-                    if ui
-                        .add(small_flat_button(
-                            if self.find.replace_open {
-                                "隐藏替换"
-                            } else {
-                                "替换"
-                            },
-                            theme::TEXT_DIM,
-                        ))
-                        .clicked()
-                    {
-                        self.find.replace_open = !self.find.replace_open;
-                    }
-                    if ui
-                        .add(small_flat_button("×", theme::TEXT_DIM))
-                        .on_hover_text("关闭查找")
-                        .clicked()
-                    {
-                        self.find.open = false;
-                        self.focus_editor = true;
-                    }
-                });
+            if ui
+                .add(small_flat_button("上", theme::TEXT_DIM))
+                .on_hover_text("上一个匹配")
+                .clicked()
+            {
+                previous = true;
+            }
+            if ui
+                .add(small_flat_button("下", theme::TEXT_DIM))
+                .on_hover_text("下一个匹配")
+                .clicked()
+            {
+                next = true;
+            }
+            if ui
+                .add(small_flat_button("≡", theme::TEXT_DIM))
+                .on_hover_text("全工程搜索 (Ctrl+Shift+F)")
+                .clicked()
+            {
+                self.project_search.open = true;
+                self.project_search.focus_query = true;
+            }
+            if ui
+                .add(small_flat_button("×", theme::TEXT_DIM))
+                .on_hover_text("关闭查找")
+                .clicked()
+            {
+                self.find.open = false;
+                self.focus_editor = true;
+            }
+        });
 
-                if self.find.replace_open {
-                    ui.add_space(2.0);
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("替换为").size(11.5).color(theme::TEXT_DIM));
-                        ui.add(
-                            TextEdit::singleline(&mut self.find.replacement)
-                                .id(Id::new("simple_embedded_find_replace"))
-                                .font(FontId::monospace(12.0))
-                                .text_color(theme::TEXT)
-                                .background_color(theme::BG)
-                                .desired_width(220.0)
-                                .hint_text("替换内容"),
-                        );
-                        if ui
-                            .add(theme::secondary_button("替换"))
-                            .on_hover_text("替换当前匹配")
-                            .clicked()
-                        {
-                            replace_current = true;
-                        }
-                        if ui.add(theme::secondary_button("全部替换")).clicked() {
-                            replace_all = true;
-                        }
-                    });
+        if self.find.replace_open {
+            ui.add_space(3.0);
+            ui.horizontal(|ui| {
+                ui.add_space(28.0);
+                let replace_width = (available - 150.0).clamp(140.0, 520.0);
+                let replace = ui.add(
+                    TextEdit::singleline(&mut self.find.replacement)
+                        .id(Id::new("simple_embedded_find_replace"))
+                        .font(FontId::monospace(12.0))
+                        .text_color(theme::TEXT)
+                        .background_color(theme::BG)
+                        .desired_width(replace_width)
+                        .hint_text(RichText::new("替换").color(theme::TEXT_FAINT)),
+                );
+                if replace.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                    replace_current = true;
+                }
+                if ui
+                    .selectable_label(self.find.preserve_case, RichText::new("AB").size(11.0))
+                    .on_hover_text("保留大小写")
+                    .clicked()
+                {
+                    self.find.preserve_case = !self.find.preserve_case;
+                }
+                if ui
+                    .add(small_flat_button("替换", theme::TEXT_DIM))
+                    .on_hover_text("替换当前匹配")
+                    .clicked()
+                {
+                    replace_current = true;
+                }
+                if ui
+                    .add(small_flat_button("全部", theme::TEXT_DIM))
+                    .on_hover_text("全部替换")
+                    .clicked()
+                {
+                    replace_all = true;
                 }
             });
+        }
 
         if next {
             self.find_next(ui.ctx(), true);
@@ -2311,6 +2503,10 @@ impl App {
         let name = doc.name.clone();
         let dirty = doc.is_dirty();
         let path = doc.path.clone();
+        let placement = match self.split_direction {
+            SplitDirection::Right => "右侧",
+            SplitDirection::Up => "上方",
+        };
         let mut close_split = false;
         Frame::new()
             .fill(theme::PANEL)
@@ -2318,7 +2514,7 @@ impl App {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!("分屏预览 · {name}"))
+                        RichText::new(format!("{placement}分屏预览 · {name}"))
                             .size(11.5)
                             .strong()
                             .color(theme::TEXT_DIM),
@@ -2352,7 +2548,7 @@ impl App {
                 decorations_key: 0,
                 search_ranges: &[],
             },
-            &doc.layout_cache,
+            &self.split_cache,
         );
         ScrollArea::both()
             .id_salt(("simple_embedded_split_preview", &path))
@@ -2643,6 +2839,7 @@ impl App {
         let show_whitespace = self.settings.show_whitespace;
         let ruler_column = self.settings.ruler_column;
         let focus_editor = std::mem::take(&mut self.focus_editor);
+        let scroll_cursor = std::mem::take(&mut self.scroll_to_cursor);
         let font_id = FontId::monospace(font_size);
         let viewport_width = ui.available_width();
         let rows = ((ui.available_height() / (font_size * 1.35)).ceil() as usize).max(20);
@@ -2725,6 +2922,13 @@ impl App {
                             )));
                         state.store(ui.ctx(), output.response.response.id);
                     }
+                }
+                if scroll_cursor {
+                    let caret = output
+                        .galley
+                        .pos_from_cursor(egui::text::CCursor::new(doc.cursor_index))
+                        .translate(output.galley_pos.to_vec2());
+                    ui.scroll_to_rect(caret, None);
                 }
                 gutter = Some((Arc::clone(&output.galley), output.galley_pos));
                 response = Some(output.response.response);
@@ -4515,6 +4719,11 @@ impl App {
                 format!("当前文件有未保存的修改（共 {dirty} 个文件未保存）。"),
                 "保存并关闭",
             ),
+            PendingAction::CloseTabs { .. } => (
+                "关闭多个文件前保存更改？",
+                format!("选中的标签页中有未保存的修改（共 {dirty} 个文件未保存）。"),
+                "保存并关闭",
+            ),
             PendingAction::CloseWindow => (
                 "退出 Simple embedded 前保存更改？",
                 format!("有 {dirty} 个文件尚未保存。"),
@@ -4615,6 +4824,9 @@ impl App {
             }
             PendingAction::CloseTab(index) => {
                 self.close_tab_now(index);
+            }
+            PendingAction::CloseTabs { paths, focus } => {
+                self.close_tab_paths_now(&paths, focus.as_deref());
             }
             PendingAction::CloseWindow => {
                 self.allow_close = true;
