@@ -21,6 +21,7 @@ mod indent;
 mod log;
 mod makefile;
 mod memory;
+mod memory_check;
 mod minimap;
 mod navigation;
 mod project_meta;

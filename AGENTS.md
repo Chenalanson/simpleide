@@ -52,6 +52,7 @@ src/editor.rs          EditorBuffer（String + revision）和 Document
 src/file_tree.rs       惰性目录树
 src/flash.rs           烧录工具配置、OpenOCD / pyOCD 检测与命令构造
 src/memory.rs          ELF / 链接脚本 / PDSC 内存区域与固件占用统计
+src/memory_check.rs    数组越界、危险字符串函数、重复释放等 C 内存安全静态扫描
 src/completion.rs      轻量成员索引、补全上下文和候选类型
 src/highlight.rs       syntect 高亮和 galley 缓存
 src/minimap.rs         编辑器右侧代码预览、缩略行缓存和滚动跳转
@@ -209,7 +210,7 @@ docs/                  README 截图和使用教程
 
 - 用户界面使用中文；保持现有深色配色和 `docs/` 截图风格。
 - 界面不显示 emoji/生僻符号；使用 `Painter` 画图形或已验证的字符。
-- 右侧操作栏：纵向排列 Build、Clean/Rebuild/Flash、调试；不再放设置按钮，设置从构建卡片“配置”或 `Ctrl+,` 打开。
+- 右侧操作栏：纵向排列 Build、Clean/重构、Flash、调试、检测；不再放设置按钮，设置从构建卡片“配置”或 `Ctrl+,` 打开。检测按钮只在调试会话存在时启用，点击后静态扫描所有 `.c/.h`：数组常量下标越界、`strcpy`/`strcat`/`strncpy`/`memcpy`/`memset` 常量长度、`gets`/`sprintf`、重复 `free`、可疑 `malloc` 字节数、返回数组名；结果在“非法内存检测”窗口按文件:行显示，可点击跳转。它是启发式静态检查，不替代 ASAN/Valgrind 或运行时 watchpoint。
 - 构建结果和内存占用显示在输出面板标题和日志中；构建视图标题显示 `Flash 已用 / 总量 (百分比) · RAM 已用 / 总量 (百分比)`，占用来自 `text/data/bss` 或 ELF 段，容量来自链接脚本 / PDSC / 工程信息。输出面板可切换“构建输出 / 调试输出”，底部不再保留重复的状态栏。
 - 构建输出面板顶部有 10px 拖动手柄，收起时也能向上拉出；高度存 `Settings.output_height`，最大到主区域顶部。
 - 调试控制是编辑器右上角的小浮层，位置参考查找浮层；停止、单步等使用 `Painter` 绘制的图案按钮。调试信息放在输出面板“调试输出”页，不在独立窗口里。
@@ -242,7 +243,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址。当前共 143 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描。当前共 147 个测试。
 
 UI 改动后建议：
 

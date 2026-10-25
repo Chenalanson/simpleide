@@ -324,6 +324,16 @@ struct DebugState {
     log_scan: usize,
 }
 
+#[derive(Default)]
+struct MemoryCheckState {
+    open: bool,
+    findings: Vec<crate::memory_check::Finding>,
+    files: usize,
+    arrays: usize,
+    error: Option<String>,
+    query: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CreateKind {
     File,
@@ -666,6 +676,7 @@ enum Action {
     ImportSupportPack(PathBuf),
     EditFlashConfig,
     EditMemoryLayout,
+    RunMemoryCheck,
     SetFlashTool(FlashTool),
     SetOpenOcdPath(String),
     BrowseOpenOcd,
@@ -726,6 +737,7 @@ pub struct App {
     memory_draft: Option<MemoryDraft>,
     memory_layout: Option<crate::memory::ResolvedMemory>,
     memory_usage_cache: Option<(PathBuf, SystemTime, Option<crate::memory::MemoryUsage>)>,
+    memory_check: MemoryCheckState,
     file_clipboard: Option<FileClipboard>,
     image_preview: Option<ImagePreviewState>,
     output_view: OutputView,
@@ -806,6 +818,7 @@ impl App {
             memory_draft: None,
             memory_layout: None,
             memory_usage_cache: None,
+            memory_check: MemoryCheckState::default(),
             file_clipboard: None,
             image_preview: None,
             output_view: OutputView::default(),
@@ -896,6 +909,7 @@ impl App {
         self.debug.target = None;
         self.create_entry = None;
         self.image_preview = None;
+        self.memory_check = MemoryCheckState::default();
         self.output_view = OutputView::Build;
 
         let mut config_error = None;
@@ -1335,6 +1349,45 @@ impl App {
             Err(err) => {
                 self.registers.items.clear();
                 self.registers.error = Some(err);
+            }
+        }
+    }
+
+    fn run_memory_check(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开一个工程文件夹", Severity::Warning);
+            return;
+        };
+        let ignore = IgnoreRules::load(
+            &root,
+            self.settings.respect_gitignore,
+            &self.settings.ignore_patterns,
+        );
+        match crate::memory_check::scan_project(&root, &ignore) {
+            Ok(report) => {
+                let count = report.findings.len();
+                self.memory_check.findings = report.findings;
+                self.memory_check.files = report.files;
+                self.memory_check.arrays = report.arrays;
+                self.memory_check.error = None;
+                self.memory_check.open = true;
+                self.set_toast(
+                    if count == 0 {
+                        "未发现明显的数组越界或内存错误模式".to_owned()
+                    } else {
+                        format!("检测完成：发现 {count} 个可疑点")
+                    },
+                    if count == 0 {
+                        Severity::Info
+                    } else {
+                        Severity::Warning
+                    },
+                );
+            }
+            Err(err) => {
+                self.memory_check.error = Some(err.clone());
+                self.memory_check.open = true;
+                self.set_toast(err, Severity::Error);
             }
         }
     }
@@ -4480,6 +4533,10 @@ impl App {
             self.registers.open = false;
             self.focus_editor = true;
         }
+        if self.memory_check.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.memory_check.open = false;
+            self.focus_editor = true;
+        }
         if self.array.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.array.open = false;
             self.focus_editor = true;
@@ -5224,6 +5281,7 @@ impl App {
                 Action::ImportSupportPack(path) => self.import_support_pack_files(vec![path]),
                 Action::EditFlashConfig => self.open_flash_config(),
                 Action::EditMemoryLayout => self.open_memory_layout(),
+                Action::RunMemoryCheck => self.run_memory_check(),
                 Action::SetFlashTool(tool) => self.set_flash_tool(tool),
                 Action::SetOpenOcdPath(path) => self.set_openocd_path(path),
                 Action::BrowseOpenOcd => self.browse_openocd(),
@@ -5789,6 +5847,9 @@ impl eframe::App for App {
         if self.registers.open && !modal_open {
             self.show_registers(&ctx, &mut actions);
         }
+        if self.memory_check.open && !modal_open {
+            self.show_memory_check(&ctx, &mut actions);
+        }
         if self.array.open && !modal_open {
             self.show_array_generator(&ctx);
         }
@@ -6021,7 +6082,7 @@ impl App {
                         };
                         let response = ui
                             .add_enabled_ui(can_rebuild, |ui| {
-                                ui.add_sized([width, 30.0], theme::secondary_button("重构建"))
+                                ui.add_sized([width, 30.0], theme::secondary_button("重构"))
                             })
                             .inner;
                         let response = if can_rebuild {
@@ -6073,6 +6134,27 @@ impl App {
                             .on_hover_text(debug_tip);
                         if response.clicked() {
                             actions.push(Action::OpenDebug);
+                        }
+
+                        ui.add_space(6.0);
+                        let can_check = has_project && self.debug.session.is_some();
+                        let check_tip = if can_check {
+                            "扫描数组越界、危险字符串操作、重复释放等内存问题"
+                        } else {
+                            "仅调试时可用：请先启动调试会话"
+                        };
+                        let response = ui
+                            .add_enabled_ui(can_check, |ui| {
+                                ui.add_sized([width, 30.0], theme::secondary_button("检测"))
+                            })
+                            .inner;
+                        let response = if can_check {
+                            response.on_hover_text(check_tip)
+                        } else {
+                            response.on_disabled_hover_text(check_tip)
+                        };
+                        if response.clicked() {
+                            actions.push(Action::RunMemoryCheck);
                         }
                     }
                 });

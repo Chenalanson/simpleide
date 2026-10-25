@@ -3259,6 +3259,147 @@ impl App {
             self.memory_draft = Some(draft);
         }
     }
+    pub(super) fn show_memory_check(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let mut open = self.memory_check.open;
+        let mut rescan = false;
+        egui::Window::new("非法内存检测")
+            .id(Id::new("simple_embedded_memory_check"))
+            .open(&mut open)
+            .resizable(true)
+            .default_size([780.0, 560.0])
+            .min_size([420.0, 260.0])
+            .frame(
+                Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(14, 12)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("数组与内存安全扫描")
+                            .size(14.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "{} 个文件 · {} 个数组 · {} 个可疑点",
+                            self.memory_check.files,
+                            self.memory_check.arrays,
+                            self.memory_check.findings.len()
+                        ))
+                        .size(10.0)
+                        .color(theme::TEXT_FAINT),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(small_flat_button("重新扫描", theme::ACCENT)).clicked() {
+                            rescan = true;
+                        }
+                    });
+                });
+                ui.label(
+                    RichText::new("仅调试时可用；静态扫描查找常量下标越界、危险字符串函数、重复释放、可疑 malloc 和返回局部数组。它不替代 ASAN/Valgrind 或硬件 watchpoint。")
+                        .size(9.5)
+                        .color(theme::TEXT_FAINT),
+                );
+                ui.add_space(5.0);
+                ui.add(
+                    TextEdit::singleline(&mut self.memory_check.query)
+                        .id(Id::new("simple_embedded_memory_check_filter"))
+                        .desired_width(f32::INFINITY)
+                        .hint_text("搜索文件、类别或说明"),
+                );
+                ui.add_space(4.0);
+                if let Some(error) = &self.memory_check.error {
+                    ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                }
+                let filter = self.memory_check.query.trim().to_lowercase();
+                let findings = self
+                    .memory_check
+                    .findings
+                    .iter()
+                    .filter(|finding| {
+                        filter.is_empty()
+                            || finding
+                                .path
+                                .to_string_lossy()
+                                .to_lowercase()
+                                .contains(&filter)
+                            || finding.category.to_lowercase().contains(&filter)
+                            || finding.message.to_lowercase().contains(&filter)
+                    })
+                    .collect::<Vec<_>>();
+                let remaining = ui.available_height();
+                ScrollArea::vertical()
+                    .id_salt("simple_embedded_memory_check_list")
+                    .max_height(remaining)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if findings.is_empty() {
+                            ui.label(
+                                RichText::new(
+                                    "未发现明显的数组越界或内存错误模式。复杂宏、跨文件作用域和运行时数据仍可能有问题。",
+                                )
+                                .size(11.0)
+                                .color(theme::TEXT_FAINT),
+                            );
+                            return;
+                        }
+                        for finding in findings {
+                            let color = match finding.severity {
+                                crate::memory_check::Severity::Error => theme::ERROR,
+                                crate::memory_check::Severity::Warning => theme::WARNING,
+                                crate::memory_check::Severity::Info => theme::ACCENT,
+                            };
+                            ui.horizontal(|ui| {
+                                colored_dot(ui, color, 4.0);
+                                let location = format!(
+                                    "{}:{}",
+                                    util::file_name(&finding.path),
+                                    finding.line
+                                );
+                                if ui
+                                    .add(small_flat_button(location.as_str(), color))
+                                    .on_hover_text(util::display_path(&finding.path))
+                                    .clicked()
+                                {
+                                    actions.push(Action::OpenAt(
+                                        util::display_path(&finding.path),
+                                        finding.line,
+                                        1,
+                                    ));
+                                }
+                                ui.label(
+                                    RichText::new(finding.category)
+                                        .size(9.5)
+                                        .color(theme::TEXT_FAINT),
+                                );
+                                ui.label(
+                                    RichText::new(&finding.message)
+                                        .size(10.5)
+                                        .color(theme::TEXT),
+                                );
+                            });
+                            if !finding.snippet.is_empty() {
+                                ui.label(
+                                    RichText::new(format!("    {}", finding.snippet))
+                                        .monospace()
+                                        .size(9.0)
+                                        .color(theme::TEXT_FAINT),
+                                );
+                            }
+                            ui.add_space(3.0);
+                        }
+                    });
+            });
+        self.memory_check.open = open;
+        if rescan {
+            self.run_memory_check();
+        }
+    }
+
     pub(super) fn show_image_preview(&mut self, ctx: &egui::Context) {
         let Some(state) = self.image_preview.take() else {
             return;
@@ -3357,7 +3498,6 @@ impl App {
                         }
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let refresh_label = if pending { "刷新中" } else { "刷新" };
                         let color = if pending {
                             theme::TEXT_FAINT
                         } else {
@@ -3366,9 +3506,13 @@ impl App {
                         if ui
                             .add_enabled(
                                 has_session && !pending,
-                                small_flat_button(refresh_label, color),
+                                small_flat_button("刷新", color),
                             )
-                            .on_hover_text("刷新当前页面数据")
+                            .on_hover_text(if pending {
+                                "正在刷新当前页面数据…"
+                            } else {
+                                "刷新当前页面数据"
+                            })
                             .clicked()
                         {
                             refresh = true;

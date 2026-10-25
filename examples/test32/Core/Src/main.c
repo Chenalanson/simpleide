@@ -181,3 +181,13 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
+/* Simple embedded memory-check test. Intentionally out of bounds; not called. */
+__attribute__((unused))
+static void se_memory_check_test(void)
+{
+  int values[4];
+  values[4] = 123;
+  values[5] = values[4];
+}
+
