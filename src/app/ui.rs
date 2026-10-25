@@ -187,6 +187,7 @@ impl App {
                     Stroke::NONE,
                     egui::StrokeKind::Inside,
                 );
+                let panel_bottom = ui.max_rect().bottom();
                 ui.add_space(14.0);
                 Frame::new()
                     .inner_margin(Margin::symmetric(12, 0))
@@ -311,15 +312,18 @@ impl App {
 
                 let mut resource_open = self.resource_open;
                 let mut info_open = self.info_open;
+                let mut tree_clipped = false;
 
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), ui.available_height()),
                     Layout::top_down(Align::Min),
                     |ui| {
                         ui.add_space(10.0);
+                        ui.spacing_mut().item_spacing.y = 0.0;
                         Frame::new()
-                            .inner_margin(Margin::symmetric(11, 7))
+                            .inner_margin(Margin::symmetric(11, 4))
                             .show(ui, |ui| {
+                                ui.spacing_mut().interact_size.y = 18.0;
                                 ui.horizontal(|ui| {
                                     if section_chevron(ui, resource_open).clicked() {
                                         resource_open = !resource_open;
@@ -423,7 +427,7 @@ impl App {
                         if resource_open {
                             ui.add_space(6.0);
                             let tree_budget = if has_project {
-                                (ui.available_height() - 50.0).max(80.0)
+                                (ui.available_height() - 56.0).max(80.0)
                             } else {
                                 ui.available_height().max(80.0)
                             };
@@ -479,6 +483,7 @@ impl App {
                             if has_project {
                                 let clipped = tree_output.content_size.y
                                     > tree_output.inner_rect.height() + 0.5;
+                                tree_clipped = clipped;
                                 let can_resize = info_open && clipped;
                                 let (split_rect, split_response) = ui.allocate_exact_size(
                                     egui::vec2(ui.available_width(), 8.0),
@@ -505,14 +510,13 @@ impl App {
                                 let _ = split_rect;
                             }
                         } else if has_project {
-                            ui.add_space(6.0);
+                            // Keep the project-info header tight under the collapsed explorer.
                         }
 
                         if has_project {
-                            ui.add_space(4.0);
-                            info_header_row(ui, &mut info_open);
-                            ui.add_space(4.0);
                             if info_open {
+                                info_header_row(ui, &mut info_open);
+                                ui.add_space(4.0);
                                 Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
                                     ui,
                                     |ui| {
@@ -524,6 +528,18 @@ impl App {
                                             .show(ui, |ui| self.show_project_meta(ui, actions));
                                     },
                                 );
+                            } else if tree_clipped {
+                                // Center the collapsed project-info header in the
+                                // space left below the file tree so the gaps above
+                                // and below the header have the same height.
+                                let header_height = 32.0;
+                                let remaining = (panel_bottom - ui.cursor().top()).max(0.0);
+                                let pad = ((remaining - header_height) * 0.5).max(0.0);
+                                ui.add_space(pad);
+                                info_header_row(ui, &mut info_open);
+                                ui.add_space(pad);
+                            } else {
+                                info_header_row(ui, &mut info_open);
                             }
                         }
                     },
@@ -4714,8 +4730,9 @@ fn apply_tab_indent(
 
 fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool) {
     Frame::new()
-        .inner_margin(Margin::symmetric(11, 5))
+        .inner_margin(Margin::symmetric(11, 6))
         .show(ui, |ui| {
+            ui.set_min_height(20.0);
             ui.horizontal(|ui| {
                 if section_chevron(ui, *info_open).clicked() {
                     *info_open = !*info_open;
