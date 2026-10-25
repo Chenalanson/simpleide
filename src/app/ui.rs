@@ -515,8 +515,9 @@ impl App {
 
                         if has_project {
                             if info_open {
+                                ui.add_space(6.0);
                                 info_header_row(ui, &mut info_open);
-                                ui.add_space(4.0);
+                                ui.add_space(6.0);
                                 Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
                                     ui,
                                     |ui| {
