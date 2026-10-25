@@ -633,6 +633,7 @@ enum Action {
     OpenDebug,
     DebugContinue,
     DebugPause,
+    DebugJumpToCurrent,
     DebugStepOver,
     DebugStepInto,
     DebugFinish,
@@ -2172,6 +2173,18 @@ impl App {
         };
         let path = absolute.filter(|path| path.is_file())?;
         Some(std::fs::canonicalize(&path).unwrap_or(path))
+    }
+
+    fn debug_jump_to_current(&mut self, ctx: &egui::Context) {
+        let Some((path, line)) = self.debug.current_source.clone() else {
+            self.set_toast("当前没有可定位的执行行", Severity::Info);
+            return;
+        };
+        self.jump_to_debug_source(ctx, &path, line);
+        self.set_toast(
+            format!("已定位到 {} 第 {} 行", util::file_name(&path), line),
+            Severity::Info,
+        );
     }
 
     /// Show the paused source line without replacing the debug console focus.
@@ -5121,6 +5134,7 @@ impl App {
                 }
                 Action::DebugContinue => self.debug_continue(),
                 Action::DebugPause => self.debug_pause(),
+                Action::DebugJumpToCurrent => self.debug_jump_to_current(ctx),
                 Action::DebugStepOver => self.debug_step_command("next"),
                 Action::DebugStepInto => self.debug_step_command("step"),
                 Action::DebugFinish => self.debug_step_command("finish"),

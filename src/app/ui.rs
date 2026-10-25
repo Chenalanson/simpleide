@@ -3949,6 +3949,7 @@ impl App {
             .unwrap_or_else(|| "未选择调试程序".to_owned());
         let target_full = target_path.as_ref().map(|path| util::display_path(path));
         let breakpoints = self.debug.breakpoints.len();
+        let can_locate = self.debug.current_source.is_some();
         let screen = ctx.content_rect();
         let anchor = self.last_editor_rect.unwrap_or(screen);
         let width = 300.0_f32.min((anchor.width() - 20.0).max(260.0));
@@ -3996,6 +3997,16 @@ impl App {
                             ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
                         }
                         ui.horizontal(|ui| {
+                            if debug_icon_button(
+                                ui,
+                                DebugIcon::Locate,
+                                has_session && can_locate,
+                                "回到当前运行行",
+                            )
+                            .clicked()
+                            {
+                                action = Some(Action::DebugJumpToCurrent);
+                            }
                             if target_running {
                                 if debug_icon_button(ui, DebugIcon::Pause, true, "暂停 (F5)")
                                     .clicked()
@@ -7752,6 +7763,7 @@ fn memory_total(
 enum DebugIcon {
     Continue,
     Pause,
+    Locate,
     StepOver,
     StepInto,
     StepOut,
@@ -7797,6 +7809,19 @@ fn paint_debug_icon(painter: &egui::Painter, rect: egui::Rect, icon: DebugIcon, 
     let center = rect.center();
     let stroke = Stroke::new(1.6_f32, color);
     match icon {
+        DebugIcon::Locate => {
+            painter.circle_stroke(center, 5.5, Stroke::new(1.5_f32, color));
+            painter.circle_filled(center, 1.8, color);
+            for (dx, dy) in [(0.0, -8.0), (0.0, 8.0), (-8.0, 0.0), (8.0, 0.0)] {
+                painter.line_segment(
+                    [
+                        center + egui::vec2(dx * 0.65, dy * 0.65),
+                        center + egui::vec2(dx, dy),
+                    ],
+                    Stroke::new(1.3_f32, color),
+                );
+            }
+        }
         DebugIcon::Continue => {
             painter.add(egui::Shape::convex_polygon(
                 vec![
