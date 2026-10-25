@@ -46,6 +46,8 @@ pub struct RunSpec {
     pub cwd: std::path::PathBuf,
     pub display: String,
     pub env_paths: Vec<std::path::PathBuf>,
+    /// Extra environment variables for the child process.
+    pub env: Vec<(OsString, OsString)>,
 }
 
 enum BuildEvent {
@@ -326,6 +328,9 @@ fn spawn_process(spec: &RunSpec) -> Result<SpawnedProcess, String> {
             }
         }
     }
+    for (name, value) in &spec.env {
+        command.env(name, value);
+    }
     hide_console(&mut command);
 
     let mut child = command
@@ -469,6 +474,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn passes_extra_environment_to_child() {
+        #[cfg(target_os = "windows")]
+        let spec = RunSpec {
+            program: "cmd".into(),
+            args: vec!["/C".into(), "echo %SIMPLE_EMBEDDED_TEST_ENV%".into()],
+            cwd: std::env::current_dir().unwrap(),
+            display: "echo env".into(),
+            env_paths: Vec::new(),
+            env: vec![(
+                OsString::from("SIMPLE_EMBEDDED_TEST_ENV"),
+                OsString::from("parallel-7"),
+            )],
+        };
+        #[cfg(not(target_os = "windows"))]
+        let spec = RunSpec {
+            program: "sh".into(),
+            args: vec!["-c".into(), "echo \"$SIMPLE_EMBEDDED_TEST_ENV\"".into()],
+            cwd: std::env::current_dir().unwrap(),
+            display: "echo env".into(),
+            env_paths: Vec::new(),
+            env: vec![(
+                OsString::from("SIMPLE_EMBEDDED_TEST_ENV"),
+                OsString::from("parallel-7"),
+            )],
+        };
+
+        let mut controller = BuildController::default();
+        controller.start(spec, TaskKind::Build).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while controller.is_running() && Instant::now() < deadline {
+            controller.poll();
+            thread::sleep(Duration::from_millis(20));
+        }
+        controller.poll();
+        assert!(controller.log.all_text().contains("parallel-7"));
+    }
+
+    #[test]
     fn streams_a_command_to_completion() {
         #[cfg(target_os = "windows")]
         let spec = RunSpec {
@@ -477,6 +520,7 @@ mod tests {
             cwd: std::env::current_dir().unwrap(),
             display: "echo build-ok".into(),
             env_paths: Vec::new(),
+            env: Vec::new(),
         };
         #[cfg(not(target_os = "windows"))]
         let spec = RunSpec {
@@ -485,6 +529,7 @@ mod tests {
             cwd: std::env::current_dir().unwrap(),
             display: "echo build-ok".into(),
             env_paths: Vec::new(),
+            env: Vec::new(),
         };
 
         let mut controller = BuildController::default();

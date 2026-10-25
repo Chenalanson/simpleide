@@ -50,7 +50,7 @@ src/config.rs          自动检测、每工程配置、SSH 命令构造、设�
 src/project_meta.rs    Makefile / Keil .uvprojx 工程元数据提取
 src/editor.rs          EditorBuffer（String + revision）和 Document
 src/file_tree.rs       惰性目录树
-src/flash.rs           烧录工具配置、OpenOCD 检测与命令构造
+src/flash.rs           烧录工具配置、OpenOCD / pyOCD 检测与命令构造
 src/completion.rs      轻量成员索引、补全上下文和候选类型
 src/highlight.rs       syntect 高亮和 galley 缓存
 src/minimap.rs         编辑器右侧代码预览、缩略行缓存和滚动跳转
@@ -129,7 +129,7 @@ docs/                  README 截图和使用教程
 - 查找是编辑器右上角的约 420px 紧凑浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / `Ctrl+H` 打开，不占用独立行；左侧下拉箭头展开替换行，宽度不变，`AB` 保留大小写在替换输入框内，替换/全部替换为图标按钮。`Ctrl+G` 打开同宽的跳行浮层，输入框复用查找输入框样式；提示文字为普通次要色，不使用色块。
 - 面包屑栏只显示从工程根目录开始的路径（`doc.rel_path` 的 `/` 替换为 ` > `）和未保存标记；编码、行尾、语言、只读、寄存器、数组、符号、格式化、自动换行、保存移到最底部状态栏。补全和列编辑不出现在可见工具栏。
 - 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::GUTTER` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。右侧操作栏宽约 58px（原 110px 的一半），按钮内边距同步收窄。编辑器卡底部两角由 `paint_bottom_corners` 补绘 `GUTTER` 圆角，输出面板标题栏紧贴面板顶部，拖动区域合并到标题栏顶部 4px，日志区使用 `EDITOR_BG` 并撑满剩余空间。
-- 设置弹窗第一行是 构建 / 构建工具链 / 编辑器 / 调试 / 其他 五个页签，下方只显示当前页；构建工具链页提供编译器、make 的输入框和浏览按钮，可从 PATH 自动检测，也提供“软件自带”目录、工具状态和一键安装。
+- 设置弹窗第一行是 构建 / 构建工具链 / 编辑器 / 调试 / 其他 五个页签，下方只显示当前页；构建页包含 Build/Clean/Rebuild/Flash 命令和“并行任务数”（0 = 不启用，可一键填入 CPU 核心数）；构建工具链页提供编译器、make 的输入框和浏览按钮，可从 PATH 自动检测，也提供“软件自带”目录、工具状态和一键安装。
 - 最底部状态栏是贯穿整个窗口宽度的矩形条（无圆角、无外圈间隙），内容靠右排列：右侧操作按钮 + 行列/缩进/编码/行尾/语言信息。
 - `column.rs` 仍保留旧列编辑算法；`column_select.rs` + `ColumnSelectionState` 提供 Ctrl+Alt+鼠标左键拖动的矩形列选择，蓝色高亮，Ctrl+C 复制、Delete/Backspace 删除、直接输入替换。列编辑对话框已不在任何可见入口暴露。
 - 目前没有多光标；列选择是单一矩形区域，不支持多个独立光标。
@@ -159,9 +159,9 @@ docs/                  README 截图和使用教程
   - 本地：Windows `cmd /S /C`，Unix `sh -c`。
   - 远程：`ssh -o BatchMode=yes -o ConnectTimeout=10 [ -p port ] host "cd '<remote_dir>' && <command>"`。
   - Flash 永远本地执行。
-- `BuildConfig.flash_tool` 为 `custom` / `openocd`。`custom` 使用 `flash_command` 经 shell 执行；`openocd` 使用 `flash.rs` 直接构造参数运行 `openocd -f interface/... -f target/... -c "program ... verify reset exit"`，不经过 shell，路径空格由 `Command` 处理。`OpenOcdConfig` 保存工具路径、程序文件、芯片配置和接口配置；只写 `stm32f1x.cfg` / `stlink.cfg` 时会自动补 `target/` / `interface/`，程序文件支持 `${ExecutableName}`、`${ProjectName}`、`${workspaceFolder}`、`${workspaceRoot}`。工具路径下拉会检测 PATH、Program Files、PlatformIO 等常见 OpenOCD 安装位置。
-- OpenOCD 的程序文件默认按 `ProjectMeta` 的 output_dir 和常见 `build/Debug/Release` 目录选择最新产物；Flash 前找不到程序文件会直接报错，不自动构建。Flash 不依赖编译器/make，软件自带工具链缺失时不应阻止烧录。
-- pyOCD 目前没有内置；可继续用 `custom` 命令接 `pyocd flash`。
+- `BuildConfig.flash_tool` 为 `custom` / `openocd` / `pyocd`。`custom` 使用 `flash_command` 经 shell 执行；`openocd` 使用 `flash.rs` 直接构造参数运行 `openocd -f interface/... -f target/... -c "program ... verify reset exit"`；`pyocd` 直接运行 `pyocd flash -t <target> [--pack <pack>] <program>`，两者都不经过 shell，路径空格由 `Command` 处理。`OpenOcdConfig` 保存工具路径、程序文件、芯片配置和接口配置；`PyOcdConfig` 保存工具路径、目标芯片、可选 Pack 和程序文件。程序文件支持 `${ExecutableName}`、`${ProjectName}`、`${workspaceFolder}`、`${workspaceRoot}`。工具路径下拉会检测 PATH、OpenOCD 安装目录、Python Scripts 等常见位置。
+- OpenOCD / pyOCD 的程序文件默认按 `ProjectMeta` 的 output_dir 和常见 `build/Debug/Release` 目录选择最新产物；Flash 前找不到程序文件会直接报错，不自动构建。切到 pyOCD 时会用工程芯片名转小写推断目标名，并优先把工程根目录的 `.pack` 填入 Pack。Flash 不依赖编译器/make，软件自带工具链缺失时不应阻止烧录。
+- `BuildConfig.build_jobs`（0 = 不启用）用于并行构建：Make 注入 `MAKEFLAGS=-jN`，Cargo 注入 `CARGO_BUILD_JOBS`，CMake 注入 `CMAKE_BUILD_PARALLEL_LEVEL`。命令里已有 `-j` / `--jobs` / `--parallel` 时不再注入；只作用于 Build/Clean/Rebuild，不影响 Flash。本地通过 `RunSpec.env` 传给子进程，远程 SSH 在远端命令前拼接 `export NAME=...;`。
 - 构建前自动保存所有脏 Tab。
 - `BuildController` 用 `std::process`、线程和 `mpsc`，不使用 tokio。UI 每帧 `poll`，不阻塞。
 - stdout/stderr 各一个读线程；Windows 上停止用 `taskkill /PID <pid> /T /F`，随后 `Child::kill`。
@@ -196,7 +196,7 @@ docs/                  README 截图和使用教程
 - 右侧操作栏：纵向排列 Build、Clean/Rebuild/Flash、调试；不再放设置按钮，设置从构建卡片“配置”或 `Ctrl+,` 打开。
 - 构建结果显示在输出面板标题和日志中；底部不再保留重复的状态栏。
 - 构建输出面板顶部有 10px 拖动手柄，收起时也能向上拉出；高度存 `Settings.output_height`，最大到主区域顶部。
-- “工程信息 → 烧录配置”提供烧录工具下拉（自定义命令 / OpenOCD）。OpenOCD 模式显示工具路径下拉和浏览按钮，以及程序文件、芯片配置、接口配置；“编辑”打开独立烧录配置弹窗，含命令预览。工具/路径下拉修改后立即写入本机设置，弹窗中的字段点击保存后写入。
+- “工程信息 → 烧录配置”提供烧录工具下拉（自定义命令 / OpenOCD / pyOCD）。OpenOCD 模式显示工具路径、程序文件、芯片配置和接口配置；pyOCD 模式显示工具路径、程序文件、目标芯片和可选 Pack；“编辑”打开独立烧录配置弹窗，含命令预览。工具/路径下拉修改后立即写入本机设置，弹窗中的字段点击保存后写入。
 - 关闭窗口、关闭 Tab、切换工程时都要处理未保存确认。
 - 不做弹窗堆叠；确认弹窗和设置弹窗互斥。
 - 无工程时左上角仍显示同一张构建卡片，使用“导入 / 配置”按钮；中间显示单行提示。第一次启动不写入任何工程文件。测试后如果产生 `%APPDATA%\SimpleEmbedded\settings.json`，提交前应清理，避免把测试工程路径带入首启体验。
@@ -207,7 +207,7 @@ docs/                  README 截图和使用教程
 - 没有 LSP/语义级跳转；符号搜索、TODO、寄存器浏览器都是轻量索引。补全/定义/引用是启发式功能；成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型。
 - 不支持多光标；Ctrl+Alt+左键只提供单一矩形列选择。分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
 - 调试只提供 gdb 控制台和基本执行控制，没有变量/调用栈/寄存器面板，也不会自动下载固件；需要用户提供与目标架构匹配的 gdb。
-- 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走本地自定义命令或内置 OpenOCD 配置。pyOCD 尚未内置，需要先用自定义命令接入。
+- 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走本地自定义命令、内置 OpenOCD 或内置 pyOCD。内置烧录只支持 `.hex` / `.elf` / `.axf`，不支持直接烧录需要基地址的 `.bin`。
 - 源码支持 UTF-8（含 BOM）和 GBK；构建输出在 Windows 上会尝试按 GBK 解码。
 - 不支持文件系统外部修改的自动合并。
 - 长构建日志会横向裁剪，但完整内容可复制。
@@ -223,7 +223,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD 配置与命令构造、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测。当前共 107 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测。当前共 114 个测试。
 
 UI 改动后建议：
 

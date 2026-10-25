@@ -592,6 +592,12 @@ impl App {
             if !self.build_config.build_command.trim().is_empty() {
                 meta_row(ui, "构建命令", &self.build_config.build_command);
             }
+            let jobs = if self.build_config.build_jobs == 0 {
+                "未启用".to_owned()
+            } else {
+                format!("{} 个任务", self.build_config.build_jobs)
+            };
+            meta_row(ui, "并行任务", &jobs);
             let option_lines = self.build_config.build_options.summary_lines();
             let mut edit_clicked = false;
             let row_height = 22.0 + option_lines.len().saturating_sub(1) as f32 * 17.0;
@@ -748,6 +754,7 @@ impl App {
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut tool, FlashTool::Custom, "自定义命令");
                         ui.selectable_value(&mut tool, FlashTool::OpenOcd, "OpenOCD");
+                        ui.selectable_value(&mut tool, FlashTool::PyOcd, "pyOCD");
                     });
             });
             if tool != self.build_config.flash_tool {
@@ -852,6 +859,96 @@ impl App {
                 if let Some(device) = &meta.device {
                     meta_row(ui, "芯片名称", device);
                 }
+            } else if self.build_config.flash_tool == FlashTool::PyOcd {
+                let current = self.build_config.pyocd.executable.trim().to_owned();
+                let mut chosen = current.clone();
+                let mut browse = false;
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [70.0, 18.0],
+                        Label::new(
+                            RichText::new("工具路径")
+                                .size(11.0)
+                                .color(theme::TEXT_FAINT),
+                        ),
+                    );
+                    let short = if current.is_empty() || current.eq_ignore_ascii_case("pyocd") {
+                        "pyocd".to_owned()
+                    } else {
+                        Path::new(&current)
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| current.clone())
+                    };
+                    let response = egui::ComboBox::from_id_salt("simple_embedded_pyocd_path")
+                        .selected_text(RichText::new(short).size(11.5).color(theme::TEXT_DIM))
+                        .width(174.0)
+                        .show_ui(ui, |ui| {
+                            for candidate in flash::pyocd_candidates(&current) {
+                                let label = if candidate.eq_ignore_ascii_case("pyocd") {
+                                    "pyocd（PATH）".to_owned()
+                                } else {
+                                    candidate.clone()
+                                };
+                                ui.selectable_value(&mut chosen, candidate, label);
+                            }
+                        });
+                    response.response.on_hover_text(if current.is_empty() {
+                        "pyocd"
+                    } else {
+                        current.as_str()
+                    });
+                    if ui
+                        .add(small_flat_button("浏览", theme::TEXT_FAINT))
+                        .on_hover_text("选择 pyocd 可执行文件")
+                        .clicked()
+                    {
+                        browse = true;
+                    }
+                });
+                if browse {
+                    actions.push(Action::BrowsePyOcd);
+                } else if chosen != current {
+                    actions.push(Action::SetPyOcdPath(chosen));
+                }
+                if self
+                    .project
+                    .as_ref()
+                    .is_some_and(|project| !flash::pyocd_available(&current, &project.root))
+                {
+                    ui.label(
+                        RichText::new("未找到 pyOCD，请选择可执行文件")
+                            .size(9.0)
+                            .color(theme::WARNING),
+                    );
+                }
+
+                let pyocd = &self.build_config.pyocd;
+                let program_file = pyocd.program_file.trim();
+                let target = pyocd.target.trim();
+                let pack = pyocd.pack.trim();
+                meta_row(
+                    ui,
+                    "程序文件",
+                    if program_file.is_empty() {
+                        "未配置"
+                    } else {
+                        program_file
+                    },
+                );
+                meta_row(
+                    ui,
+                    "目标芯片",
+                    if target.is_empty() {
+                        "未配置"
+                    } else {
+                        target
+                    },
+                );
+                meta_row(ui, "Pack", if pack.is_empty() { "未使用" } else { pack });
+                if let Some(device) = &meta.device {
+                    meta_row(ui, "芯片名称", device);
+                }
             } else {
                 let flash = self.build_config.flash_command.trim();
                 meta_row(
@@ -873,7 +970,7 @@ impl App {
             ui.add_space(2.0);
             if ui
                 .add(small_flat_button("编辑", theme::ACCENT))
-                .on_hover_text("编辑烧录工具、程序文件和 OpenOCD 配置")
+                .on_hover_text("编辑烧录工具、程序文件、OpenOCD / pyOCD 参数")
                 .clicked()
             {
                 actions.push(Action::EditFlashConfig);
@@ -3987,6 +4084,11 @@ impl App {
                     self.apply_openocd_defaults(&mut draft.openocd);
                     draft.error = None;
                 }
+                if segment_button(ui, draft.tool == FlashTool::PyOcd, "pyOCD") {
+                    draft.tool = FlashTool::PyOcd;
+                    self.apply_pyocd_defaults(&mut draft.pyocd);
+                    draft.error = None;
+                }
             });
             ui.add_space(10.0);
 
@@ -4093,6 +4195,94 @@ impl App {
                         }
                     }
                 }
+                FlashTool::PyOcd => {
+                    settings_path_row(
+                        ui,
+                        "pyOCD",
+                        &mut draft.pyocd.executable,
+                        "选择 pyocd 可执行文件",
+                        "pyocd",
+                    );
+                    ui.add_space(4.0);
+                    form_line(
+                        ui,
+                        "目标芯片",
+                        &mut draft.pyocd.target,
+                        "例如 stm32f103xb",
+                    );
+                    ui.add_space(4.0);
+                    settings_path_row(
+                        ui,
+                        "Pack",
+                        &mut draft.pyocd.pack,
+                        "选择 CMSIS Pack",
+                        "可选，例如 Keil.STM32F1xx_DFP.pack",
+                    );
+                    ui.add_space(4.0);
+                    form_line(
+                        ui,
+                        "程序文件",
+                        &mut draft.pyocd.program_file,
+                        "${ExecutableName}.hex",
+                    );
+                    ui.add_space(5.0);
+                    ui.label(
+                        RichText::new(
+                            "目标芯片来自工程芯片名时自动转小写；Pack 可留空，程序文件支持 ${ExecutableName} 等变量。",
+                        )
+                        .size(9.5)
+                        .color(theme::TEXT_FAINT),
+                    );
+                    if root
+                        .as_deref()
+                        .is_some_and(|root| !flash::pyocd_available(&draft.pyocd.executable, root))
+                    {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(
+                                "当前路径未找到 pyOCD；可以点“浏览”选择 pyocd.exe，或先运行 pip install pyocd。",
+                            )
+                            .size(9.5)
+                            .color(theme::WARNING),
+                        );
+                    }
+                    if let Some(root) = &root {
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new("命令预览")
+                                .size(10.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                        ui.add_space(3.0);
+                        match flash::preview_pyocd(&draft.pyocd, root) {
+                            Ok(command) => {
+                                Frame::new()
+                                    .fill(theme::BG)
+                                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                                    .corner_radius(6)
+                                    .inner_margin(Margin::symmetric(7, 5))
+                                    .show(ui, |ui| {
+                                        ui.add(
+                                            Label::new(
+                                                RichText::new(command)
+                                                    .size(10.5)
+                                                    .monospace()
+                                                    .color(theme::TEXT_DIM),
+                                            )
+                                            .wrap(),
+                                        );
+                                    });
+                            }
+                            Err(err) => {
+                                ui.label(
+                                    RichText::new(format!("命令预览不可用：{err}"))
+                                        .size(9.5)
+                                        .color(theme::WARNING),
+                                );
+                            }
+                        }
+                    }
+                }
             }
 
             if let Some(error) = &draft.error {
@@ -4114,13 +4304,31 @@ impl App {
         });
 
         if save {
-            if draft.tool == FlashTool::OpenOcd {
-                draft.openocd = draft.openocd.normalized();
-                if !flash::openocd_ready(&draft.openocd) {
-                    draft.error = Some("OpenOCD 需要填写程序文件、芯片配置和接口配置".to_owned());
-                    self.flash_draft = Some(draft);
-                    return;
+            let valid = match draft.tool {
+                FlashTool::Custom => true,
+                FlashTool::OpenOcd => {
+                    draft.openocd = draft.openocd.normalized();
+                    if !flash::openocd_ready(&draft.openocd) {
+                        draft.error =
+                            Some("OpenOCD 需要填写程序文件、芯片配置和接口配置".to_owned());
+                        false
+                    } else {
+                        true
+                    }
                 }
+                FlashTool::PyOcd => {
+                    draft.pyocd = draft.pyocd.normalized();
+                    if !flash::pyocd_ready(&draft.pyocd) {
+                        draft.error = Some("pyOCD 需要填写目标芯片和程序文件".to_owned());
+                        false
+                    } else {
+                        true
+                    }
+                }
+            };
+            if !valid {
+                self.flash_draft = Some(draft);
+                return;
             }
             self.save_flash_config(draft);
         } else if !close {
@@ -4606,13 +4814,51 @@ impl App {
                             );
                         } else {
                             ui.label(
-                                RichText::new(
-                                    "当前烧录工具为 OpenOCD。工具路径、程序文件、芯片配置和接口配置请在左侧“工程信息 → 烧录配置”中编辑。",
-                                )
+                                RichText::new(format!(
+                                    "当前烧录工具为 {}。参数请在左侧“工程信息 → 烧录配置”中编辑。",
+                                    draft.config.flash_tool.label()
+                                ))
                                 .size(9.5)
                                 .color(theme::TEXT_FAINT),
                             );
                         }
+
+                        ui.add_space(12.0);
+                        settings_section(ui, "并行构建");
+                        ui.add_space(3.0);
+                        ui.horizontal(|ui| {
+                            ui.add_sized(
+                                [86.0, 22.0],
+                                Label::new(
+                                    RichText::new("并行任务数")
+                                        .size(10.5)
+                                        .color(theme::TEXT_DIM),
+                                ),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut draft.config.build_jobs)
+                                    .range(0..=128)
+                                    .speed(1),
+                            );
+                            if ui
+                                .add(small_flat_button("使用 CPU 核心数", theme::TEXT_FAINT))
+                                .on_hover_text("把并行任务数设置为本机逻辑核心数")
+                                .clicked()
+                            {
+                                draft.config.build_jobs = std::thread::available_parallelism()
+                                    .map(|count| count.get())
+                                    .unwrap_or(1)
+                                    .min(128) as u16;
+                            }
+                        });
+                        ui.add_space(3.0);
+                        ui.label(
+                            RichText::new(
+                                "0 = 不启用。Make 使用 MAKEFLAGS=-jN，Cargo 使用 CARGO_BUILD_JOBS，CMake 使用 CMAKE_BUILD_PARALLEL_LEVEL；自定义脚本需要自行处理。",
+                            )
+                            .size(9.0)
+                            .color(theme::TEXT_FAINT),
+                        );
 
                         ui.add_space(12.0);
                         settings_section(ui, "工具链路径 / 额外 PATH");

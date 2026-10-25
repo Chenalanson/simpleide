@@ -49,10 +49,10 @@
 - 构建前自动保存所有脏文件；可停止构建进程树
 - 构建输出面板顶部可拖动调高度，收起后也能向上拉出；高度会保存
 - 本地构建或远程 SSH 构建（复用系统 OpenSSH）
-- 烧录工具可选 **自定义命令** 或 **OpenOCD**：OpenOCD 支持工具路径下拉/浏览、`${ExecutableName}.hex` 等程序文件变量、芯片/接口 cfg 自动补全、命令预览；Flash 始终在本地工程目录执行
-- pyOCD 暂未内置，可以先通过自定义烧录命令接入
+- 并行构建：设置 → 构建 → 并行任务数；Make 注入 `MAKEFLAGS=-jN`，Cargo 注入 `CARGO_BUILD_JOBS`，CMake 注入 `CMAKE_BUILD_PARALLEL_LEVEL`，命令里已有 `-j` 时不重复添加
+- 烧录工具可选 **自定义命令** / **OpenOCD** / **pyOCD**：支持工具路径下拉/浏览、`${ExecutableName}.hex` 等程序文件变量、OpenOCD 芯片/接口 cfg 自动补全、pyOCD 目标芯片与可选 Pack、命令预览；Flash 始终在本地工程目录执行
 - 每工程独立构建配置，保存在用户目录，不污染工程
-- 设置分为 构建 / 构建工具链 / 编辑器 / 调试 / 其他：构建工具链可浏览编译器和 make，或一键把当前工具复制到软件自带目录，之后不依赖系统 PATH
+- 设置分为 构建 / 构建工具链 / 编辑器 / 调试 / 其他：构建页可设置命令和并行任务数；构建工具链可浏览编译器和 make，或一键把当前工具复制到软件自带目录，之后不依赖系统 PATH
 - 可追加工具链 PATH；本地 Make 构建会自动接入 Git for Windows / MSYS 的 `rm` 等 Unix 工具
 
 ## 运行
@@ -189,7 +189,7 @@ src/
   config.rs      自动检测、每工程设置、SSH 命令
   project_meta.rs Makefile / Keil 工程元数据提取
   support_pack.rs Keil/CMSIS .pack/.pdsc 扫描、导入与元数据解析
-  flash.rs       烧录工具配置、OpenOCD 检测与命令构造
+  flash.rs       烧录工具配置、OpenOCD / pyOCD 检测与命令构造
   completion.rs  补全上下文、struct/union 成员索引
   editor.rs      String 文档 + egui TextBuffer 适配 + 保存
   file_tree.rs   惰性目录树
@@ -216,8 +216,9 @@ examples/blink/  可直接打开的演示工程
 - 跳转/引用/补全基于轻量符号索引，不是 LSP；复杂 C++ 声明可能漏检。成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型
 - 不支持多光标；Ctrl+Alt+左键只提供单一矩形列选择。分屏两个窗格都可编辑，但同一个文件不能在两个窗格重复打开
 - 远程构建不支持交互式密码；请使用 SSH key
-- 当前没有接入 `ssh-mcp` / `jlink-mcp`，远程构建走 OpenSSH；烧录走本地自定义命令或内置 OpenOCD，pyOCD 暂未内置
-- OpenOCD 直接以参数启动，不经过 shell；只负责烧录，不启动 gdb server
+- 当前没有接入 `ssh-mcp` / `jlink-mcp`，远程构建走 OpenSSH；烧录走本地自定义命令、内置 OpenOCD 或内置 pyOCD
+- OpenOCD / pyOCD 直接以参数启动，不经过 shell；只负责烧录，不启动调试 server。内置烧录只支持 `.hex` / `.elf` / `.axf`，不支持需要基地址的 `.bin`
+- 并行构建只对 Make / Cargo / CMake 自动注入环境变量；自定义脚本和直接调用 Ninja 需要自己添加并行参数
 
 ## 开发
 
@@ -227,6 +228,6 @@ cargo clippy --all-targets -- -D warnings
 cargo run
 ```
 
-测试覆盖自动检测、SSH 命令构造、CRLF 保存、文件树展开、ANSI 解析、后台命令执行、芯片支持包解析和 OpenOCD 命令构造等。
+测试覆盖自动检测、SSH 命令构造、CRLF 保存、文件树展开、ANSI 解析、后台命令执行、芯片支持包解析、OpenOCD / pyOCD 命令构造和并行构建环境注入等。
 
 面向后续开发者和 AI 代理的工程约定、架构与验证清单见 [AGENTS.md](AGENTS.md)。

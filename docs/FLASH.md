@@ -36,9 +36,23 @@ Simple embedded 不自带芯片烧录算法，也不接管 J-Link / ST-Link 的�
 4. 点分组里的 **编辑**，在弹窗中检查全部字段和命令预览，然后 **保存**。
 5. 右侧操作栏的 **烧录** 按钮会变为可用。
 
-### 2.2 自定义命令
+### 2.2 pyOCD
 
-1. 如果当前是 OpenOCD，先在 **工程信息 → 烧录配置** 把 **烧录工具** 切换为 **自定义命令**。
+1. 在 **工程信息 → 烧录配置** 中，把 **烧录工具** 切换为 **pyOCD**。
+2. **工具路径** 下拉会检测 PATH 和 Python Scripts 目录；没有找到时点 **浏览** 选择 `pyocd.exe`。
+3. 填写 **目标芯片**（例如 `stm32f103xb`），以及可选的 **Pack**；工程根目录有 `.pack` 时会自动填入。
+4. **程序文件** 默认 `${ExecutableName}.hex`。
+5. 点 **编辑** 检查命令预览，例如：
+
+   ```text
+   pyocd flash -t stm32f103xb build/test32.hex
+   ```
+
+6. 保存后点右侧 **烧录**。
+
+### 2.3 自定义命令
+
+1. 如果当前是 OpenOCD 或 pyOCD，先在 **工程信息 → 烧录配置** 把 **烧录工具** 切换为 **自定义命令**。
 2. 点击左上角工程卡片里的 **配置**（或按 `Ctrl+,`）。
 3. 在 **构建** 页找到 **Flash** 一行。
 4. 填入完整的烧录命令，例如：
@@ -149,23 +163,33 @@ Simple embedded 已内置 OpenOCD 配置，不需要自己拼完整命令。适�
 
 ### 4.3 pyOCD
 
-> 当前版本还没有内置 pyOCD，以下命令请放在 **自定义命令** 中。
-
-安装：
+Simple embedded 已内置 pyOCD 配置。先安装：
 
 ```powershell
 pip install pyocd
 ```
 
-在 **配置 → 构建 → Flash** 或 **烧录配置 → 编辑 → 自定义命令** 中填写：
+在 **工程信息 → 烧录配置** 中选择 **pyOCD** 后填写：
+
+- **工具路径**：`pyocd` 表示从 PATH 查找；下拉会扫描 Python 的 `Scripts` 目录，也可以点 **浏览** 选择 `pyocd.exe`。
+- **目标芯片**：例如 `stm32f103xb`，必须和芯片匹配。工程芯片名已知时会自动转小写填入。
+- **Pack**：可选。工程根目录有 `.pack` 时会优先填入；留空则使用 pyOCD 已安装的 Pack。
+- **程序文件**：默认 `${ExecutableName}.hex`，支持与 OpenOCD 相同的变量。
+
+最终命令类似：
 
 ```text
-pyocd flash -t stm32f103xb build/test32.elf
+pyocd flash -t stm32f103xb build/test32.hex
+```
+
+带 Pack 时：
+
+```text
+pyocd flash -t stm32f103xb --pack Keil.STM32F1xx_DFP.pack build/test32.hex
 ```
 
 说明：
 
-- `-t stm32f103xb` 是 pyOCD 的目标名，必须和芯片匹配。
 - `pyocd list` 查看已连接的探针。
 - `pyocd list --targets` 查看支持的目标名。
 - 如果提示找不到目标包，先安装对应的 CMSIS Pack，例如：
@@ -260,9 +284,9 @@ CubeMX 默认生成的 Makefile **没有** `flash` 目标，不要直接照抄�
 
 三种办法，任选一种：
 
-### 办法一：OpenOCD 工具路径下拉 / 浏览
+### 办法一：OpenOCD / pyOCD 工具路径下拉 / 浏览
 
-在 **烧录配置** 中展开 **工具路径**，选择检测到的 `openocd.exe`，或点 **浏览** 直接选文件。这样不需要改 PATH。
+在 **烧录配置** 中展开 **工具路径**，选择检测到的 `openocd.exe` / `pyocd.exe`，或点 **浏览** 直接选文件。这样不需要改 PATH。
 
 ### 办法二：写绝对路径
 
@@ -291,11 +315,12 @@ C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin
 - 当前有构建/清理/烧录任务正在运行；
 - **自定义命令**：Flash 命令为空；
 - **OpenOCD**：程序文件、芯片配置或接口配置还有一项为空；
+- **pyOCD**：目标芯片或程序文件为空；
 - 在弹窗里修改后需要点 **保存**。
 
-### 提示 `不是内部或外部命令` / `'openocd' 不是可识别的命令`
+### 提示 `不是内部或外部命令` / `'openocd'` / `'pyocd'` 不是可识别的命令
 
-OpenOCD 不在 PATH 里。展开 **烧录配置 → 工具路径** 选择检测到的 `openocd.exe`，或点 **浏览**；自定义命令则改用绝对路径，或把工具目录加到“附加 PATH”。
+工具不在 PATH 里。展开 **烧录配置 → 工具路径** 选择检测到的 `openocd.exe` / `pyocd.exe`，或点 **浏览**；自定义命令则改用绝对路径，或把工具目录加到“附加 PATH”。
 
 ### 提示找不到 ST-Link / J-Link
 
@@ -353,7 +378,21 @@ OpenOCD 不在 PATH 里。展开 **烧录配置 → 工具路径** 选择检测�
 5. 点 **构建**，确认生成 `build\test32.hex`；
 6. 点 **烧录**，观察输出面板。
 
-### 7.2 STM32CubeProgrammer（自定义命令）
+### 7.2 pyOCD
+
+假设已经 `pip install pyocd`，并且工程构建成功：
+
+1. 在 **工程信息 → 烧录配置** 中把 **烧录工具** 选为 **pyOCD**；
+2. **工具路径** 选 `pyocd`（PATH）或浏览到 `pyocd.exe`；
+3. 确认：
+   - 目标芯片：`stm32f103xb`
+   - Pack：可留空，或选择工程里的 `.pack`
+   - 程序文件：`${ExecutableName}.hex`
+4. 点 **编辑** 检查预览，然后保存；
+5. 点 **构建**，确认生成 `build\test32.hex`；
+6. 点 **烧录**，观察输出面板。
+
+### 7.3 STM32CubeProgrammer（自定义命令）
 
 假设已经安装 STM32CubeProgrammer，并且工程构建成功：
 

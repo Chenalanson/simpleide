@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::build::{RunSpec, TaskKind};
-use crate::flash::{FlashTool, OpenOcdConfig};
+use crate::flash::{FlashTool, OpenOcdConfig, PyOcdConfig};
 use crate::util::{display_path, project_key, shell_quote_posix};
 
 pub const APP_NAME: &str = "Simple embedded";
@@ -148,6 +148,9 @@ pub struct BuildConfig {
     pub flash_command: String,
     pub flash_tool: FlashTool,
     pub openocd: OpenOcdConfig,
+    pub pyocd: PyOcdConfig,
+    /// Parallel build jobs. Zero keeps the command unchanged.
+    pub build_jobs: u16,
     pub ssh_host: String,
     pub ssh_port: u16,
     pub remote_dir: String,
@@ -173,6 +176,8 @@ impl Default for BuildConfig {
             flash_command: String::new(),
             flash_tool: FlashTool::Custom,
             openocd: OpenOcdConfig::default(),
+            pyocd: PyOcdConfig::default(),
+            build_jobs: 0,
             ssh_host: String::new(),
             ssh_port: 22,
             remote_dir: String::new(),
@@ -200,6 +205,7 @@ impl BuildConfig {
             return match self.flash_tool {
                 FlashTool::Custom => !self.flash_command.trim().is_empty(),
                 FlashTool::OpenOcd => crate::flash::openocd_ready(&self.openocd),
+                FlashTool::PyOcd => crate::flash::pyocd_ready(&self.pyocd),
             };
         }
         !self.command(kind).trim().is_empty()
@@ -247,17 +253,64 @@ impl BuildConfig {
         format!("{} · {}", self.tool_name(), self.target.label())
     }
 
+    fn jobs_env(&self, raw: &str) -> Vec<(OsString, OsString)> {
+        if self.build_jobs == 0 || command_has_jobs_flag(raw) {
+            return Vec::new();
+        }
+        let jobs = self.build_jobs.min(128).to_string();
+        match self.tool_name() {
+            "Make" => {
+                let existing = std::env::var("MAKEFLAGS").unwrap_or_default();
+                let existing = existing.trim();
+                if existing.split_whitespace().any(is_jobs_flag) {
+                    return Vec::new();
+                }
+                let value = if existing.is_empty() {
+                    format!("-j{jobs}")
+                } else {
+                    format!("{existing} -j{jobs}")
+                };
+                vec![(OsString::from("MAKEFLAGS"), OsString::from(value))]
+            }
+            "Cargo" => vec![(OsString::from("CARGO_BUILD_JOBS"), OsString::from(jobs))],
+            "CMake" => vec![(
+                OsString::from("CMAKE_BUILD_PARALLEL_LEVEL"),
+                OsString::from(jobs),
+            )],
+            _ => Vec::new(),
+        }
+    }
+
+    fn jobs_shell_prefix(&self, raw: &str) -> Option<String> {
+        if self.build_jobs == 0 || command_has_jobs_flag(raw) {
+            return None;
+        }
+        let jobs = self.build_jobs.min(128);
+        match self.tool_name() {
+            "Make" => Some(format!("export MAKEFLAGS=\"${{MAKEFLAGS}} -j{jobs}\"; ")),
+            "Cargo" => Some(format!("export CARGO_BUILD_JOBS={jobs}; ")),
+            "CMake" => Some(format!("export CMAKE_BUILD_PARALLEL_LEVEL={jobs}; ")),
+            _ => None,
+        }
+    }
+
     pub fn make_spec(&self, kind: TaskKind, project_root: &Path) -> Result<RunSpec, String> {
-        if kind == TaskKind::Flash && self.flash_tool == FlashTool::OpenOcd {
-            let mut spec = crate::flash::make_spec(&self.openocd, project_root)?;
-            spec.env_paths = self
-                .extra_paths
-                .iter()
-                .map(|path| path.trim())
-                .filter(|path| !path.is_empty())
-                .map(PathBuf::from)
-                .collect();
-            return Ok(spec);
+        if kind == TaskKind::Flash {
+            let spec = match self.flash_tool {
+                FlashTool::OpenOcd => Some(crate::flash::make_spec(&self.openocd, project_root)?),
+                FlashTool::PyOcd => Some(crate::flash::make_pyocd_spec(&self.pyocd, project_root)?),
+                FlashTool::Custom => None,
+            };
+            if let Some(mut spec) = spec {
+                spec.env_paths = self
+                    .extra_paths
+                    .iter()
+                    .map(|path| path.trim())
+                    .filter(|path| !path.is_empty())
+                    .map(PathBuf::from)
+                    .collect();
+                return Ok(spec);
+            }
         }
 
         let raw = self.command(kind).trim();
@@ -268,6 +321,11 @@ impl BuildConfig {
         // Flashing is intentionally local: J-Link / OpenOCD usually needs USB
         // access, even when compilation happens in a Linux VM.
         let remote = self.target == BuildTarget::Ssh && kind != TaskKind::Flash;
+        let jobs_env = if kind == TaskKind::Flash {
+            Vec::new()
+        } else {
+            self.jobs_env(raw)
+        };
         if remote {
             let host = self.ssh_host.trim();
             let remote_dir = self.remote_dir.trim();
@@ -278,7 +336,17 @@ impl BuildConfig {
                 return Err("远程 SSH 模式需要填写远程工程目录".to_owned());
             }
 
-            let remote_command = format!("cd {} && {}", shell_quote_posix(remote_dir), raw);
+            let jobs_prefix = if kind == TaskKind::Flash {
+                None
+            } else {
+                self.jobs_shell_prefix(raw)
+            };
+            let remote_command = match jobs_prefix {
+                Some(prefix) => {
+                    format!("{}cd {} && {}", prefix, shell_quote_posix(remote_dir), raw)
+                }
+                None => format!("cd {} && {}", shell_quote_posix(remote_dir), raw),
+            };
             let mut args: Vec<OsString> = vec![
                 "-o".into(),
                 "BatchMode=yes".into(),
@@ -298,6 +366,7 @@ impl BuildConfig {
                 cwd: project_root.to_path_buf(),
                 display: format!("ssh {host} · {raw}"),
                 env_paths: Vec::new(),
+                env: Vec::new(),
             })
         } else {
             let mut env_paths: Vec<PathBuf> = self
@@ -331,6 +400,7 @@ impl BuildConfig {
                 cwd: project_root.to_path_buf(),
                 display: raw.to_owned(),
                 env_paths,
+                env: jobs_env,
             };
 
             #[cfg(not(target_os = "windows"))]
@@ -340,11 +410,28 @@ impl BuildConfig {
                 cwd: project_root.to_path_buf(),
                 display: raw.to_owned(),
                 env_paths,
+                env: jobs_env,
             };
 
             Ok(spec)
         }
     }
+}
+
+fn command_has_jobs_flag(command: &str) -> bool {
+    command
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, '&' | '|' | ';'))
+        .map(|token| token.trim_matches('"'))
+        .any(is_jobs_flag)
+}
+
+fn is_jobs_flag(token: &str) -> bool {
+    token == "-j"
+        || token.starts_with("-j")
+        || token == "--jobs"
+        || token.starts_with("--jobs=")
+        || token == "--parallel"
+        || token.starts_with("--parallel=")
 }
 
 #[cfg(target_os = "windows")]
@@ -685,6 +772,9 @@ impl Settings {
             self.left_split = 0.5;
         }
         self.left_split = self.left_split.clamp(0.18, 0.82);
+        for config in self.build_configs.values_mut() {
+            config.build_jobs = config.build_jobs.min(128);
+        }
         self.recent_projects.retain(|path| path.is_dir());
         self.recent_projects.dedup();
         self.recent_projects.truncate(MAX_RECENT_PROJECTS);
@@ -860,6 +950,67 @@ mod tests {
         } else {
             assert_eq!(spec.program, "sh");
         }
+    }
+
+    #[test]
+    fn parallel_jobs_are_applied_to_cargo_and_cmake() {
+        let cargo = BuildConfig {
+            build_command: "cargo build".into(),
+            build_jobs: 8,
+            ..BuildConfig::default()
+        };
+        let env = cargo.jobs_env("cargo build");
+        assert_eq!(
+            env,
+            vec![(OsString::from("CARGO_BUILD_JOBS"), OsString::from("8"))]
+        );
+
+        let cmake = BuildConfig {
+            build_command: "cmake --build build".into(),
+            build_jobs: 6,
+            ..BuildConfig::default()
+        };
+        let env = cmake.jobs_env("cmake --build build");
+        assert_eq!(
+            env,
+            vec![(
+                OsString::from("CMAKE_BUILD_PARALLEL_LEVEL"),
+                OsString::from("6")
+            )]
+        );
+    }
+
+    #[test]
+    fn explicit_jobs_flags_are_respected() {
+        let cfg = BuildConfig {
+            build_command: "make -j4".into(),
+            build_jobs: 8,
+            ..BuildConfig::default()
+        };
+        assert!(cfg.jobs_env("make -j4").is_empty());
+        assert!(cfg.jobs_shell_prefix("make -j4").is_none());
+        assert!(command_has_jobs_flag("make --jobs=4"));
+        assert!(command_has_jobs_flag("cmake --build build --parallel 4"));
+        assert!(!command_has_jobs_flag("make all"));
+    }
+
+    #[test]
+    fn remote_jobs_prefix_uses_tool_environment() {
+        let cfg = BuildConfig {
+            build_command: "cargo build".into(),
+            build_jobs: 8,
+            target: BuildTarget::Ssh,
+            ssh_host: "dev@vm".into(),
+            remote_dir: "/home/dev/project".into(),
+            ..BuildConfig::default()
+        };
+        let spec = cfg.make_spec(TaskKind::Build, Path::new(".")).unwrap();
+        assert_eq!(
+            spec.args
+                .last()
+                .map(|value| value.to_string_lossy().into_owned()),
+            Some("export CARGO_BUILD_JOBS=8; cd '/home/dev/project' && cargo build".to_owned())
+        );
     }
 
     #[test]

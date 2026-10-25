@@ -1,8 +1,8 @@
-//! Flash tool configuration and OpenOCD command construction.
+//! Flash tool configuration and OpenOCD / pyOCD command construction.
 //!
 //! The UI keeps a small, serializable description of the selected flasher.
-//! OpenOCD is launched directly (no shell) so paths with spaces do not need
-//! platform-specific quoting.
+//! OpenOCD and pyOCD are launched directly (no shell) so paths with spaces do
+//! not need platform-specific quoting.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -21,6 +21,8 @@ pub enum FlashTool {
     Custom,
     #[serde(rename = "openocd")]
     OpenOcd,
+    #[serde(rename = "pyocd")]
+    PyOcd,
 }
 
 impl FlashTool {
@@ -28,6 +30,7 @@ impl FlashTool {
         match self {
             Self::Custom => "自定义命令",
             Self::OpenOcd => "OpenOCD",
+            Self::PyOcd => "pyOCD",
         }
     }
 }
@@ -66,6 +69,51 @@ impl OpenOcdConfig {
             interface_config: self.interface_config.trim().to_owned(),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PyOcdConfig {
+    /// `pyocd`, an absolute path, or a name on PATH.
+    pub executable: String,
+    /// pyOCD target name, e.g. `stm32f103xb`.
+    pub target: String,
+    /// Optional CMSIS pack path. Empty means use pyOCD's installed packs.
+    pub pack: String,
+    /// Supports `${ExecutableName}`, `${ProjectName}`, `${workspaceFolder}`
+    /// and `${workspaceRoot}`.
+    pub program_file: String,
+}
+
+impl Default for PyOcdConfig {
+    fn default() -> Self {
+        Self {
+            executable: "pyocd".to_owned(),
+            target: String::new(),
+            pack: String::new(),
+            program_file: "${ExecutableName}.hex".to_owned(),
+        }
+    }
+}
+
+impl PyOcdConfig {
+    pub fn normalized(&self) -> Self {
+        Self {
+            executable: self.executable.trim().to_owned(),
+            target: self.target.trim().to_owned(),
+            pack: self.pack.trim().to_owned(),
+            program_file: self.program_file.trim().to_owned(),
+        }
+    }
+}
+
+pub fn pyocd_ready(config: &PyOcdConfig) -> bool {
+    !config.target.trim().is_empty() && !config.program_file.trim().is_empty()
+}
+
+pub fn infer_pyocd_target(device: Option<&str>) -> Option<String> {
+    let device = device?.trim().to_ascii_lowercase();
+    (device.starts_with("stm32") && device.len() > 5).then_some(device)
 }
 
 pub fn openocd_ready(config: &OpenOcdConfig) -> bool {
@@ -116,7 +164,7 @@ pub fn infer_interface_config(driver: Option<&str>) -> Option<String> {
 /// Build a direct `openocd` invocation. The program is passed as one Tcl
 /// command through `-c`, so it must exist before the flash starts.
 pub fn make_spec(config: &OpenOcdConfig, root: &Path) -> Result<RunSpec, String> {
-    let program = resolve_program(config, root, true)?;
+    let program = resolve_program_file(&config.program_file, root, true)?;
     let interface = resolve_script(root, &config.interface_config, "interface")?;
     let target = resolve_script(root, &config.target_config, "target")?;
     let program_command = format!("program {} verify reset exit", tcl_word(&program.command));
@@ -142,13 +190,14 @@ pub fn make_spec(config: &OpenOcdConfig, root: &Path) -> Result<RunSpec, String>
         cwd: root.to_path_buf(),
         display,
         env_paths: Vec::new(),
+        env: Vec::new(),
     })
 }
 
 /// Same composition as [`make_spec`] but does not require the build output to
 /// exist yet. Used by the configuration modal for a live preview.
 pub fn preview(config: &OpenOcdConfig, root: &Path) -> Result<String, String> {
-    let program = resolve_program(config, root, false)?;
+    let program = resolve_program_file(&config.program_file, root, false)?;
     let interface = resolve_script(root, &config.interface_config, "interface")?;
     let target = resolve_script(root, &config.target_config, "target")?;
     let program_command = format!("program {} verify reset exit", tcl_word(&program.command));
@@ -162,10 +211,107 @@ pub fn preview(config: &OpenOcdConfig, root: &Path) -> Result<String, String> {
     ))
 }
 
+/// Build a direct `pyocd flash` invocation.
+pub fn make_pyocd_spec(config: &PyOcdConfig, root: &Path) -> Result<RunSpec, String> {
+    let program = resolve_program_file(&config.program_file, root, true)?;
+    let target = config.target.trim();
+    if target.is_empty() {
+        return Err("pyOCD 目标芯片不能为空".to_owned());
+    }
+    let pack = resolve_pack(config, root, true)?;
+    let executable = resolve_executable(effective_pyocd_executable(config), root);
+    let mut args: Vec<OsString> = vec!["flash".into(), "-t".into(), target.into()];
+    if let Some(pack) = &pack {
+        args.push("--pack".into());
+        args.push(pack.clone().into());
+    }
+    args.push(program.command.clone().into());
+    let display = pyocd_display(config, target, pack.as_deref(), &program.command, root);
+    Ok(RunSpec {
+        program: executable.into_os_string(),
+        args,
+        cwd: root.to_path_buf(),
+        display,
+        env_paths: Vec::new(),
+        env: Vec::new(),
+    })
+}
+
+/// Same composition as [`make_pyocd_spec`] without requiring the output or
+/// pack file to exist yet.
+pub fn preview_pyocd(config: &PyOcdConfig, root: &Path) -> Result<String, String> {
+    let program = resolve_program_file(&config.program_file, root, false)?;
+    let target = config.target.trim();
+    if target.is_empty() {
+        return Err("pyOCD 目标芯片不能为空".to_owned());
+    }
+    let pack = resolve_pack(config, root, false)?;
+    Ok(pyocd_display(
+        config,
+        target,
+        pack.as_deref(),
+        &program.command,
+        root,
+    ))
+}
+
+fn pyocd_display(
+    config: &PyOcdConfig,
+    target: &str,
+    pack: Option<&str>,
+    program: &str,
+    root: &Path,
+) -> String {
+    let executable = resolve_executable(effective_pyocd_executable(config), root);
+    let mut display = format!(
+        "{} flash -t {}",
+        util::relative_display(root, &executable),
+        target
+    );
+    if let Some(pack) = pack {
+        display.push_str(&format!(" --pack {pack}"));
+    }
+    display.push(' ');
+    display.push_str(program);
+    display
+}
+
+fn resolve_pack(
+    config: &PyOcdConfig,
+    root: &Path,
+    require_exists: bool,
+) -> Result<Option<String>, String> {
+    let pack = config.pack.trim();
+    if pack.is_empty() {
+        return Ok(None);
+    }
+    let path = PathBuf::from(pack.replace('\\', "/"));
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        root.join(&path)
+    };
+    if require_exists && !absolute.is_file() {
+        return Err(format!(
+            "找不到 pyOCD Pack 文件 {}",
+            util::relative_display(root, &absolute)
+        ));
+    }
+    Ok(Some(util::relative_display(root, &absolute)))
+}
+
 pub fn effective_executable(config: &OpenOcdConfig) -> &str {
-    let value = config.executable.trim();
+    effective_value(&config.executable, "openocd")
+}
+
+pub fn effective_pyocd_executable(config: &PyOcdConfig) -> &str {
+    effective_value(&config.executable, "pyocd")
+}
+
+fn effective_value<'a>(value: &'a str, fallback: &'static str) -> &'a str {
+    let value = value.trim();
     if value.is_empty() {
-        "openocd"
+        fallback
     } else {
         value
     }
@@ -181,9 +327,17 @@ fn resolve_executable(value: &str, root: &Path) -> PathBuf {
 }
 
 pub fn openocd_available(executable: &str, root: &Path) -> bool {
+    executable_available(executable, root, "openocd")
+}
+
+pub fn pyocd_available(executable: &str, root: &Path) -> bool {
+    executable_available(executable, root, "pyocd")
+}
+
+fn executable_available(executable: &str, root: &Path, fallback: &str) -> bool {
     let value = executable.trim();
     if value.is_empty() {
-        return find_in_path("openocd").is_some();
+        return find_in_path(fallback).is_some();
     }
     if value.contains('/') || value.contains('\\') || Path::new(value).is_absolute() {
         return resolve_executable(value, root).is_file();
@@ -243,6 +397,59 @@ pub fn openocd_candidates(configured: &str) -> Vec<String> {
     values
 }
 
+pub fn pyocd_candidates(configured: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let configured = configured.trim();
+    if !configured.is_empty() {
+        push_unique(&mut values, configured.to_owned());
+    }
+    if find_in_path("pyocd").is_some() {
+        push_unique(&mut values, "pyocd".to_owned());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(base) = std::env::var_os("APPDATA") {
+            scan_pyocd_script_dirs(&Path::new(&base).join("Python"), &mut values);
+        }
+        if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+            scan_pyocd_script_dirs(&Path::new(&base).join("Programs/Python"), &mut values);
+        }
+        if let Some(base) = std::env::var_os("USERPROFILE") {
+            scan_pyocd_script_dirs(
+                &Path::new(&base).join("AppData/Roaming/Python"),
+                &mut values,
+            );
+        }
+        if let Some(base) = std::env::var_os("ProgramFiles") {
+            scan_pyocd_script_dirs(Path::new(&base), &mut values);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        push_if_file(&mut values, PathBuf::from("/usr/bin/pyocd"));
+        push_if_file(&mut values, PathBuf::from("/usr/local/bin/pyocd"));
+    }
+
+    if values.is_empty() {
+        values.push("pyocd".to_owned());
+    }
+    values
+}
+
+fn scan_pyocd_script_dirs(base: &Path, values: &mut Vec<String>) {
+    push_if_file(values, base.join("Scripts/pyocd.exe"));
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if name.starts_with("python") {
+            push_if_file(values, entry.path().join("Scripts/pyocd.exe"));
+        }
+    }
+}
+
 fn scan_openocd_dirs(base: &Path, values: &mut Vec<String>) {
     push_if_file(values, base.join("OpenOCD/bin/openocd.exe"));
     let Ok(entries) = std::fs::read_dir(base) else {
@@ -293,12 +500,12 @@ struct ResolvedProgram {
     command: String,
 }
 
-fn resolve_program(
-    config: &OpenOcdConfig,
+fn resolve_program_file(
+    template: &str,
     root: &Path,
     require_exists: bool,
 ) -> Result<ResolvedProgram, String> {
-    let template = config.program_file.trim();
+    let template = template.trim();
     if template.is_empty() {
         return Err("程序文件不能为空".to_owned());
     }
@@ -362,7 +569,7 @@ fn resolve_program(
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("bin"))
     {
-        return Err("OpenOCD 烧录 .bin 需要额外指定起始地址，请改用 .hex 或 .elf".to_owned());
+        return Err("内置烧录配置不支持 .bin，请改用 .hex、.elf 或 .axf".to_owned());
     }
     if require_exists && !absolute.is_file() {
         let hint = if template.contains("${ExecutableName}") {
@@ -578,6 +785,86 @@ mod tests {
         assert!(openocd_ready(&config));
         config.target_config.clear();
         assert!(!openocd_ready(&config));
+    }
+
+    fn sample_pyocd() -> PyOcdConfig {
+        PyOcdConfig {
+            executable: "pyocd".to_owned(),
+            target: "stm32f103xb".to_owned(),
+            pack: String::new(),
+            program_file: "${ExecutableName}.hex".to_owned(),
+        }
+    }
+
+    #[test]
+    fn builds_pyocd_spec_with_optional_pack() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("build")).unwrap();
+        std::fs::write(dir.path().join("build/demo.hex"), b":00000001FF").unwrap();
+        std::fs::write(dir.path().join("demo.pack"), b"pack").unwrap();
+
+        let config = sample_pyocd();
+        let spec = make_pyocd_spec(&config, dir.path()).unwrap();
+        assert_eq!(spec.program, OsString::from("pyocd"));
+        let args = spec
+            .args
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args, vec!["flash", "-t", "stm32f103xb", "build/demo.hex"]);
+        assert!(preview_pyocd(&config, dir.path())
+            .unwrap()
+            .contains("pyocd flash -t stm32f103xb build/demo.hex"));
+
+        let config = PyOcdConfig {
+            pack: "demo.pack".to_owned(),
+            ..sample_pyocd()
+        };
+        let spec = make_pyocd_spec(&config, dir.path()).unwrap();
+        let args = spec
+            .args
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec![
+                "flash",
+                "-t",
+                "stm32f103xb",
+                "--pack",
+                "demo.pack",
+                "build/demo.hex"
+            ]
+        );
+    }
+
+    #[test]
+    fn pyocd_ready_and_target_inference() {
+        let mut config = sample_pyocd();
+        assert!(pyocd_ready(&config));
+        config.target.clear();
+        assert!(!pyocd_ready(&config));
+        assert_eq!(
+            infer_pyocd_target(Some("STM32F103xB")).as_deref(),
+            Some("stm32f103xb")
+        );
+        assert_eq!(infer_pyocd_target(Some("ESP32")), None);
+    }
+
+    #[test]
+    fn checks_pyocd_availability() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("pyocd.exe");
+        std::fs::write(&executable, b"fake").unwrap();
+        assert!(pyocd_available(
+            &util::display_path(&executable),
+            dir.path()
+        ));
+        assert!(!pyocd_available(
+            &util::display_path(&dir.path().join("missing.exe")),
+            dir.path()
+        ));
     }
 
     #[test]

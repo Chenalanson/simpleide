@@ -220,6 +220,17 @@ Simple embedded 会自动检查工程根目录：
 
 点击 **自动检测** 可以重新读取根目录的构建文件。
 
+### 并行构建
+
+在 **配置 → 构建 → 并行构建** 中设置 **并行任务数**：
+
+- `0`：不启用，保持原命令行为
+- `N > 0`：Make 使用 `MAKEFLAGS=-jN`，Cargo 使用 `CARGO_BUILD_JOBS=N`，CMake 使用 `CMAKE_BUILD_PARALLEL_LEVEL=N`
+- 点 **使用 CPU 核心数** 可以填入本机逻辑核心数
+- 如果 Build / Clean / Rebuild 命令里已经写了 `-j`、`--jobs` 或 `--parallel`，不会再重复注入
+- 只影响 Build / Clean / Rebuild，不影响 Flash
+- 远程 SSH 构建会在远端 shell 中设置同样的环境变量；自定义脚本需要自己处理并行参数
+
 ### 构建工具链
 
 设置弹窗顶部有 **构建 / 构建工具链 / 编辑器 / 调试 / 其他** 五个页签，点击后下方只显示对应页面。
@@ -259,31 +270,42 @@ powershell -ExecutionPolicy Bypass -File scripts\package-tools.ps1
 
 在左侧 **工程信息 → 烧录配置** 中配置：
 
-- **烧录工具**：下拉选择 **自定义命令** 或 **OpenOCD**。
+- **烧录工具**：下拉选择 **自定义命令**、**OpenOCD** 或 **pyOCD**。
 - **OpenOCD**：
   - **工具路径**：下拉会列出 PATH、Program Files、PlatformIO 等位置的 OpenOCD；也可以点 **浏览** 选择 `openocd.exe`。
   - **程序文件**：默认 `${ExecutableName}.hex`，会自动解析到当前工程最新的构建产物；也支持 `${ProjectName}`、`${workspaceFolder}`、`${workspaceRoot}`。
   - **芯片配置**：例如 `stm32f1x.cfg`。只写文件名时会自动补成 `target/stm32f1x.cfg`。
   - **接口配置**：例如 `stlink.cfg`。只写文件名时会自动补成 `interface/stlink.cfg`。
-  - 点分组里的 **编辑** 可以打开烧录配置弹窗，修改全部字段并查看最终命令预览。
+- **pyOCD**：
+  - **工具路径**：下拉会检测 PATH 和 Python Scripts 目录；也可以点 **浏览** 选择 `pyocd.exe`。
+  - **目标芯片**：例如 `stm32f103xb`。从工程芯片名推断时会自动转小写。
+  - **Pack**：可选；工程根目录有 `.pack` 时会优先填入，也可以浏览选择其他 CMSIS Pack。
+  - **程序文件**：默认 `${ExecutableName}.hex`，支持与 OpenOCD 相同的变量。
+- 点分组里的 **编辑** 可以打开烧录配置弹窗，修改全部字段并查看最终命令预览。
 - **自定义命令**：点 **编辑**，或先把烧录工具切回 **自定义命令**，再打开 **配置 → 构建** 的 Flash 行，填写完整命令，例如：
   ```text
   JLink.exe -CommanderScript flash.jlink
   ```
 
-OpenOCD 找不到程序文件时会直接报错，不会自动构建。正确顺序仍然是 **先构建成功，再烧录**。
+OpenOCD / pyOCD 找不到程序文件时会直接报错，不会自动构建。正确顺序仍然是 **先构建成功，再烧录**。
 
-pyOCD 目前没有内置，可以先用自定义命令接入：
+pyOCD 的最终命令类似：
 
 ```text
-pyocd flash -t stm32f103xb build/firmware.elf
+pyocd flash -t stm32f103xb build/firmware.hex
+```
+
+如果使用工程里的支持包，会自动附加：
+
+```text
+pyocd flash -t stm32f103xb --pack Keil.STM32F1xx_DFP.pack build/firmware.hex
 ```
 
 ST-Link、STM32CubeProgrammer、pyOCD、J-Link、Keil、`.bin` 地址、PATH 配置和常见错误，见单独的详细教程：
 
 **[docs/FLASH.md](FLASH.md)**
 
-> 当前版本没有内置 J-Link / pyOCD MCP 客户端。自定义命令和 OpenOCD 都是本地执行，因此也可以接任意封装脚本。
+> 当前版本没有内置 J-Link MCP 客户端。自定义命令、OpenOCD 和 pyOCD 都是本地执行，因此也可以接任意封装脚本。
 
 ---
 

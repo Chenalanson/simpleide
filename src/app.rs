@@ -23,7 +23,7 @@ use crate::config::{
 };
 use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
-use crate::flash::{self, FlashTool, OpenOcdConfig};
+use crate::flash::{self, FlashTool, OpenOcdConfig, PyOcdConfig};
 use crate::formatting;
 use crate::git::{self, GitStatus};
 use crate::highlight::{self, Highlighter};
@@ -110,6 +110,7 @@ struct FlashDraft {
     tool: FlashTool,
     command: String,
     openocd: OpenOcdConfig,
+    pyocd: PyOcdConfig,
     error: Option<String>,
 }
 
@@ -119,6 +120,7 @@ impl FlashDraft {
             tool: config.flash_tool,
             command: config.flash_command.clone(),
             openocd: config.openocd.clone(),
+            pyocd: config.pyocd.clone(),
             error: None,
         }
     }
@@ -523,6 +525,8 @@ enum Action {
     SetFlashTool(FlashTool),
     SetOpenOcdPath(String),
     BrowseOpenOcd,
+    SetPyOcdPath(String),
+    BrowsePyOcd,
     ClearLog,
     CopyLog,
     Reveal(PathBuf),
@@ -2649,20 +2653,53 @@ impl App {
         }
     }
 
+    fn apply_pyocd_defaults(&self, pyocd: &mut PyOcdConfig) {
+        if pyocd.executable.trim().is_empty() {
+            pyocd.executable = "pyocd".to_owned();
+        }
+        if pyocd.program_file.trim().is_empty() {
+            pyocd.program_file = "${ExecutableName}.hex".to_owned();
+        }
+        if pyocd.target.trim().is_empty() {
+            if let Some(target) = flash::infer_pyocd_target(self.project_meta.device.as_deref()) {
+                pyocd.target = target;
+            }
+        }
+        if pyocd.pack.trim().is_empty() {
+            if let Some(pack) = self.support_packs.iter().find(|pack| {
+                pack.path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("pack"))
+            }) {
+                pyocd.pack = pack.file_name.clone();
+            }
+        }
+    }
+
     fn open_flash_config(&mut self) {
         let mut draft = FlashDraft::from_config(&self.build_config);
-        if draft.tool == FlashTool::OpenOcd {
-            self.apply_openocd_defaults(&mut draft.openocd);
+        match draft.tool {
+            FlashTool::OpenOcd => self.apply_openocd_defaults(&mut draft.openocd),
+            FlashTool::PyOcd => self.apply_pyocd_defaults(&mut draft.pyocd),
+            FlashTool::Custom => {}
         }
         self.flash_draft = Some(draft);
     }
 
     fn set_flash_tool(&mut self, tool: FlashTool) {
         self.build_config.flash_tool = tool;
-        if tool == FlashTool::OpenOcd {
-            let mut openocd = self.build_config.openocd.clone();
-            self.apply_openocd_defaults(&mut openocd);
-            self.build_config.openocd = openocd;
+        match tool {
+            FlashTool::OpenOcd => {
+                let mut openocd = self.build_config.openocd.clone();
+                self.apply_openocd_defaults(&mut openocd);
+                self.build_config.openocd = openocd;
+            }
+            FlashTool::PyOcd => {
+                let mut pyocd = self.build_config.pyocd.clone();
+                self.apply_pyocd_defaults(&mut pyocd);
+                self.build_config.pyocd = pyocd;
+            }
+            FlashTool::Custom => {}
         }
         self.persist_build_config();
     }
@@ -2689,10 +2726,33 @@ impl App {
         }
     }
 
+    fn set_pyocd_path(&mut self, path: String) {
+        self.build_config.pyocd.executable = path;
+        self.persist_build_config();
+    }
+
+    fn browse_pyocd(&mut self) {
+        let mut dialog = rfd::FileDialog::new().set_title("选择 pyOCD 可执行文件");
+        if cfg!(target_os = "windows") {
+            dialog = dialog.add_filter("pyOCD", &["exe"]);
+        }
+        let current = self.build_config.pyocd.executable.trim();
+        if let Some(parent) = Path::new(current)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty() && parent.is_dir())
+        {
+            dialog = dialog.set_directory(parent);
+        }
+        if let Some(path) = dialog.pick_file() {
+            self.set_pyocd_path(util::display_path(&path));
+        }
+    }
+
     fn save_flash_config(&mut self, draft: FlashDraft) {
         self.build_config.flash_tool = draft.tool;
         self.build_config.flash_command = draft.command.trim().to_owned();
         self.build_config.openocd = draft.openocd.normalized();
+        self.build_config.pyocd = draft.pyocd.normalized();
         self.persist_build_config();
     }
 
@@ -3328,6 +3388,8 @@ impl App {
                 Action::SetFlashTool(tool) => self.set_flash_tool(tool),
                 Action::SetOpenOcdPath(path) => self.set_openocd_path(path),
                 Action::BrowseOpenOcd => self.browse_openocd(),
+                Action::SetPyOcdPath(path) => self.set_pyocd_path(path),
+                Action::BrowsePyOcd => self.browse_pyocd(),
                 Action::ClearLog => {
                     self.build.log.clear();
                 }
@@ -3793,6 +3855,7 @@ impl App {
                         let flash_tip = if can_flash {
                             match self.build_config.flash_tool {
                                 FlashTool::OpenOcd => "使用 OpenOCD 烧录（本地工程目录）",
+                                FlashTool::PyOcd => "使用 pyOCD 烧录（本地工程目录）",
                                 FlashTool::Custom => "调用配置的烧录命令（本地工程目录）",
                             }
                         } else if has_project {
