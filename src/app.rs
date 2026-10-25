@@ -313,6 +313,7 @@ struct DebugState {
     side_width: f32,
     peripheral_filter: String,
     peripheral_values: BTreeMap<u64, String>,
+    peripheral_open: BTreeSet<String>,
     peripheral_refresh: Option<u64>,
     peripheral_id: u64,
     peripheral_last_refresh: Option<Instant>,
@@ -948,6 +949,7 @@ impl App {
         self.debug.last_watch_refresh = None;
         self.debug.registers.clear();
         self.debug.peripheral_values.clear();
+        self.debug.peripheral_open.clear();
         self.debug.peripheral_refresh = None;
         self.debug.peripheral_last_refresh = None;
         let mut config_in_project = from_project;
@@ -1858,6 +1860,7 @@ impl App {
         self.debug.log_scan = 0;
         self.debug.registers.clear();
         self.debug.peripheral_values.clear();
+        self.debug.peripheral_open.clear();
         self.debug.peripheral_refresh = None;
         self.debug.peripheral_last_refresh = None;
         for watch in &mut self.debug.watches {
@@ -1912,6 +1915,10 @@ impl App {
                 self.debug.pending_continue = false;
                 if continue_now {
                     if let Some(session) = &mut self.debug.session {
+                        // Stop once at main so starting a session immediately opens
+                        // and highlights the entry source line instead of running
+                        // silently until the first user breakpoint.
+                        session.send("tbreak main");
                         if session.started {
                             session.send("continue");
                         } else {
@@ -2056,6 +2063,7 @@ impl App {
         self.debug.current_source = None;
         self.debug.log_scan = 0;
         self.debug.peripheral_values.clear();
+        self.debug.peripheral_open.clear();
         self.debug.peripheral_refresh = None;
         self.debug.peripheral_last_refresh = None;
     }
@@ -2351,6 +2359,9 @@ impl App {
     }
 
     fn refresh_debug_peripheral(&mut self) {
+        if self.debug.running {
+            return;
+        }
         if self.debug.peripheral_refresh.is_some() {
             let stale = self
                 .debug
@@ -2368,21 +2379,49 @@ impl App {
             return;
         }
         let filter = self.debug.peripheral_filter.trim().to_lowercase();
-        let selected = self
-            .registers
-            .items
-            .iter()
-            .filter(|item| {
-                filter.is_empty()
-                    || item.name.to_lowercase().contains(&filter)
-                    || item.description.to_lowercase().contains(&filter)
-                    || format!("0x{:08X}", item.address)
-                        .to_lowercase()
-                        .contains(&filter)
-            })
-            .take(160)
-            .map(|item| item.address)
-            .collect::<Vec<_>>();
+        let mut groups: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+        for item in self.registers.items.iter().filter(|item| {
+            filter.is_empty()
+                || item.name.to_lowercase().contains(&filter)
+                || item.description.to_lowercase().contains(&filter)
+                || format!("0x{:08X}", item.address)
+                    .to_lowercase()
+                    .contains(&filter)
+        }) {
+            let group = item.name.split('.').next().unwrap_or(&item.name).to_owned();
+            groups.entry(group).or_default().push(item.address);
+        }
+        if groups.is_empty() {
+            return;
+        }
+        if self.debug.peripheral_open.is_empty() {
+            if let Some(first) = groups.keys().next().cloned() {
+                self.debug.peripheral_open.insert(first);
+            }
+        }
+        let filter_active = !filter.is_empty();
+        let mut selected = Vec::new();
+        for (group, addresses) in &groups {
+            if !filter_active && !self.debug.peripheral_open.contains(group) {
+                continue;
+            }
+            for address in addresses {
+                if selected.len() >= 160 {
+                    break;
+                }
+                selected.push(*address);
+            }
+            if selected.len() >= 160 {
+                break;
+            }
+        }
+        // If a stale expanded group was filtered out, fall back to the first.
+        if selected.is_empty() {
+            if let Some((group, addresses)) = groups.iter().next() {
+                self.debug.peripheral_open.insert(group.clone());
+                selected.extend(addresses.iter().copied().take(160));
+            }
+        }
         if selected.is_empty() {
             return;
         }

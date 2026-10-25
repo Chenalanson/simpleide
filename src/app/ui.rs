@@ -3646,71 +3646,92 @@ impl App {
                             });
                     }
                     DebugSideTab::Peripherals => {
-                        ui.add(
+                        let search = ui.add(
                             TextEdit::singleline(&mut self.debug.peripheral_filter)
                                 .id(Id::new("simple_embedded_peripheral_filter"))
+                                .font(FontId::proportional(13.0))
                                 .desired_width(f32::INFINITY)
                                 .hint_text("搜索外设寄存器名、地址或说明"),
                         );
-                        ui.add_space(3.0);
+                        if search.changed() {
+                            self.debug.peripheral_last_refresh = None;
+                            refresh = true;
+                        }
+                        ui.add_space(4.0);
                         if self.registers.items.is_empty() {
                             let message = self.registers.error.as_deref().unwrap_or(
                                 "未找到 SVD/寄存器定义；请把芯片支持包（.pack）放到工程根目录",
                             );
-                            ui.label(RichText::new(message).size(10.5).color(theme::WARNING));
+                            ui.label(RichText::new(message).size(11.5).color(theme::WARNING));
                             return;
                         }
                         let filter = self.debug.peripheral_filter.trim().to_lowercase();
-                        let rows = self
-                            .registers
-                            .items
-                            .iter()
-                            .filter(|item| {
-                                filter.is_empty()
-                                    || item.name.to_lowercase().contains(&filter)
-                                    || item.description.to_lowercase().contains(&filter)
-                                    || format!("0x{:08X}", item.address)
-                                        .to_lowercase()
-                                        .contains(&filter)
-                            })
-                            .take(160)
-                            .collect::<Vec<_>>();
+                        let filter_active = !filter.is_empty();
+                        let mut groups: BTreeMap<String, Vec<(String, u64, String)>> =
+                            BTreeMap::new();
+                        for item in self.registers.items.iter().filter(|item| {
+                            filter.is_empty()
+                                || item.name.to_lowercase().contains(&filter)
+                                || item.description.to_lowercase().contains(&filter)
+                                || format!("0x{:08X}", item.address)
+                                    .to_lowercase()
+                                    .contains(&filter)
+                        }) {
+                            let group = item
+                                .name
+                                .split('.')
+                                .next()
+                                .unwrap_or(&item.name)
+                                .to_owned();
+                            groups.entry(group).or_default().push((
+                                item.name.clone(),
+                                item.address,
+                                item.description.clone(),
+                            ));
+                        }
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(&self.registers.source)
-                                    .size(9.5)
+                                    .size(10.5)
                                     .color(theme::TEXT_FAINT),
                             );
-                            if rows.len() == 160 {
-                                ui.label(
-                                    RichText::new("仅显示前 160 个")
-                                        .size(9.0)
-                                        .color(theme::WARNING),
-                                );
-                            }
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} 组 · 每次读取前 160 个",
+                                    groups.len()
+                                ))
+                                .size(10.0)
+                                .color(theme::TEXT_FAINT),
+                            );
                         });
-                        ui.add_space(3.0);
+                        ui.label(
+                            RichText::new("点击外设名称展开/折叠；搜索时自动展开匹配分组。")
+                                .size(9.5)
+                                .color(theme::TEXT_FAINT),
+                        );
+                        ui.add_space(4.0);
                         let remaining = ui.available_height();
+                        let address_width = 92.0;
+                        let value_width = 84.0;
+                        let mut toggle: Option<String> = None;
                         ScrollArea::vertical()
                             .id_salt("simple_embedded_peripheral_list")
                             .max_height(remaining)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                if rows.is_empty() {
+                                if groups.is_empty() {
                                     ui.label(
                                         RichText::new("没有匹配的外设寄存器")
-                                            .size(10.5)
+                                            .size(11.5)
                                             .color(theme::TEXT_FAINT),
                                     );
                                     return;
                                 }
                                 let width = ui.available_width();
                                 let spacing = ui.spacing().item_spacing.x;
-                                let address_width = 84.0;
-                                let value_width = 76.0;
                                 let name_width =
                                     (width - address_width - value_width - spacing * 2.0)
-                                        .max(70.0);
+                                        .max(80.0);
                                 ui.horizontal(|ui| {
                                     for (label, size) in [
                                         ("寄存器", name_width),
@@ -3718,66 +3739,110 @@ impl App {
                                         ("值", value_width),
                                     ] {
                                         ui.add_sized(
-                                            [size, 16.0],
+                                            [size, 18.0],
                                             Label::new(
                                                 RichText::new(label)
-                                                    .size(9.5)
+                                                    .size(10.5)
                                                     .color(theme::TEXT_FAINT),
                                             ),
                                         );
                                     }
                                 });
-                                for item in rows {
-                                    let value = self
-                                        .debug
-                                        .peripheral_values
-                                        .get(&item.address)
-                                        .map(String::as_str)
-                                        .unwrap_or("—");
+                                ui.add_space(2.0);
+                                for (group, items) in &groups {
+                                    let open = filter_active
+                                        || self.debug.peripheral_open.contains(group);
+                                    let arrow = if open { "v" } else { ">" };
                                     ui.horizontal(|ui| {
-                                        let name = ui.add_sized(
-                                            [name_width, 18.0],
-                                            Label::new(
-                                                RichText::new(&item.name)
-                                                    .monospace()
-                                                    .size(10.0)
-                                                    .color(theme::TEXT),
+                                        let response = ui.add(
+                                            Button::new(
+                                                RichText::new(format!("{arrow}  {group}"))
+                                                    .size(12.5)
+                                                    .strong()
+                                                    .color(if open {
+                                                        theme::ACCENT
+                                                    } else {
+                                                        theme::TEXT
+                                                    }),
                                             )
-                                            .truncate(),
+                                            .frame(false)
+                                            .corner_radius(3),
                                         );
-                                        name.on_hover_text(if item.description.is_empty() {
-                                            &item.name
-                                        } else {
-                                            &item.description
-                                        });
-                                        ui.add_sized(
-                                            [address_width, 18.0],
-                                            Label::new(
-                                                RichText::new(format!("0x{:08X}", item.address))
-                                                    .monospace()
-                                                    .size(9.5)
-                                                    .color(theme::TEXT_FAINT),
-                                            ),
-                                        );
-                                        let color = if value == "无法读取" {
-                                            theme::ERROR
-                                        } else if value == "—" {
-                                            theme::TEXT_FAINT
-                                        } else {
-                                            theme::SUCCESS
-                                        };
-                                        ui.add_sized(
-                                            [value_width, 18.0],
-                                            Label::new(
-                                                RichText::new(value)
-                                                    .monospace()
-                                                    .size(10.0)
-                                                    .color(color),
-                                            ),
+                                        if response.clicked() {
+                                            toggle = Some(group.clone());
+                                        }
+                                        ui.label(
+                                            RichText::new(format!("{} 个", items.len()))
+                                                .size(9.5)
+                                                .color(theme::TEXT_FAINT),
                                         );
                                     });
+                                    if !open {
+                                        ui.add_space(4.0);
+                                        continue;
+                                    }
+                                    for (name, address, description) in items {
+                                        let value = self
+                                            .debug
+                                            .peripheral_values
+                                            .get(address)
+                                            .map(String::as_str)
+                                            .unwrap_or("—");
+                                        ui.horizontal(|ui| {
+                                            let label = ui.add_sized(
+                                                [name_width, 22.0],
+                                                Label::new(
+                                                    RichText::new(name)
+                                                        .monospace()
+                                                        .size(11.5)
+                                                        .color(theme::TEXT),
+                                                )
+                                                .truncate(),
+                                            );
+                                            label.on_hover_text(if description.is_empty() {
+                                                name
+                                            } else {
+                                                description
+                                            });
+                                            ui.add_sized(
+                                                [address_width, 22.0],
+                                                Label::new(
+                                                    RichText::new(format!("0x{address:08X}"))
+                                                        .monospace()
+                                                        .size(10.5)
+                                                        .color(theme::TEXT_FAINT),
+                                                ),
+                                            );
+                                            let color = if value == "无法读取" {
+                                                theme::ERROR
+                                            } else if value == "—" {
+                                                theme::TEXT_FAINT
+                                            } else {
+                                                theme::SUCCESS
+                                            };
+                                            ui.add_sized(
+                                                [value_width, 22.0],
+                                                Label::new(
+                                                    RichText::new(value)
+                                                        .monospace()
+                                                        .size(11.5)
+                                                        .color(color),
+                                                ),
+                                            );
+                                        });
+                                    }
+                                    ui.add_space(6.0);
                                 }
                             });
+                        if let Some(group) = toggle {
+                            if self.debug.peripheral_open.contains(&group) {
+                                self.debug.peripheral_open.remove(&group);
+                            } else {
+                                self.debug.peripheral_open.insert(group);
+                            }
+                            self.debug.peripheral_last_refresh = None;
+                            refresh = true;
+                        }
                     }
                 }
             });
