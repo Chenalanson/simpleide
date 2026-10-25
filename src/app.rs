@@ -493,6 +493,7 @@ enum Action {
     EditMeta,
     AddMetaItem(MetaListField),
     EditBuildOptions,
+    AddSupportPack,
     ClearLog,
     CopyLog,
     Reveal(PathBuf),
@@ -508,6 +509,7 @@ pub struct App {
     active: Option<usize>,
     tree: Option<FileTree>,
     project_meta: ProjectMeta,
+    support_packs: Vec<crate::support_pack::SupportPack>,
     build: BuildController,
     build_config: BuildConfig,
     settings_draft: Option<SettingsDraft>,
@@ -574,6 +576,7 @@ impl App {
             active: None,
             tree: None,
             project_meta: ProjectMeta::default(),
+            support_packs: Vec::new(),
             build_config: BuildConfig::default(),
             settings_draft: None,
             toolchain_install: None,
@@ -675,6 +678,7 @@ impl App {
 
         let project_name = Project::new(root.clone()).name;
         self.project_meta = ProjectMeta::detect(&root);
+        self.support_packs = crate::support_pack::scan(&root);
         self.project = Some(Project::new(root.clone()));
         self.build_config = config;
         self.tree = Some(FileTree::new(
@@ -2864,6 +2868,42 @@ impl App {
         }
     }
 
+    fn refresh_support_packs(&mut self) {
+        self.support_packs = self
+            .project
+            .as_ref()
+            .map(|project| crate::support_pack::scan(&project.root))
+            .unwrap_or_default();
+    }
+
+    fn add_support_pack(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Warning);
+            return;
+        };
+        let Some(paths) = rfd::FileDialog::new()
+            .set_title("添加芯片支持包")
+            .add_filter("Keil/CMSIS 支持包", &["pack", "pdsc"])
+            .set_directory(&root)
+            .pick_files()
+        else {
+            return;
+        };
+        match crate::support_pack::import(&root, &paths) {
+            Ok(copied) => {
+                self.refresh_support_packs();
+                if let Some(tree) = &mut self.tree {
+                    tree.refresh();
+                }
+                self.set_toast(
+                    format!("已添加 {} 个芯片支持包", copied.len()),
+                    Severity::Success,
+                );
+            }
+            Err(err) => self.set_toast(err, Severity::Error),
+        }
+    }
+
     fn apply_actions(&mut self, ctx: &egui::Context, actions: Vec<Action>) {
         for action in actions {
             match action {
@@ -2962,6 +3002,7 @@ impl App {
                     if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
                         self.project_meta = ProjectMeta::detect(&root);
                     }
+                    self.refresh_support_packs();
                     self.refresh_git_status();
                 }
                 Action::ToggleHidden => {
@@ -2975,6 +3016,7 @@ impl App {
                 Action::EditMeta => self.open_meta_editor(),
                 Action::AddMetaItem(field) => self.open_meta_add(field),
                 Action::EditBuildOptions => self.open_build_options(),
+                Action::AddSupportPack => self.add_support_pack(),
                 Action::ClearLog => {
                     self.build.log.clear();
                 }

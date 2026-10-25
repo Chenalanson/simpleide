@@ -648,6 +648,85 @@ impl App {
             }
         });
 
+        let mut add_support_pack = false;
+        meta_group_with_add(
+            ui,
+            "芯片支持包",
+            true,
+            "添加 Keil/CMSIS 支持包（.pack / .pdsc）",
+            &mut add_support_pack,
+            |ui| {
+                if self.support_packs.is_empty() {
+                    ui.label(RichText::new("未添加").size(11.0).color(theme::TEXT_FAINT));
+                    ui.label(
+                        RichText::new("点击右侧 + 选择 .pack / .pdsc")
+                            .size(9.0)
+                            .color(theme::TEXT_FAINT),
+                    );
+                } else {
+                    for (index, pack) in self.support_packs.iter().enumerate() {
+                        if index > 0 {
+                            ui.add_space(6.0);
+                        }
+                        ui.horizontal(|ui| {
+                            colored_dot(
+                                ui,
+                                if pack.error.is_none() {
+                                    theme::SUCCESS
+                                } else {
+                                    theme::WARNING
+                                },
+                                4.0,
+                            );
+                            ui.label(
+                                RichText::new(&pack.name)
+                                    .size(11.5)
+                                    .strong()
+                                    .color(theme::TEXT),
+                            );
+                            if let Some(version) = &pack.version {
+                                ui.label(RichText::new(version).size(9.5).color(theme::TEXT_FAINT));
+                            }
+                        });
+                        let response = ui.add(
+                            Label::new(
+                                RichText::new(&pack.file_name)
+                                    .size(9.0)
+                                    .color(theme::TEXT_FAINT),
+                            )
+                            .truncate(),
+                        );
+                        response.on_hover_text(util::display_path(&pack.path));
+                        if let Some(vendor) = &pack.vendor {
+                            ui.label(
+                                RichText::new(format!("厂商：{vendor}"))
+                                    .size(9.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                        }
+                        ui.label(
+                            RichText::new(pack.device_summary())
+                                .size(9.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                        if pack.svd_count > 0 {
+                            ui.label(
+                                RichText::new(format!("SVD：{} 个", pack.svd_count))
+                                    .size(9.0)
+                                    .color(theme::TEXT_FAINT),
+                            );
+                        }
+                        if let Some(error) = &pack.error {
+                            ui.label(RichText::new(error).size(9.0).color(theme::WARNING));
+                        }
+                    }
+                }
+            },
+        );
+        if add_support_pack {
+            actions.push(Action::AddSupportPack);
+        }
+
         meta_group(ui, "烧录配置", true, |ui| {
             let flash = self.build_config.flash_command.trim();
             meta_row(
@@ -2363,7 +2442,12 @@ impl App {
                                             .monospace()
                                             .color(theme::ACCENT),
                                     )
-                                    .on_hover_text(util::display_path(&item.path))
+                                    .on_hover_text(
+                                        item.path
+                                            .as_ref()
+                                            .map(|path| util::display_path(path))
+                                            .unwrap_or_else(|| "来自芯片支持包内的 SVD".to_owned()),
+                                    )
                                     .clicked()
                                 {
                                     clicked = Some(item.clone());
@@ -2377,11 +2461,13 @@ impl App {
             self.refresh_registers();
         }
         if let Some(item) = clicked {
-            actions.push(Action::OpenAt(
-                item.path.to_string_lossy().into_owned(),
-                item.line,
-                1,
-            ));
+            if let Some(path) = item.path {
+                actions.push(Action::OpenAt(
+                    path.to_string_lossy().into_owned(),
+                    item.line,
+                    1,
+                ));
+            }
         }
     }
 
@@ -4898,6 +4984,37 @@ fn meta_group(
     default_open: bool,
     content: impl FnOnce(&mut egui::Ui),
 ) {
+    meta_group_impl(ui, title, default_open, None, content);
+}
+
+fn meta_group_with_add(
+    ui: &mut egui::Ui,
+    title: &str,
+    default_open: bool,
+    add_tooltip: &str,
+    add_clicked: &mut bool,
+    content: impl FnOnce(&mut egui::Ui),
+) {
+    meta_group_impl(
+        ui,
+        title,
+        default_open,
+        Some((add_tooltip, add_clicked)),
+        content,
+    );
+}
+
+fn meta_group_impl(
+    ui: &mut egui::Ui,
+    title: &str,
+    default_open: bool,
+    add: Option<(&str, &mut bool)>,
+    content: impl FnOnce(&mut egui::Ui),
+) {
+    let (add_tooltip, mut add_clicked) = match add {
+        Some((tooltip, clicked)) => (Some(tooltip), Some(clicked)),
+        None => (None, None),
+    };
     let id = ui.make_persistent_id(("simple_embedded_meta_group", title));
     let selected_id = egui::Id::new("simple_embedded_meta_list_selected");
     let mut open = ui
@@ -4941,7 +5058,54 @@ fn meta_group(
         .response
         .interact(Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
-    if response.clicked() {
+
+    let mut plus_clicked = false;
+    if let Some(add_tooltip) = add_tooltip {
+        let plus_rect = egui::Rect::from_center_size(
+            egui::pos2(row_rect.right() - 15.0, row_rect.center().y),
+            egui::vec2(22.0, 22.0),
+        );
+        let plus = ui
+            .interact(plus_rect, id.with("add"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(add_tooltip);
+        if plus.hovered() {
+            ui.painter().rect_filled(
+                plus_rect,
+                CornerRadius::same(4),
+                Color32::from_rgb(28, 55, 43),
+            );
+        }
+        let center = plus_rect.center();
+        let arm = 5.0;
+        let stroke = Stroke::new(2.4_f32, theme::SUCCESS);
+        ui.painter().line_segment(
+            [
+                egui::pos2(center.x - arm, center.y),
+                egui::pos2(center.x + arm, center.y),
+            ],
+            stroke,
+        );
+        ui.painter().line_segment(
+            [
+                egui::pos2(center.x, center.y - arm),
+                egui::pos2(center.x, center.y + arm),
+            ],
+            stroke,
+        );
+        plus_clicked = plus.clicked();
+    }
+
+    if plus_clicked {
+        if let Some(clicked) = add_clicked.as_mut() {
+            **clicked = true;
+        }
+        open = true;
+        ui.data_mut(|data| {
+            data.insert_persisted(selected_id, id);
+            data.insert_persisted(id, true);
+        });
+    } else if response.clicked() {
         ui.data_mut(|data| data.insert_persisted(selected_id, id));
         open = !open;
         ui.data_mut(|data| data.insert_persisted(id, open));

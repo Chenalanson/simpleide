@@ -16,7 +16,9 @@ pub struct RegisterItem {
     pub name: String,
     pub address: u64,
     pub description: String,
-    pub path: PathBuf,
+    /// `None` for registers read from a support `.pack`; there is no file to
+    /// jump to without extracting the package.
+    pub path: Option<PathBuf>,
     pub line: usize,
 }
 
@@ -33,11 +35,27 @@ pub fn scan_project(root: &Path, ignore: &IgnoreRules) -> Result<RegisterIndex, 
             .is_some_and(|extension| extension.eq_ignore_ascii_case("svd"))
     }) {
         if let Ok(text) = read_text_file(svd) {
-            let (items, truncated) = parse_svd(&text.text, svd);
+            let (items, truncated) = parse_svd(&text.text, Some(svd));
             if !items.is_empty() {
                 return Ok(RegisterIndex {
                     items,
                     source: format!("SVD · {}", crate::util::file_name(svd)),
+                    truncated,
+                });
+            }
+        }
+    }
+
+    if let Some(pack) = files.iter().find(|path| {
+        path.extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pack"))
+    }) {
+        if let Some((name, text)) = crate::support_pack::read_first_svd(pack) {
+            let (items, truncated) = parse_svd(&text, None);
+            if !items.is_empty() {
+                return Ok(RegisterIndex {
+                    items,
+                    source: format!("支持包 · {name}"),
                     truncated,
                 });
             }
@@ -90,7 +108,7 @@ pub fn scan_project(root: &Path, ignore: &IgnoreRules) -> Result<RegisterIndex, 
                 name: name.as_str().to_owned(),
                 address,
                 description: "头文件宏定义".to_owned(),
-                path: path.clone(),
+                path: Some(path.clone()),
                 line: line_index + 1,
             });
             if items.len() >= MAX_REGISTERS {
@@ -141,7 +159,7 @@ fn collect_files(root: &Path, ignore: &IgnoreRules) -> Vec<PathBuf> {
     files
 }
 
-fn parse_svd(text: &str, path: &Path) -> (Vec<RegisterItem>, bool) {
+fn parse_svd(text: &str, path: Option<&Path>) -> (Vec<RegisterItem>, bool) {
     let Ok(peripheral_re) = Regex::new(r"(?is)<peripheral\b[^>]*>(.*?)</peripheral>") else {
         return (Vec::new(), false);
     };
@@ -221,7 +239,7 @@ fn parse_svd(text: &str, path: &Path) -> (Vec<RegisterItem>, bool) {
                 name: format!("{peripheral_name}.{name}"),
                 address: base.wrapping_add(offset),
                 description,
-                path: path.to_path_buf(),
+                path: path.map(Path::to_path_buf),
                 line,
             });
             if items.len() >= MAX_REGISTERS {
@@ -248,9 +266,7 @@ fn parse_hex(value: &str) -> Option<u64> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_svd_peripherals_and_registers() {
-        let svd = r#"<device>
+    const SAMPLE_SVD: &str = r#"<device>
   <peripherals>
     <peripheral>
       <name>GPIOA</name>
@@ -270,13 +286,36 @@ mod tests {
     </peripheral>
   </peripherals>
 </device>"#;
-        let (items, truncated) = parse_svd(svd, Path::new("chip.svd"));
+
+    #[test]
+    fn parses_svd_peripherals_and_registers() {
+        let (items, truncated) = parse_svd(SAMPLE_SVD, Some(Path::new("chip.svd")));
         assert!(!truncated);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].name, "GPIOA.CRL");
         assert_eq!(items[0].address, 0x4001_0800);
         assert_eq!(items[1].address, 0x4001_080C);
         assert!(items[0].description.contains("Port configuration"));
+    }
+
+    #[test]
+    fn scans_svd_inside_support_pack() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chip.pack");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("CMSIS/SVD/chip.svd", options).unwrap();
+        zip.write_all(SAMPLE_SVD.as_bytes()).unwrap();
+        zip.finish().unwrap();
+
+        let index = scan_project(dir.path(), &IgnoreRules::default()).unwrap();
+        assert!(index.source.starts_with("支持包 · "));
+        assert_eq!(index.items.len(), 2);
+        assert_eq!(index.items[0].name, "GPIOA.CRL");
+        assert!(index.items[0].path.is_none());
     }
 
     #[test]
