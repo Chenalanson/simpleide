@@ -9,6 +9,159 @@ use eframe::egui::{
 };
 
 impl App {
+    pub(super) fn show_status_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let info = self.active_document().map(|doc| {
+            (
+                doc.cursor_line,
+                doc.cursor_column,
+                doc.encoding,
+                doc.newline_label(),
+                doc.language.clone(),
+                doc.is_dirty(),
+                doc.read_only,
+            )
+        });
+        egui::Panel::bottom("simple_embedded_status_bar")
+            .exact_size(32.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::BG)
+                    .inner_margin(Margin::symmetric(8, 4)),
+            )
+            .show_inside(ui, |ui| {
+                ui.painter().rect(
+                    ui.max_rect(),
+                    CornerRadius::same(7),
+                    theme::PANEL,
+                    Stroke::NONE,
+                    egui::StrokeKind::Inside,
+                );
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let text_color = theme::TEXT_FAINT;
+                    if let Some((line, column, encoding, newline, language, dirty, read_only)) =
+                        info
+                    {
+                        ui.label(
+                            RichText::new(format!("行 {line}，列 {column}"))
+                                .size(10.5)
+                                .color(text_color),
+                        );
+                        ui.add_space(6.0);
+                        let indent = if self.settings.use_spaces {
+                            format!("缩进: 空格 {}", self.settings.indent_width)
+                        } else {
+                            format!("缩进: Tab {}", self.settings.indent_width)
+                        };
+                        ui.label(RichText::new(indent).size(10.5).color(text_color));
+                        ui.add_space(6.0);
+                        ui.scope(|ui| {
+                            let visuals = ui.visuals_mut();
+                            visuals.widgets.inactive.weak_bg_fill = theme::SURFACE;
+                            visuals.widgets.inactive.bg_fill = theme::SURFACE;
+                            visuals.widgets.hovered.weak_bg_fill = theme::HOVER;
+                            visuals.widgets.hovered.bg_fill = theme::HOVER;
+                            visuals.widgets.open.weak_bg_fill = theme::SURFACE;
+                            visuals.widgets.open.bg_fill = theme::SURFACE;
+                            ui.menu_button(
+                                RichText::new(encoding.label()).size(10.5).color(text_color),
+                                |ui| {
+                                    for value in [
+                                        crate::util::TextEncoding::Utf8,
+                                        crate::util::TextEncoding::Gbk,
+                                    ] {
+                                        if ui
+                                            .selectable_label(encoding == value, value.label())
+                                            .clicked()
+                                        {
+                                            actions.push(Action::SetEncoding(value));
+                                            ui.close();
+                                        }
+                                    }
+                                },
+                            );
+                        });
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(format!("行尾: {newline}"))
+                                .size(10.5)
+                                .color(text_color),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(RichText::new(language).size(10.5).color(theme::INFO));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let save_color = if dirty {
+                                theme::ACCENT
+                            } else {
+                                theme::TEXT_FAINT
+                            };
+                            if ui
+                                .add(small_flat_button("保存", save_color))
+                                .on_hover_text("保存当前文件 (Ctrl+S)")
+                                .clicked()
+                            {
+                                actions.push(Action::SaveActive);
+                            }
+                            let wrap_color = if self.settings.word_wrap {
+                                theme::ACCENT
+                            } else {
+                                theme::TEXT_FAINT
+                            };
+                            if ui
+                                .add(small_flat_button("自动换行", wrap_color))
+                                .on_hover_text("切换长行自动换行")
+                                .clicked()
+                            {
+                                actions.push(Action::ToggleWrap);
+                            }
+                            if ui
+                                .add(small_flat_button("格式化", theme::TEXT_DIM))
+                                .on_hover_text("用 clang-format 格式化当前文件")
+                                .clicked()
+                            {
+                                actions.push(Action::FormatDocument);
+                            }
+                            if ui
+                                .add(small_flat_button("符号", theme::TEXT_DIM))
+                                .on_hover_text("工程符号搜索 (Ctrl+Shift+O)")
+                                .clicked()
+                            {
+                                actions.push(Action::OpenSymbols);
+                            }
+                            if ui
+                                .add(small_flat_button("数组", theme::TEXT_DIM))
+                                .on_hover_text("生成 C 数组 (Ctrl+Shift+A)")
+                                .clicked()
+                            {
+                                actions.push(Action::OpenArrayGenerator);
+                            }
+                            if ui
+                                .add(small_flat_button("寄存器", theme::TEXT_DIM))
+                                .on_hover_text("外设寄存器浏览 (Ctrl+Shift+R)")
+                                .clicked()
+                            {
+                                actions.push(Action::OpenRegisters);
+                            }
+                            let read_only_color = if read_only {
+                                theme::WARNING
+                            } else {
+                                theme::TEXT_FAINT
+                            };
+                            if ui
+                                .add(small_flat_button("只读", read_only_color))
+                                .on_hover_text("切换只读")
+                                .clicked()
+                            {
+                                actions.push(Action::ToggleReadOnly);
+                            }
+                        });
+                    } else {
+                        ui.label(RichText::new("就绪").size(10.5).color(text_color));
+                    }
+                });
+            });
+    }
+
     pub(super) fn show_side_panel(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let project_info = self
             .project
@@ -25,14 +178,15 @@ impl App {
             .resizable(true)
             .default_size(272.0)
             .size_range(230.0..=440.0)
-            .frame(
-                Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
-                    .corner_radius(8)
-                    .inner_margin(Margin::same(0)),
-            )
+            .frame(Frame::new().fill(theme::BG).inner_margin(Margin::same(3)))
             .show_inside(ui, |ui| {
+                ui.painter().rect(
+                    ui.max_rect(),
+                    CornerRadius::same(8),
+                    theme::PANEL,
+                    Stroke::NONE,
+                    egui::StrokeKind::Inside,
+                );
                 ui.add_space(14.0);
                 Frame::new()
                     .inner_margin(Margin::symmetric(12, 0))
@@ -162,8 +316,7 @@ impl App {
                     egui::vec2(ui.available_width(), ui.available_height()),
                     Layout::top_down(Align::Min),
                     |ui| {
-                        ui.add_space(8.0);
-                        light_separator(ui);
+                        ui.add_space(10.0);
                         Frame::new()
                             .inner_margin(Margin::symmetric(11, 7))
                             .show(ui, |ui| {
@@ -268,7 +421,7 @@ impl App {
                             });
 
                         if resource_open {
-                            light_separator(ui);
+                            ui.add_space(6.0);
                             let tree_budget = if has_project {
                                 (ui.available_height() - 50.0).max(80.0)
                             } else {
@@ -349,29 +502,16 @@ impl App {
                                 if split_response.drag_stopped() {
                                     self.settings.save();
                                 }
-                                let line_color = if can_resize
-                                    && (split_response.hovered() || split_response.dragged())
-                                {
-                                    theme::ACCENT
-                                } else {
-                                    Color32::from_rgb(150, 160, 175)
-                                };
-                                let line_y = split_rect.center().y;
-                                ui.painter().line_segment(
-                                    [
-                                        egui::pos2(split_rect.left(), line_y),
-                                        egui::pos2(split_rect.right(), line_y),
-                                    ],
-                                    Stroke::new(1.0_f32, line_color),
-                                );
+                                let _ = split_rect;
                             }
                         } else if has_project {
-                            light_separator(ui);
+                            ui.add_space(6.0);
                         }
 
                         if has_project {
+                            ui.add_space(4.0);
                             info_header_row(ui, &mut info_open);
-                            light_separator(ui);
+                            ui.add_space(4.0);
                             if info_open {
                                 Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
                                     ui,
@@ -550,12 +690,15 @@ impl App {
 
     pub(super) fn show_center(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         egui::CentralPanel::default()
-            .frame(
-                Frame::new()
-                    .fill(theme::EDITOR_BG)
-                    .inner_margin(Margin::same(0)),
-            )
+            .frame(Frame::new().fill(theme::BG).inner_margin(Margin::same(4)))
             .show_inside(ui, |ui| {
+                ui.painter().rect(
+                    ui.max_rect(),
+                    CornerRadius::same(8),
+                    theme::EDITOR_BG,
+                    Stroke::NONE,
+                    egui::StrokeKind::Inside,
+                );
                 if self.tabs.is_empty() {
                     let hint = if self.project.is_some() {
                         "从左侧资源管理器打开文件开始编辑"
@@ -578,39 +721,52 @@ impl App {
 
                 self.show_tab_strip(ui, actions);
                 self.show_editor_toolbar(ui, actions);
-                ui.separator();
                 let editor_rect = ui.available_rect_before_wrap();
-                let split_index = self
+                let active_index = self.active.unwrap_or(0);
+                let primary_index = self
+                    .split_primary
+                    .as_ref()
+                    .and_then(|path| self.tabs.iter().position(|doc| same_path(&doc.path, path)))
+                    .or(Some(active_index));
+                let secondary_index = self
                     .split_path
                     .as_ref()
                     .and_then(|path| self.tabs.iter().position(|doc| same_path(&doc.path, path)));
-                if let Some(index) = split_index {
-                    match self.split_direction {
-                        SplitDirection::Right => {
-                            ui.columns(2, |columns| {
-                                self.show_code_editor(&mut columns[0]);
-                                self.show_split_preview(&mut columns[1], index);
-                            });
+                if let (Some(primary), Some(secondary)) = (primary_index, secondary_index) {
+                    if primary != secondary {
+                        match self.split_direction {
+                            SplitDirection::Right => {
+                                ui.columns(2, |columns| {
+                                    self.show_code_editor(&mut columns[0], primary, Some(0));
+                                    self.show_code_editor(&mut columns[1], secondary, Some(1));
+                                });
+                            }
+                            SplitDirection::Up => {
+                                let available = ui.available_height();
+                                let top =
+                                    (available * 0.5).clamp(120.0, (available - 80.0).max(120.0));
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), top),
+                                    Layout::top_down(Align::Min),
+                                    |ui| {
+                                        self.show_code_editor(ui, primary, Some(0));
+                                    },
+                                );
+                                ui.separator();
+                                self.show_code_editor(ui, secondary, Some(1));
+                            }
                         }
-                        SplitDirection::Up => {
-                            let available = ui.available_height();
-                            let top = (available * 0.5).clamp(120.0, (available - 80.0).max(120.0));
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(ui.available_width(), top),
-                                Layout::top_down(Align::Min),
-                                |ui| {
-                                    self.show_split_preview(ui, index);
-                                },
-                            );
-                            ui.separator();
-                            self.show_code_editor(ui);
-                        }
+                    } else {
+                        self.split_path = None;
+                        self.split_primary = None;
+                        self.show_code_editor(ui, active_index, None);
                     }
                 } else {
-                    if self.split_path.is_some() {
+                    if self.split_path.is_some() || self.split_primary.is_some() {
                         self.split_path = None;
+                        self.split_primary = None;
                     }
-                    self.show_code_editor(ui);
+                    self.show_code_editor(ui, active_index, None);
                 }
                 let ctx = ui.ctx().clone();
                 if self.find.open {
@@ -714,8 +870,7 @@ impl App {
     }
 
     fn show_find_overlay(&mut self, ctx: &egui::Context, editor_rect: egui::Rect) {
-        let desired: f32 = if self.find.replace_open { 650.0 } else { 470.0 };
-        let width = desired.min((editor_rect.width() - 24.0).max(300.0));
+        let width = (editor_rect.width() - 24.0).max(300.0);
         let position = egui::pos2(editor_rect.right() - width - 12.0, editor_rect.top() + 8.0);
         egui::Area::new(Id::new("simple_embedded_find_overlay"))
             .order(egui::Order::Foreground)
@@ -725,9 +880,9 @@ impl App {
                     .fill(theme::PANEL_RAISED)
                     .stroke(Stroke::new(1.0_f32, theme::BORDER))
                     .corner_radius(6)
-                    .inner_margin(Margin::symmetric(8, 5))
+                    .inner_margin(Margin::symmetric(10, 7))
                     .show(ui, |ui| {
-                        ui.set_width(width - 16.0);
+                        ui.set_width(width - 20.0);
                         self.show_find_bar(ui);
                     });
             });
@@ -736,6 +891,12 @@ impl App {
     fn show_tab_strip(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         Frame::new()
             .fill(theme::PANEL)
+            .corner_radius(CornerRadius {
+                nw: 8,
+                ne: 8,
+                sw: 0,
+                se: 0,
+            })
             .inner_margin(Margin::symmetric(8, 4))
             .show(ui, |ui| {
                 ScrollArea::horizontal()
@@ -885,6 +1046,12 @@ impl App {
                                             ui.close();
                                         }
                                     });
+                                    if self.split_primary.is_some()
+                                        && ui.button("取消拆分").clicked()
+                                    {
+                                        actions.push(Action::CloseSplit);
+                                        ui.close();
+                                    }
                                 });
                                 response.on_hover_text(util::display_path(&doc.path));
                             }
@@ -893,7 +1060,7 @@ impl App {
             });
     }
 
-    fn show_editor_toolbar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    fn show_editor_toolbar(&mut self, ui: &mut egui::Ui, _actions: &mut Vec<Action>) {
         let Some(active) = self.active else {
             return;
         };
@@ -902,12 +1069,7 @@ impl App {
         };
         let breadcrumb = doc.rel_path.replace('/', " > ");
         let full_path = util::display_path(&doc.path);
-        let language = doc.language.clone();
-        let newline = doc.newline_label();
         let dirty = doc.is_dirty();
-        let word_wrap = self.settings.word_wrap;
-        let encoding = doc.encoding;
-        let read_only = doc.read_only;
 
         Frame::new()
             .fill(theme::EDITOR_BG)
@@ -916,7 +1078,7 @@ impl App {
                 ui.spacing_mut().interact_size.y = 24.0;
                 ui.horizontal(|ui| {
                     let response = ui.add_sized(
-                        [ui.available_width().min(400.0), 22.0],
+                        [ui.available_width().min(900.0), 22.0],
                         Label::new(
                             RichText::new(&breadcrumb)
                                 .size(12.0)
@@ -928,161 +1090,6 @@ impl App {
                     if dirty {
                         ui.label(RichText::new("● 未保存").size(11.0).color(theme::WARNING));
                     }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let save_color = if dirty {
-                            theme::ACCENT
-                        } else {
-                            theme::TEXT_FAINT
-                        };
-                        if ui
-                            .add(
-                                Button::new(RichText::new("保存").size(12.0).color(save_color))
-                                    .frame(false),
-                            )
-                            .on_hover_text("保存当前文件 (Ctrl+S)")
-                            .clicked()
-                        {
-                            actions.push(Action::SaveActive);
-                        }
-                        let wrap_color = if word_wrap {
-                            theme::ACCENT
-                        } else {
-                            theme::TEXT_FAINT
-                        };
-                        if ui
-                            .add(
-                                Button::new(RichText::new("自动换行").size(12.0).color(wrap_color))
-                                    .fill(if word_wrap {
-                                        theme::ACCENT_SOFT
-                                    } else {
-                                        Color32::TRANSPARENT
-                                    })
-                                    .frame(word_wrap)
-                                    .corner_radius(4),
-                            )
-                            .on_hover_text("切换长行自动换行")
-                            .clicked()
-                        {
-                            actions.push(Action::ToggleWrap);
-                        }
-                        if ui
-                            .add(
-                                Button::new(
-                                    RichText::new("格式化").size(12.0).color(theme::TEXT_DIM),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("用 clang-format 格式化当前 C/C++ 文件")
-                            .clicked()
-                        {
-                            actions.push(Action::FormatDocument);
-                        }
-                        if ui
-                            .add(
-                                Button::new(
-                                    RichText::new("符号").size(12.0).color(theme::TEXT_DIM),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("工程符号搜索 (Ctrl+Shift+O)")
-                            .clicked()
-                        {
-                            actions.push(Action::OpenSymbols);
-                        }
-                        if ui
-                            .add(
-                                Button::new(
-                                    RichText::new("数组").size(12.0).color(theme::TEXT_DIM),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("把选中内容或当前文件生成 C 数组 (Ctrl+Shift+A)")
-                            .clicked()
-                        {
-                            actions.push(Action::OpenArrayGenerator);
-                        }
-                        if ui
-                            .add(
-                                Button::new(
-                                    RichText::new("寄存器").size(12.0).color(theme::TEXT_DIM),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("外设寄存器浏览 (Ctrl+Shift+R)")
-                            .clicked()
-                        {
-                            actions.push(Action::OpenRegisters);
-                        }
-                        if ui
-                            .add(
-                                Button::new(
-                                    RichText::new("补全").size(12.0).color(theme::TEXT_DIM),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("工程符号补全 (Ctrl+Space)")
-                            .clicked()
-                        {
-                            actions.push(Action::OpenCompletion);
-                        }
-                        if ui
-                            .add(
-                                Button::new(
-                                    RichText::new("列编辑").size(12.0).color(theme::TEXT_DIM),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("在选中行范围的指定列批量插入/删除/替换 (Alt+C)")
-                            .clicked()
-                        {
-                            actions.push(Action::OpenColumnEdit);
-                        }
-                        let read_only_color = if read_only {
-                            theme::WARNING
-                        } else {
-                            theme::TEXT_FAINT
-                        };
-                        if ui
-                            .add(
-                                Button::new(
-                                    RichText::new("只读").size(12.0).color(read_only_color),
-                                )
-                                .fill(if read_only {
-                                    theme::SURFACE
-                                } else {
-                                    Color32::TRANSPARENT
-                                })
-                                .frame(read_only)
-                                .corner_radius(4),
-                            )
-                            .on_hover_text("切换只读，禁止编辑和保存")
-                            .clicked()
-                        {
-                            actions.push(Action::ToggleReadOnly);
-                        }
-                        ui.label(RichText::new(&language).size(12.0).color(theme::INFO));
-                        ui.label(RichText::new(newline).size(12.0).color(theme::TEXT_FAINT));
-                        egui::ComboBox::from_id_salt("simple_embedded_file_encoding")
-                            .selected_text(
-                                RichText::new(encoding.label())
-                                    .size(12.0)
-                                    .color(theme::TEXT_FAINT),
-                            )
-                            .width(64.0)
-                            .show_ui(ui, |ui| {
-                                for value in [
-                                    crate::util::TextEncoding::Utf8,
-                                    crate::util::TextEncoding::Gbk,
-                                ] {
-                                    if ui
-                                        .selectable_label(encoding == value, value.label())
-                                        .clicked()
-                                    {
-                                        actions.push(Action::SetEncoding(value));
-                                    }
-                                }
-                            });
-                    });
                 });
             });
     }
@@ -1093,10 +1100,11 @@ impl App {
         let mut replace_current = false;
         let mut replace_all = false;
         ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().interact_size.y = 30.0;
         let available = ui.available_width();
         ui.horizontal(|ui| {
             let (chevron_rect, chevron_response) =
-                ui.allocate_exact_size(egui::vec2(24.0, 28.0), Sense::click());
+                ui.allocate_exact_size(egui::vec2(28.0, 30.0), Sense::click());
             let chevron_fill = if self.find.replace_open {
                 theme::ACCENT_SOFT
             } else if chevron_response.hovered() {
@@ -1211,14 +1219,14 @@ impl App {
             ui.label(RichText::new(status).size(10.5).color(status_color));
 
             if ui
-                .add(small_flat_button("上", theme::TEXT_DIM))
+                .add(small_flat_button("↑", theme::TEXT_DIM))
                 .on_hover_text("上一个匹配")
                 .clicked()
             {
                 previous = true;
             }
             if ui
-                .add(small_flat_button("下", theme::TEXT_DIM))
+                .add(small_flat_button("↓", theme::TEXT_DIM))
                 .on_hover_text("下一个匹配")
                 .clicked()
             {
@@ -2496,105 +2504,6 @@ impl App {
         }
     }
 
-    fn show_split_preview(&mut self, ui: &mut egui::Ui, index: usize) {
-        let Some(doc) = self.tabs.get(index) else {
-            return;
-        };
-        let name = doc.name.clone();
-        let dirty = doc.is_dirty();
-        let path = doc.path.clone();
-        let placement = match self.split_direction {
-            SplitDirection::Right => "右侧",
-            SplitDirection::Up => "上方",
-        };
-        let mut close_split = false;
-        Frame::new()
-            .fill(theme::PANEL)
-            .inner_margin(Margin::symmetric(10, 6))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!("{placement}分屏预览 · {name}"))
-                            .size(11.5)
-                            .strong()
-                            .color(theme::TEXT_DIM),
-                    );
-                    if dirty {
-                        ui.label(RichText::new("●").size(10.0).color(theme::WARNING));
-                    }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("关闭分屏", theme::TEXT_FAINT))
-                            .clicked()
-                        {
-                            close_split = true;
-                        }
-                    });
-                });
-            });
-        ui.separator();
-        let font_size = self.settings.font_size;
-        let font_id = FontId::monospace(font_size);
-        let wrap_width = (ui.available_width() - 48.0).max(80.0);
-        let galley = highlight::layout_cached(
-            &self.highlighter,
-            ui,
-            doc.buffer.as_string(),
-            &highlight::LayoutSpec {
-                syntax_name: doc.syntax_name.as_deref(),
-                revision: doc.buffer.revision(),
-                wrap_width,
-                font_id: font_id.clone(),
-                decorations_key: 0,
-                search_ranges: &[],
-            },
-            &self.split_cache,
-        );
-        ScrollArea::both()
-            .id_salt(("simple_embedded_split_preview", &path))
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let size = egui::vec2(galley.size().x + 48.0, galley.size().y + 8.0);
-                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-                let painter = ui.painter_at(rect);
-                painter.rect_filled(
-                    egui::Rect::from_min_size(rect.min, egui::vec2(42.0, rect.height())),
-                    CornerRadius::ZERO,
-                    theme::EDITOR_BG,
-                );
-                let mut line_no = 1usize;
-                let mut starts_line = true;
-                for row in &galley.rows {
-                    if starts_line {
-                        painter.text(
-                            egui::pos2(
-                                rect.left() + 34.0,
-                                rect.top() + row.pos.y + row.size.y * 0.5,
-                            ),
-                            Align2::RIGHT_CENTER,
-                            line_no.to_string(),
-                            FontId::monospace(font_size * 0.82),
-                            theme::TEXT_FAINT,
-                        );
-                    }
-                    if row.ends_with_newline {
-                        line_no += 1;
-                        starts_line = true;
-                    } else {
-                        starts_line = false;
-                    }
-                }
-                painter.galley(
-                    egui::pos2(rect.left() + 46.0, rect.top() + 4.0),
-                    galley.clone(),
-                    theme::TEXT,
-                );
-            });
-        if close_split {
-            self.split_path = None;
-        }
-    }
-
     pub(super) fn show_column_edit(&mut self, ctx: &egui::Context) {
         use crate::column::ColumnOperation;
 
@@ -2722,17 +2631,17 @@ impl App {
         }
     }
 
-    fn show_code_editor(&mut self, ui: &mut egui::Ui) {
-        let Some(active) = self.active else {
-            return;
-        };
-        if let Some(doc) = self.tabs.get(active) {
-            self.find
-                .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+    fn show_code_editor(&mut self, ui: &mut egui::Ui, pane_index: usize, pane_slot: Option<usize>) {
+        let is_active_pane = self.active == Some(pane_index);
+        if is_active_pane {
+            if let Some(doc) = self.tabs.get(pane_index) {
+                self.find
+                    .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+            }
         }
         let markers = self
             .tabs
-            .get(active)
+            .get(pane_index)
             .map(|doc| {
                 self.diagnostics
                     .iter()
@@ -2743,7 +2652,7 @@ impl App {
             .unwrap_or_default();
         let git_marks = self
             .tabs
-            .get(active)
+            .get(pane_index)
             .map(|doc| {
                 if self
                     .git_line_key
@@ -2757,12 +2666,73 @@ impl App {
             })
             .unwrap_or_default();
         let breakpoints = self.debug.breakpoints.clone();
-        let Some(doc) = self.tabs.get_mut(active) else {
+        let Some(doc) = self.tabs.get_mut(pane_index) else {
             return;
         };
         let editor_id = Id::new(("simple_embedded_code_editor", &doc.path));
         let scroll_id = Id::new(("simple_embedded_code_scroll", &doc.path));
         let read_only = doc.read_only;
+        let has_column_selection = self
+            .column_selection
+            .as_ref()
+            .is_some_and(|selection| same_path(&selection.path, &doc.path));
+        if has_column_selection && !read_only && ui.memory(|memory| memory.has_focus(editor_id)) {
+            let mut copy = false;
+            let mut remove = false;
+            let mut typed = None;
+            ui.ctx().input_mut(|input| {
+                if input.consume_key(egui::Modifiers::COMMAND, egui::Key::C) {
+                    copy = true;
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
+                    || input.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                {
+                    remove = true;
+                }
+                let mut text = String::new();
+                input.events.retain(|event| {
+                    if let egui::Event::Text(value) = event {
+                        text.push_str(value);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                if !text.is_empty() {
+                    typed = Some(text);
+                }
+            });
+            if let Some(selection) = self.column_selection.clone() {
+                let range = crate::column_select::ColumnRange::normalized(
+                    selection.anchor_line,
+                    selection.anchor_col,
+                    selection.cursor_line,
+                    selection.cursor_col,
+                );
+                if copy {
+                    let selected =
+                        crate::column_select::selected_text(doc.buffer.as_string(), range);
+                    ui.ctx().copy_text(selected);
+                } else if remove || typed.is_some() {
+                    let insert = typed.as_deref().unwrap_or("");
+                    let new_text =
+                        crate::column_select::replace(doc.buffer.as_string(), range, insert);
+                    let line_start =
+                        crate::util::char_index_at_line(&new_text, range.start_line + 1);
+                    let line_len = new_text
+                        .split('\n')
+                        .nth(range.start_line)
+                        .map(|value| value.chars().count())
+                        .unwrap_or(0);
+                    let cursor = line_start + range.start_col.min(line_len);
+                    doc.buffer.set_text(new_text);
+                    doc.update_cursor(cursor);
+                    set_editor_cursor(ui.ctx(), &doc.path, cursor);
+                    self.column_selection = None;
+                    self.find.dirty = true;
+                }
+            }
+        }
         if !read_only && ui.memory(|memory| memory.has_focus(editor_id)) {
             let pasted = ui.ctx().input(|input| {
                 input
@@ -2823,7 +2793,7 @@ impl App {
                     .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
             }
         }
-        let search_ranges = if self.find.open {
+        let search_ranges = if self.find.open && is_active_pane {
             self.find.decorations()
         } else {
             Vec::new()
@@ -2838,8 +2808,16 @@ impl App {
         let relative_line_numbers = self.settings.relative_line_numbers;
         let show_whitespace = self.settings.show_whitespace;
         let ruler_column = self.settings.ruler_column;
-        let focus_editor = std::mem::take(&mut self.focus_editor);
-        let scroll_cursor = std::mem::take(&mut self.scroll_to_cursor);
+        let focus_editor = if is_active_pane {
+            std::mem::take(&mut self.focus_editor)
+        } else {
+            false
+        };
+        let scroll_cursor = if is_active_pane {
+            std::mem::take(&mut self.scroll_to_cursor)
+        } else {
+            false
+        };
         let font_id = FontId::monospace(font_size);
         let viewport_width = ui.available_width();
         let rows = ((ui.available_height() / (font_size * 1.35)).ceil() as usize).max(20);
@@ -2933,6 +2911,99 @@ impl App {
                 gutter = Some((Arc::clone(&output.galley), output.galley_pos));
                 response = Some(output.response.response);
             });
+
+        if let Some((galley, galley_pos)) = &gutter {
+            let viewport = scroll_output.inner_rect;
+            let pointer = ui.ctx().input(|input| input.pointer.interact_pos());
+            let pointer_pressed = ui.ctx().input(|input| input.pointer.primary_pressed());
+            let pointer_down = ui.ctx().input(|input| input.pointer.primary_down());
+            let ctrl_alt = ui
+                .ctx()
+                .input(|input| input.modifiers.ctrl && input.modifiers.alt);
+            if let Some(pointer) = pointer.filter(|pointer| viewport.contains(*pointer)) {
+                let cursor = galley.cursor_from_pos(pointer - *galley_pos);
+                let (line, column) =
+                    crate::util::line_column_at_char(doc.buffer.as_string(), cursor.index);
+                let line = line.saturating_sub(1);
+                let column = column.saturating_sub(1);
+                if ctrl_alt && pointer_pressed {
+                    self.column_selection = Some(ColumnSelectionState {
+                        path: doc.path.clone(),
+                        anchor_line: line,
+                        anchor_col: column,
+                        cursor_line: line,
+                        cursor_col: column,
+                    });
+                } else if ctrl_alt && pointer_down {
+                    if let Some(selection) = self
+                        .column_selection
+                        .as_mut()
+                        .filter(|selection| same_path(&selection.path, &doc.path))
+                    {
+                        selection.cursor_line = line;
+                        selection.cursor_col = column;
+                    }
+                } else if pointer_pressed {
+                    self.column_selection = None;
+                }
+            }
+            if let Some(selection) = self
+                .column_selection
+                .as_ref()
+                .filter(|selection| same_path(&selection.path, &doc.path))
+            {
+                let range = crate::column_select::ColumnRange::normalized(
+                    selection.anchor_line,
+                    selection.anchor_col,
+                    selection.cursor_line,
+                    selection.cursor_col,
+                );
+                let char_width = ui
+                    .ctx()
+                    .fonts_mut(|fonts| fonts.glyph_width(&FontId::monospace(font_size), '0'));
+                let painter = ui.painter().with_clip_rect(viewport);
+                let text = doc.buffer.as_string();
+                for line in range.start_line..=range.end_line {
+                    let line_start = crate::util::char_index_at_line(text, line + 1);
+                    let line_len = text
+                        .split('\n')
+                        .nth(line)
+                        .map(|value| value.chars().count())
+                        .unwrap_or(0);
+                    let start_char = line_start + range.start_col.min(line_len);
+                    let end_char = line_start + range.end_col.min(line_len);
+                    let start_rect = galley
+                        .pos_from_cursor(egui::text::CCursor::new(start_char))
+                        .translate(galley_pos.to_vec2());
+                    let end_rect = galley
+                        .pos_from_cursor(egui::text::CCursor::new(end_char))
+                        .translate(galley_pos.to_vec2());
+                    let mut x1 = start_rect.left();
+                    let mut x2 = end_rect.left();
+                    if range.start_col > line_len {
+                        x1 += (range.start_col - line_len) as f32 * char_width;
+                    }
+                    if range.end_col > line_len {
+                        x2 += (range.end_col - line_len) as f32 * char_width;
+                    }
+                    let top = start_rect.top().min(end_rect.top());
+                    let height = start_rect
+                        .height()
+                        .max(end_rect.height())
+                        .max(font_size * 1.2);
+                    if top + height >= viewport.top() && top <= viewport.bottom() {
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(x1, top),
+                                egui::pos2(x2.max(x1 + 1.0), top + height),
+                            ),
+                            CornerRadius::ZERO,
+                            Color32::from_rgba_unmultiplied(88, 196, 221, 55),
+                        );
+                    }
+                }
+            }
+        }
 
         let bracket_match =
             crate::brackets::matching_bracket(doc.buffer.as_string(), doc.cursor_index);
@@ -3128,6 +3199,14 @@ impl App {
             }
         }
 
+        if let Some(response) = &response {
+            if response.has_focus() {
+                self.active = Some(pane_index);
+                if let Some(slot) = pane_slot {
+                    self.split_focus = slot;
+                }
+            }
+        }
         if focus_editor {
             if let Some(response) = response {
                 response.request_focus();
@@ -4281,12 +4360,6 @@ fn section_chevron(ui: &mut egui::Ui, open: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::click());
     paint_chevron(ui.painter(), rect, open, theme::ACCENT);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
-
-fn light_separator(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, CornerRadius::ZERO, Color32::from_rgb(200, 208, 220));
 }
 
 fn option_tab(

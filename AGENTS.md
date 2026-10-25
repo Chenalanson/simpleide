@@ -67,7 +67,8 @@ src/hexview.rs         十六进制模型
 src/arraygen.rs        C 数组生成
 src/formatting.rs      clang-format
 src/debugger.rs        gdb 会话
-src/column.rs          批量列编辑
+src/column.rs          旧批量列编辑算法
+src/column_select.rs   矩形列选择文本操作
 examples/blink/        可编译的演示固件
 docs/                  README 截图和使用教程
 ```
@@ -111,14 +112,15 @@ docs/                  README 截图和使用教程
 - `arraygen.rs` 把选中文本或当前文件（最多 8 KB）生成 `const uint8_t` C 数组；工具栏“数组”或 `Ctrl+Shift+A` 打开，变量名会被清洗成合法标识符，支持复制。
 - `registers.rs` 优先用正则解析工程内 `.svd` 的 peripheral/baseAddress/register/addressOffset/description；没有可用 SVD 时回退扫描 `.h/.c` 中 `*_BASE` / `*_ADDR` / `*_ADDRESS` 宏。`Ctrl+Shift+R` 或工具栏“寄存器”打开，最多 2000 项并去重。它是只读浏览器，不读写芯片寄存器。
 - `debugger.rs` 启动本机 gdb CLI（非 MI），通过 stdin/stdout 转发命令并收集控制台输出；`DebugState` 保存会话、断点和日志。右侧“调试”或 `F5` 启动/继续，`F9` 切换断点，`F10` 下一步，`F11` 单步，`Shift+F11` 跳出，`Shift+F5` 停止。调试程序默认取设置路径，否则从 `build/`、`Debug/`、`Release/` 等目录挑最新的 ELF/AXF/EXE；gdb 架构必须与目标匹配（ARM 需 arm-none-eabi-gdb）。
-- `navigation.rs` 提供标识符/前缀提取与字符区间替换；`F12` 在 `symbols.rs` 索引中找定义，`Shift+F12` 用全工程正则搜索列引用，工具栏“补全”或 `Ctrl+Space` 打开符号补全。全部是轻量启发式，不是 LSP。
+- `navigation.rs` 提供标识符/前缀提取与字符区间替换；`F12` 在 `symbols.rs` 索引中找定义，`Shift+F12` 用全工程正则搜索列引用，`Ctrl+Space` 打开符号补全。全部是轻量启发式，不是 LSP。
 - 粘贴由编辑器在 TextEdit 前拦截 `Event::Paste`：`indent::adjust_pasted` 统一换行并按当前行缩进对齐后续行，同时保留粘贴内容相对缩进；只读或编辑器未聚焦时不拦截。
-- 分屏只从标签页右键菜单进入：`向右拆分` / `拆分和移动 → 向上拆分`。`App::split_path` + `split_direction` + `show_split_preview` 显示另一个文件的只读语法高亮预览（带行号），不能编辑或跳转；关闭分屏或关闭对应 Tab 会清除。工具栏不再放分屏按钮。
+- 分屏只从标签页右键菜单进入：`向右拆分` / `拆分和移动 → 向上拆分` / `取消拆分`。`split_primary` + `split_path` + `split_direction` 决定两个窗格，两个窗格都调用 `show_code_editor`，都可编辑；`split_focus` 记录焦点窗格，点击窗格会切换 active。当前不支持同一个文件在两个窗格重复打开。
 - 标签页右键菜单还提供关闭其他、关闭右侧标签页、关闭已保存、全部关闭；批量关闭遇到未保存文件时走 `PendingAction::CloseTabs` 确认。快捷键：Ctrl+F4 关闭当前，Ctrl+\ 向右拆分，Ctrl+K U 关闭已保存，Ctrl+K W 全部关闭，Ctrl+K Ctrl+\ 向上拆分。
-- 查找是编辑器右上角的浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / 工具栏“查找”打开，不再占用独立行；替换输入和按钮在浮层内展开。
-- 编辑器工具栏左侧显示从工程根目录开始的面包屑（`doc.rel_path` 的 `/` 替换为 ` > `），右侧保留编码、只读、补全、格式化等按钮。
-- 左侧项目栏整体使用带边框和圆角的 `Frame`（`Panel::left` 的 frame，圆角 8），内部仍是构建卡片、资源管理器、工程信息。
-- `column.rs` 提供列编辑：对选中行范围在指定 1-based 列插入/删除/替换，短行补空格；工具栏“列编辑”或 `Alt+C` 打开。它是按钮式批量操作，不是鼠标矩形选区或多光标。
+- 查找是编辑器右上角的浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / `Ctrl+H` 打开，不占用独立行；浮层铺满编辑区宽度，替换行通过左侧下拉箭头展开，宽度不变。`Ctrl+G` 打开跳行浮层。
+- 面包屑栏只显示从工程根目录开始的路径（`doc.rel_path` 的 `/` 替换为 ` > `）和未保存标记；编码、行尾、语言、只读、寄存器、数组、符号、格式化、自动换行、保存移到最底部状态栏。补全和列编辑不出现在可见工具栏。
+- 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px BG 间隙），不再用亮色分隔线；状态栏是底部独立细圆角条。
+- `column.rs` 仍保留旧列编辑算法；`column_select.rs` + `ColumnSelectionState` 提供 Ctrl+Alt+鼠标左键拖动的矩形列选择，蓝色高亮，Ctrl+C 复制、Delete/Backspace 删除、直接输入替换。列编辑对话框已不在任何可见入口暴露。
+- 目前没有多光标；列选择是单一矩形区域，不支持多个独立光标。
 - `log.rs` 的 `parse_location` 解析 `file:line:col`；日志行带位置时可点击跳转。`LogStore` 维护最多 1000 条问题诊断，`App::refresh_diagnostics` 解析为本地路径并在行号栏右侧画红/黄竖条；输出面板可过滤全部/错误/警告。
 - 当前版本未内置 LSP；补全、跳转和引用搜索是轻量符号索引，调试是基础 gdb 控制台，不是完整 IDE 调试前端。后续增强在 `xiug` 分支分批接入，不要伪造未接通的能力。
 
@@ -184,7 +186,7 @@ docs/                  README 截图和使用教程
 
 - 没有自定义工程格式、Keil 自动导入、芯片包或内存布局编辑器。Keil 工程可以通过手动命令或外部包装脚本接入。
 - 没有 LSP/语义级跳转；符号搜索、TODO、寄存器浏览器都是轻量索引。补全/定义/引用是启发式功能。
-- 不支持多光标和鼠标矩形列选择；列编辑是按钮式批量操作。分屏右侧是只读预览，不是双可编辑窗格。
+- 不支持多光标；Ctrl+Alt+左键只提供单一矩形列选择。分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
 - 调试只提供 gdb 控制台和基本执行控制，没有变量/调用栈/寄存器面板，也不会自动下载固件；需要用户提供与目标架构匹配的 gdb。
 - 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走用户配置的本地命令。
 - 源码支持 UTF-8（含 BOM）和 GBK；构建输出在 Windows 上会尝试按 GBK 解码。
@@ -202,7 +204,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器、十六进制、数组生成、列编辑、gdb 路径检测。当前共 82 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器、十六进制、数组生成、列编辑、gdb 路径检测。当前共 85 个测试。
 
 UI 改动后建议：
 

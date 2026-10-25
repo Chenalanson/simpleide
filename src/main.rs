@@ -5,6 +5,7 @@ mod arraygen;
 mod brackets;
 mod build;
 mod column;
+mod column_select;
 mod config;
 mod debugger;
 mod editor;

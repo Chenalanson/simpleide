@@ -168,6 +168,15 @@ impl Default for ColumnEditState {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ColumnSelectionState {
+    path: PathBuf,
+    anchor_line: usize,
+    anchor_col: usize,
+    cursor_line: usize,
+    cursor_col: usize,
+}
+
 #[derive(Default)]
 struct GotoLineState {
     open: bool,
@@ -436,8 +445,6 @@ enum Action {
     OpenRegisters,
     OpenHex(PathBuf),
     OpenArrayGenerator,
-    OpenCompletion,
-    OpenColumnEdit,
     OpenDebug,
     DebugContinue,
     DebugStepOver,
@@ -452,6 +459,7 @@ enum Action {
     CloseSavedTabs,
     CloseAllTabs,
     SplitTab(PathBuf, SplitDirection),
+    CloseSplit,
     SaveActive,
     Run(TaskKind),
     StopTask,
@@ -494,9 +502,11 @@ pub struct App {
     completion: CompletionState,
     goto_line: GotoLineState,
     column_edit: ColumnEditState,
+    column_selection: Option<ColumnSelectionState>,
     split_path: Option<PathBuf>,
+    split_primary: Option<PathBuf>,
     split_direction: SplitDirection,
-    split_cache: highlight::SharedLayoutCache,
+    split_focus: usize,
     scroll_to_cursor: bool,
     chord_k_at: Option<Instant>,
     log_filter: LogFilter,
@@ -555,9 +565,11 @@ impl App {
             completion: CompletionState::default(),
             goto_line: GotoLineState::default(),
             column_edit: ColumnEditState::default(),
+            column_selection: None,
             split_path: None,
+            split_primary: None,
             split_direction: SplitDirection::Right,
-            split_cache: highlight::new_cache(),
+            split_focus: 0,
             scroll_to_cursor: false,
             chord_k_at: None,
             log_filter: LogFilter::All,
@@ -646,6 +658,9 @@ impl App {
         self.tabs.clear();
         self.active = None;
         self.split_path = None;
+        self.split_primary = None;
+        self.split_focus = 0;
+        self.column_selection = None;
         self.focus_editor = false;
         self.git_line_marks.clear();
         self.git_line_key = None;
@@ -1018,33 +1033,6 @@ impl App {
         self.run_project_search();
     }
 
-    fn open_column_edit(&mut self, ctx: &egui::Context) {
-        let Some(doc) = self.active_document() else {
-            return;
-        };
-        let text = doc.buffer.as_string().to_owned();
-        let (start, end) =
-            selected_char_range(ctx, &doc.path).unwrap_or((doc.cursor_index, doc.cursor_index));
-        let first_line = crate::util::line_column_at_char(&text, start).0;
-        let end_for_line = if end > start { end - 1 } else { end };
-        let last_line = crate::util::line_column_at_char(&text, end_for_line).0;
-        let source_label = if end > start {
-            format!("第 {first_line}–{last_line} 行")
-        } else {
-            format!("当前行 {first_line}")
-        };
-        self.column_edit = ColumnEditState {
-            open: true,
-            line_start: start,
-            line_end: end,
-            column: 1,
-            count: 1,
-            operation: crate::column::ColumnOperation::Insert,
-            insert: String::new(),
-            source_label,
-        };
-    }
-
     fn apply_column_edit(&mut self, ctx: &egui::Context) {
         let state = (
             self.column_edit.line_start,
@@ -1249,14 +1237,80 @@ impl App {
         self.debug.error = None;
     }
 
-    fn split_active(&mut self, direction: SplitDirection) {
-        let Some(doc) = self.active_document() else {
+    fn start_split(
+        &mut self,
+        primary: PathBuf,
+        secondary: PathBuf,
+        direction: SplitDirection,
+        focus: usize,
+    ) {
+        let Some(primary_index) = self
+            .tabs
+            .iter()
+            .position(|doc| same_path(&doc.path, &primary))
+        else {
             return;
         };
-        let path = doc.path.clone();
-        self.split_path = Some(path);
+        let Some(secondary_index) = self
+            .tabs
+            .iter()
+            .position(|doc| same_path(&doc.path, &secondary))
+        else {
+            return;
+        };
+        if primary_index == secondary_index {
+            self.set_toast("请先打开另一个文件再拆分", Severity::Info);
+            return;
+        }
+        self.split_primary = Some(primary);
+        self.split_path = Some(secondary);
         self.split_direction = direction;
-        self.split_cache = highlight::new_cache();
+        self.split_focus = focus;
+        self.active = Some(if focus == 0 {
+            primary_index
+        } else {
+            secondary_index
+        });
+        self.focus_editor = true;
+    }
+
+    fn split_tab(&mut self, path: PathBuf, direction: SplitDirection) {
+        let Some(active) = self.active_document() else {
+            return;
+        };
+        let active_path = active.path.clone();
+        if same_path(&active_path, &path) {
+            self.set_toast("请右键另一个标签页进行拆分", Severity::Info);
+            return;
+        }
+        match direction {
+            SplitDirection::Right => {
+                self.start_split(active_path, path, direction, 1);
+            }
+            SplitDirection::Up => {
+                self.start_split(path, active_path, direction, 0);
+            }
+        }
+    }
+
+    fn split_active(&mut self, direction: SplitDirection) {
+        let Some(active_index) = self.active else {
+            return;
+        };
+        let Some(active_path) = self.tabs.get(active_index).map(|doc| doc.path.clone()) else {
+            return;
+        };
+        let other = self
+            .tabs
+            .iter()
+            .enumerate()
+            .find(|(index, _)| *index != active_index)
+            .map(|(_, doc)| doc.path.clone());
+        let Some(other) = other else {
+            self.set_toast("至少打开两个文件才能拆分", Severity::Info);
+            return;
+        };
+        self.start_split(active_path, other, direction, 0);
     }
 
     fn toggle_breakpoint(&mut self) {
@@ -1872,8 +1926,14 @@ impl App {
             .split_path
             .as_ref()
             .is_some_and(|path| paths.iter().any(|removed| same_path(path, removed)))
+            || self
+                .split_primary
+                .as_ref()
+                .is_some_and(|path| paths.iter().any(|removed| same_path(path, removed)))
         {
             self.split_path = None;
+            self.split_primary = None;
+            self.split_focus = 0;
         }
         self.active = focus
             .and_then(|path| self.tabs.iter().position(|doc| same_path(&doc.path, &path)))
@@ -1894,8 +1954,14 @@ impl App {
             .split_path
             .as_ref()
             .is_some_and(|path| same_path(path, &closed_path))
+            || self
+                .split_primary
+                .as_ref()
+                .is_some_and(|path| same_path(path, &closed_path))
         {
             self.split_path = None;
+            self.split_primary = None;
+            self.split_focus = 0;
         }
         self.tabs.remove(index);
         match self.active {
@@ -2240,7 +2306,6 @@ impl App {
             definition_jump,
             references_jump,
             completion_open,
-            column_edit_open,
             close_tab_f4,
             split_right,
             chord_k,
@@ -2286,7 +2351,6 @@ impl App {
                 input.key_pressed(egui::Key::F12) && !input.modifiers.shift,
                 input.key_pressed(egui::Key::F12) && input.modifiers.shift,
                 command && input.key_pressed(egui::Key::Space),
-                input.modifiers.alt && input.key_pressed(egui::Key::C),
                 command && input.key_pressed(egui::Key::F4),
                 command && input.key_pressed(egui::Key::Backslash),
                 command && input.key_pressed(egui::Key::K),
@@ -2403,9 +2467,6 @@ impl App {
         if completion_open {
             self.open_completion();
         }
-        if column_edit_open {
-            self.open_column_edit(ctx);
-        }
         if goto_line_open {
             if self.active_document().is_some() {
                 self.goto_line.open = true;
@@ -2484,9 +2545,10 @@ impl App {
             self.goto_line.open = false;
             self.focus_editor = true;
         }
-        if self.column_edit.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.column_edit.open = false;
-            self.focus_editor = true;
+        if self.column_selection.is_some()
+            && ctx.input(|input| input.key_pressed(egui::Key::Escape))
+        {
+            self.column_selection = None;
         }
         if zoom_in || zoom_out {
             let delta = if zoom_in { 1.0 } else { -1.0 };
@@ -2580,8 +2642,6 @@ impl App {
                 }
                 Action::OpenHex(path) => self.open_hex(&path),
                 Action::OpenArrayGenerator => self.open_array_generator(ctx),
-                Action::OpenCompletion => self.open_completion(),
-                Action::OpenColumnEdit => self.open_column_edit(ctx),
                 Action::OpenDebug => self.debug.open = true,
                 Action::DebugContinue => self.debug_continue(),
                 Action::DebugStepOver => self.debug_command("next"),
@@ -2591,6 +2651,20 @@ impl App {
                 Action::DebugSend(command) => self.debug_command(&command),
                 Action::SelectTab(index) => {
                     if index < self.tabs.len() {
+                        let path = self.tabs[index].path.clone();
+                        if let (Some(primary), Some(secondary)) =
+                            (self.split_primary.clone(), self.split_path.clone())
+                        {
+                            if same_path(&path, &primary) {
+                                self.split_focus = 0;
+                            } else if same_path(&path, &secondary) {
+                                self.split_focus = 1;
+                            } else if self.split_focus == 0 {
+                                self.split_primary = Some(path);
+                            } else {
+                                self.split_path = Some(path);
+                            }
+                        }
                         self.active = Some(index);
                         self.focus_editor = true;
                     }
@@ -2600,10 +2674,11 @@ impl App {
                 Action::CloseTabsToRight(index) => self.request_close_to_right(index),
                 Action::CloseSavedTabs => self.close_saved_tabs(),
                 Action::CloseAllTabs => self.request_close_all(),
-                Action::SplitTab(path, direction) => {
-                    self.split_path = Some(path);
-                    self.split_direction = direction;
-                    self.split_cache = highlight::new_cache();
+                Action::SplitTab(path, direction) => self.split_tab(path, direction),
+                Action::CloseSplit => {
+                    self.split_path = None;
+                    self.split_primary = None;
+                    self.split_focus = 0;
                 }
                 Action::SaveActive => {
                     self.save_active();
@@ -2807,6 +2882,7 @@ impl eframe::App for App {
 
         let mut actions = Vec::new();
 
+        self.show_status_bar(ui, &mut actions);
         self.show_action_rail(ui, &mut actions);
         self.show_side_panel(ui, &mut actions);
         self.show_output_panel(ui, &mut actions);
@@ -2981,14 +3057,17 @@ impl App {
         let can_flash = has_project && !running && self.build_config.has_command(TaskKind::Flash);
 
         egui::Panel::right("simple_embedded_action_rail")
-            .exact_size(104.0)
-            .frame(
-                Frame::new()
-                    .fill(theme::PANEL)
-                    .inner_margin(Margin::symmetric(10, 12))
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT)),
-            )
+            .exact_size(110.0)
+            .frame(Frame::new().fill(theme::BG).inner_margin(Margin::same(3)))
             .show_inside(ui, |ui| {
+                ui.painter().rect(
+                    ui.max_rect(),
+                    CornerRadius::same(8),
+                    theme::PANEL,
+                    Stroke::NONE,
+                    egui::StrokeKind::Inside,
+                );
+                ui.add_space(6.0);
                 ui.spacing_mut().interact_size.y = 30.0;
                 ui.vertical_centered(|ui| {
                     let width = ui.available_width();
@@ -3148,8 +3227,15 @@ impl App {
             .exact_size(height);
 
         panel
-            .frame(Frame::new().fill(theme::EDITOR_BG))
+            .frame(Frame::new().fill(theme::BG).inner_margin(Margin::same(4)))
             .show_inside(ui, |ui| {
+                ui.painter().rect(
+                    ui.max_rect(),
+                    CornerRadius::same(8),
+                    theme::PANEL,
+                    Stroke::NONE,
+                    egui::StrokeKind::Inside,
+                );
                 let (handle_rect, handle) =
                     ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), Sense::drag());
                 let handle = handle.on_hover_cursor(egui::CursorIcon::ResizeVertical);
@@ -3174,8 +3260,8 @@ impl App {
 
                 Frame::new()
                     .fill(theme::PANEL_RAISED)
+                    .corner_radius(CornerRadius::same(6))
                     .inner_margin(Margin::symmetric(10, 3))
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
                     .show(ui, |ui| {
                         ui.spacing_mut().interact_size.y = 24.0;
                         ui.horizontal(|ui| {
@@ -3489,10 +3575,19 @@ impl App {
 }
 
 fn small_flat_button(text: &str, color: Color32) -> egui::Button<'static> {
-    Button::new(RichText::new(text.to_owned()).size(12.0).color(color))
-        .frame(false)
-        .corner_radius(4)
-        .min_size(egui::vec2(0.0, 22.0))
+    let is_close = text == "×";
+    Button::new(
+        RichText::new(text.to_owned())
+            .size(if is_close { 16.0 } else { 12.0 })
+            .color(color),
+    )
+    .frame(false)
+    .corner_radius(4)
+    .min_size(if is_close {
+        egui::vec2(30.0, 30.0)
+    } else {
+        egui::vec2(0.0, 22.0)
+    })
 }
 
 fn colored_dot(ui: &mut egui::Ui, color: Color32, size: f32) {
