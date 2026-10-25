@@ -71,6 +71,7 @@ cargo run --release -- D:\firmware\my-board\my-board.se-workspace
 - 工程信息中可查看构建配置、芯片支持包、输出目录、CPU、浮点、链接脚本、烧录配置、包含目录、库搜索目录和宏定义
 - 构建配置里的 **构建选项 → 编辑** 分为全局选项、C/C++ 编译器、汇编器和链接器四个页面
 - Make 工程保存构建选项时会按差异写回 Makefile；链接器输出格式选 `AXF` 后，重新构建会生成 `.axf` 副本
+- **全局选项** 中有 newlib-nano 浮点支持开关：`printf / sprintf 支持 %f` 和 `scanf / sscanf 支持 %f`。勾选后 Makefile 工程会写入 `LDFLAGS += -u _printf_float` / `-u _scanf_float`，解决 `%f` 空白或打印 0 的问题；会增加几 KB 体积
 - “芯片支持包”分组右侧的 **+** 可选择 Keil/CMSIS 的 `.pack` 或 `.pdsc`，文件会被复制到工程根目录；分组中显示包名、版本、厂商、设备和 SVD 数量
 - 工程内没有单独 `.svd` 时，寄存器浏览器会直接读取支持包里的 SVD；支持包不会自动生成启动文件、链接脚本或烧录算法
 - 需要移除支持包时，在系统文件管理器中删除工程根目录下对应的 `.pack` / `.pdsc` 文件，再点资源管理器右上角的 **刷新**

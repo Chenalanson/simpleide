@@ -267,6 +267,8 @@ fn managed_options_changed(before: &BuildOptions, after: &BuildOptions) -> bool 
         || before.cpp_standard != after.cpp_standard
         || before.rtti != after.rtti
         || before.lto != after.lto
+        || before.printf_float != after.printf_float
+        || before.scanf_float != after.scanf_float
         || before.linker_options != after.linker_options
         || before.assembler_options != after.assembler_options
 }
@@ -330,6 +332,14 @@ fn managed_footer(before: &BuildOptions, after: &BuildOptions, existing: &[Strin
         lines.push(format!("ASFLAGS += {}", after.assembler_options.trim()));
     }
 
+    let linker_options = after.linker_options.trim();
+    if after.printf_float && !linker_options.contains("_printf_float") {
+        lines.push("LDFLAGS += -u _printf_float".to_owned());
+    }
+    if after.scanf_float && !linker_options.contains("_scanf_float") {
+        lines.push("LDFLAGS += -u _scanf_float".to_owned());
+    }
+
     lines
 }
 
@@ -367,6 +377,8 @@ fn parse_options(lines: &[String], fallback: &BuildOptions) -> BuildOptions {
     options.warning = warnings.join(" ");
 
     options.lto = has_flag(&cflags, "-flto") || has_flag(&linker, "-flto");
+    options.printf_float = linker.contains("_printf_float");
+    options.scanf_float = linker.contains("_scanf_float");
     options.function_sections =
         has_flag(&cflags, "-fdata-sections") || has_flag(&cflags, "-ffunction-sections");
     options.plain_char_signed = has_flag(&cflags, "-fsigned-char");
@@ -399,7 +411,13 @@ fn parse_options(lines: &[String], fallback: &BuildOptions) -> BuildOptions {
     for line in managed_block(lines, OPTIONS_START, OPTIONS_END) {
         let trimmed = line.trim();
         if let Some(value) = trimmed.strip_prefix("LDFLAGS +=") {
-            options.linker_options = value.trim().to_owned();
+            let value = value.trim();
+            if !matches!(
+                value,
+                "-flto" | "-fno-lto" | "-u _printf_float" | "-u _scanf_float"
+            ) {
+                options.linker_options = value.to_owned();
+            }
         } else if let Some(value) = trimmed.strip_prefix("ASFLAGS +=") {
             options.assembler_options = value.trim().to_owned();
         } else if trimmed == "CFLAGS += -g0" {
@@ -846,6 +864,36 @@ mod tests {
         assert_eq!(parsed.linker_options, "-Wl,--print-memory-usage");
         let second = sync_options(&root, &parsed, &after).unwrap();
         assert!(second.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn syncs_newlib_nano_float_flags() {
+        let (root, path) = temp_project("float", &sample());
+        let before = read_options(&path, &BuildOptions::default()).unwrap();
+        let mut after = before.clone();
+        after.printf_float = true;
+        after.scanf_float = true;
+        sync_options(&root, &before, &after).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("LDFLAGS += -u _printf_float"));
+        assert!(text.contains("LDFLAGS += -u _scanf_float"));
+        let parsed = read_options(&path, &BuildOptions::default()).unwrap();
+        assert!(parsed.printf_float);
+        assert!(parsed.scanf_float);
+        assert_eq!(parsed.linker_options, "");
+
+        let mut off = parsed.clone();
+        off.printf_float = false;
+        off.scanf_float = false;
+        sync_options(&root, &parsed, &off).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("_printf_float"));
+        assert!(!text.contains("_scanf_float"));
+        let reparsed = read_options(&path, &BuildOptions::default()).unwrap();
+        assert!(!reparsed.printf_float);
+        assert!(!reparsed.scanf_float);
         let _ = std::fs::remove_dir_all(root);
     }
 

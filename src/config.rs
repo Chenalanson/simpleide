@@ -58,6 +58,8 @@ pub struct BuildOptions {
     pub short_enums: bool,
     pub rtti: bool,
     pub use_microlib: bool,
+    pub printf_float: bool,
+    pub scanf_float: bool,
     pub big_endian: bool,
     pub debug_info: String,
     pub assembler_defines: Vec<String>,
@@ -86,6 +88,8 @@ impl Default for BuildOptions {
             short_enums: false,
             rtti: false,
             use_microlib: false,
+            printf_float: false,
+            scanf_float: false,
             big_endian: false,
             debug_info: "enable".to_owned(),
             assembler_defines: Vec::new(),
@@ -130,6 +134,12 @@ impl BuildOptions {
         }
         if self.use_microlib {
             lines.push("MicroLIB".to_owned());
+        }
+        if self.printf_float {
+            lines.push("printf 浮点".to_owned());
+        }
+        if self.scanf_float {
+            lines.push("scanf 浮点".to_owned());
         }
         if self.big_endian {
             lines.push("Big Endian".to_owned());

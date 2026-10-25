@@ -5618,6 +5618,30 @@ impl App {
                                     .size(11.5)
                                     .color(theme::TEXT_DIM),
                             );
+                            ui.add_space(2.0);
+                            ui.label(
+                                RichText::new("newlib-nano 浮点支持")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.checkbox(
+                                &mut draft.printf_float,
+                                RichText::new("printf / sprintf 支持 %f（-u _printf_float）")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            )
+                            .on_hover_text(
+                                "newlib-nano 为了省体积默认裁掉浮点格式化，%f 会空白或打印 0。勾选后链接时加入 -u _printf_float，体积会增加几 KB",
+                            );
+                            ui.checkbox(
+                                &mut draft.scanf_float,
+                                RichText::new("scanf / sscanf 支持 %f（-u _scanf_float）")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            )
+                            .on_hover_text(
+                                "让 newlib-nano 的 scanf/sscanf 能读取浮点数；链接时加入 -u _scanf_float",
+                            );
                             ui.checkbox(
                                 &mut draft.big_endian,
                                 RichText::new("Big Endian")
