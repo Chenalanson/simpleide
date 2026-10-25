@@ -72,6 +72,8 @@ struct SettingsDraft {
     debug_program: String,
     gdb_path: String,
     auto_scroll_output: bool,
+    show_minimap: bool,
+    show_indent_guides: bool,
     show_hidden: bool,
     respect_gitignore: bool,
     ignore_patterns: String,
@@ -2044,6 +2046,8 @@ impl App {
             debug_program: self.settings.debug_program.clone(),
             gdb_path: self.settings.gdb_path.clone(),
             auto_scroll_output: self.settings.auto_scroll_output,
+            show_minimap: self.settings.show_minimap,
+            show_indent_guides: self.settings.show_indent_guides,
             show_hidden: self.settings.show_hidden,
             respect_gitignore: self.settings.respect_gitignore,
             ignore_patterns: self.settings.ignore_patterns.clone(),
@@ -3058,7 +3062,7 @@ impl App {
 
         egui::Panel::right("simple_embedded_action_rail")
             .show_separator_line(false)
-            .exact_size(110.0)
+            .exact_size(58.0)
             .frame(
                 Frame::new()
                     .fill(theme::GUTTER)
@@ -3074,6 +3078,7 @@ impl App {
                 );
                 ui.add_space(6.0);
                 ui.spacing_mut().interact_size.y = 30.0;
+                ui.spacing_mut().button_padding = egui::vec2(4.0, 5.0);
                 ui.vertical_centered(|ui| {
                     let width = ui.available_width();
 
@@ -3246,19 +3251,18 @@ impl App {
                     Stroke::NONE,
                     egui::StrokeKind::Inside,
                 );
-                let (handle_rect, handle) =
-                    ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), Sense::drag());
-                let handle = handle.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-                let handle_color = if handle.hovered() || handle.dragged() {
-                    theme::ACCENT
-                } else {
-                    theme::BORDER_SOFT
-                };
-                ui.painter().rect_filled(
-                    egui::Rect::from_center_size(handle_rect.center(), egui::vec2(46.0, 1.0)),
-                    CornerRadius::ZERO,
-                    handle_color,
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let drag_rect = egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(ui.available_width(), 4.0),
                 );
+                let handle = ui
+                    .interact(
+                        drag_rect,
+                        egui::Id::new("simple_embedded_output_drag"),
+                        Sense::drag(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::ResizeVertical);
                 if handle.dragged() {
                     let new_height = (height - handle.drag_delta().y).clamp(40.0, full_height);
                     drag_height = Some(new_height);
@@ -3268,9 +3272,14 @@ impl App {
                     drag_stopped = true;
                 }
 
-                Frame::new()
+                let header = Frame::new()
                     .fill(theme::PANEL_RAISED)
-                    .corner_radius(CornerRadius::same(6))
+                    .corner_radius(CornerRadius {
+                        nw: 8,
+                        ne: 8,
+                        sw: 6,
+                        se: 6,
+                    })
                     .inner_margin(Margin::symmetric(10, 3))
                     .show(ui, |ui| {
                         ui.spacing_mut().interact_size.y = 24.0;
@@ -3394,6 +3403,20 @@ impl App {
                             });
                         });
                     });
+                let header_rect = header.response.rect;
+                let handle_color = if handle.hovered() || handle.dragged() {
+                    theme::ACCENT
+                } else {
+                    theme::BORDER_SOFT
+                };
+                ui.painter().rect_filled(
+                    egui::Rect::from_center_size(
+                        egui::pos2(header_rect.center().x, header_rect.top() + 2.0),
+                        egui::vec2(46.0, 1.0),
+                    ),
+                    CornerRadius::ZERO,
+                    handle_color,
+                );
 
                 if open {
                     Frame::new()

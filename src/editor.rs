@@ -117,6 +117,7 @@ pub struct Document {
     pub read_only: bool,
     pub bookmarks: BTreeSet<usize>,
     pub layout_cache: SharedLayoutCache,
+    pub minimap_cache: Option<crate::minimap::Cache>,
 }
 
 impl Document {
@@ -141,6 +142,7 @@ impl Document {
             read_only: false,
             bookmarks: BTreeSet::new(),
             layout_cache: highlight::new_cache(),
+            minimap_cache: None,
         })
     }
 

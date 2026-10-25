@@ -796,7 +796,7 @@ impl App {
             .active_document()
             .map(|doc| doc.buffer.as_string().split('\n').count().max(1))
             .unwrap_or(1);
-        let width = 420.0_f32.min((editor_rect.width() - 24.0).max(260.0));
+        let width = 420.0_f32.min((editor_rect.width() - 24.0).max(280.0));
         let position = egui::pos2(editor_rect.left() + 48.0, editor_rect.top() + 8.0);
         let mut apply = false;
         egui::Area::new(Id::new("simple_embedded_goto_line"))
@@ -806,45 +806,43 @@ impl App {
                 Frame::new()
                     .fill(theme::PANEL_RAISED)
                     .stroke(Stroke::new(1.0_f32, theme::BORDER))
-                    .corner_radius(5)
-                    .inner_margin(Margin::same(6))
+                    .corner_radius(6)
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 6],
+                        blur: 14,
+                        spread: 0,
+                        color: Color32::from_black_alpha(70),
+                    })
+                    .inner_margin(Margin::symmetric(10, 5))
                     .show(ui, |ui| {
-                        ui.set_width(width);
-                        let response = ui.add(
-                            TextEdit::singleline(&mut self.goto_line.input)
-                                .id(Id::new("simple_embedded_goto_line_input"))
-                                .font(FontId::monospace(12.0))
-                                .text_color(theme::TEXT)
-                                .background_color(theme::BG)
-                                .desired_width(width)
-                                .hint_text(String::new()),
+                        ui.set_width(width - 20.0);
+                        let (response, _) = find_text_field(
+                            ui,
+                            Id::new("simple_embedded_goto_line_input"),
+                            &mut self.goto_line.input,
+                            "行号",
+                            width - 20.0,
+                            4.0,
                         );
                         if self.goto_line.focus_input {
                             response.request_focus();
                             self.goto_line.focus_input = false;
                         }
-                        if response.lost_focus()
-                            && ui.input(|input| input.key_pressed(egui::Key::Enter))
-                        {
+                        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                        if enter && (response.has_focus() || response.lost_focus()) {
                             apply = true;
                         }
                         ui.add_space(4.0);
                         if let Some(error) = &self.goto_line.error {
                             ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
                         } else {
-                            Frame::new()
-                                .fill(theme::ACCENT_SOFT)
-                                .corner_radius(3)
-                                .inner_margin(Margin::symmetric(7, 4))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "键入要跳转的行号(从 1 到 {line_count})。"
-                                        ))
-                                        .size(10.5)
-                                        .color(theme::TEXT),
-                                    );
-                                });
+                            ui.label(
+                                RichText::new(format!(
+                                    "键入要跳转的行号（从 1 到 {line_count}）。"
+                                ))
+                                .size(10.5)
+                                .color(theme::TEXT_FAINT),
+                            );
                         }
                     });
             });
@@ -883,7 +881,7 @@ impl App {
     }
 
     fn show_find_overlay(&mut self, ctx: &egui::Context, editor_rect: egui::Rect) {
-        let width = 560.0_f32.min((editor_rect.width() - 24.0).max(300.0));
+        let width = 420.0_f32.min((editor_rect.width() - 24.0).max(280.0));
         let position = egui::pos2(editor_rect.right() - width - 12.0, editor_rect.top() + 8.0);
         egui::Area::new(Id::new("simple_embedded_find_overlay"))
             .order(egui::Order::Foreground)
@@ -893,7 +891,13 @@ impl App {
                     .fill(theme::PANEL_RAISED)
                     .stroke(Stroke::new(1.0_f32, theme::BORDER))
                     .corner_radius(6)
-                    .inner_margin(Margin::symmetric(10, 7))
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 6],
+                        blur: 14,
+                        spread: 0,
+                        color: Color32::from_black_alpha(70),
+                    })
+                    .inner_margin(Margin::symmetric(10, 5))
                     .show(ui, |ui| {
                         ui.set_width(width - 20.0);
                         self.show_find_bar(ui);
@@ -1111,197 +1115,267 @@ impl App {
         let mut previous = false;
         let mut replace_current = false;
         let mut replace_all = false;
-        ui.spacing_mut().item_spacing.x = 4.0;
-        ui.spacing_mut().interact_size.y = 30.0;
-        let available = ui.available_width();
+
+        let (alt_case, alt_word, alt_regex, alt_preserve) = ui.input_mut(|input| {
+            let case = input.modifiers.alt && input.key_pressed(egui::Key::C);
+            let word = input.modifiers.alt && input.key_pressed(egui::Key::W);
+            let regex = input.modifiers.alt && input.key_pressed(egui::Key::R);
+            let preserve = input.modifiers.alt && input.key_pressed(egui::Key::P);
+            if case {
+                input.consume_key(egui::Modifiers::ALT, egui::Key::C);
+            }
+            if word {
+                input.consume_key(egui::Modifiers::ALT, egui::Key::W);
+            }
+            if regex {
+                input.consume_key(egui::Modifiers::ALT, egui::Key::R);
+            }
+            if preserve {
+                input.consume_key(egui::Modifiers::ALT, egui::Key::P);
+            }
+            (case, word, regex, preserve)
+        });
+        if alt_case {
+            self.find.case_sensitive = !self.find.case_sensitive;
+            self.find.dirty = true;
+        }
+        if alt_word {
+            self.find.whole_word = !self.find.whole_word;
+            self.find.dirty = true;
+        }
+        if alt_regex {
+            self.find.use_regex = !self.find.use_regex;
+            self.find.dirty = true;
+        }
+        if alt_preserve {
+            self.find.preserve_case = !self.find.preserve_case;
+        }
+
+        if let Some(active) = self.active {
+            if let Some(doc) = self.tabs.get(active) {
+                self.find
+                    .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+            }
+        }
+        let error_text = self.find.error.clone();
+        let status = if error_text.is_some() {
+            "!".to_owned()
+        } else if self.find.query.is_empty() {
+            String::new()
+        } else if self.find.matches.is_empty() {
+            "0/0".to_owned()
+        } else {
+            format!("{}/{}", self.find.active + 1, self.find.matches.len())
+        };
+        let status_color = if error_text.is_some() {
+            theme::ERROR
+        } else {
+            theme::TEXT_FAINT
+        };
+
+        const ROW_HEIGHT: f32 = 24.0;
+        const ROW_GAP: f32 = 4.0;
+        const CHEVRON_WIDTH: f32 = 16.0;
+        const CHEVRON_GAP: f32 = 4.0;
+        const ICONS_WIDTH: f32 = 6.0 + 3.0 * 22.0 + 6.0 + 2.0 * 22.0 + 6.0 + 22.0 + 2.0 + 22.0;
+        let content_width = ui.available_width();
+        let right_width = (content_width - CHEVRON_WIDTH - CHEVRON_GAP).max(80.0);
+        let input_width = (right_width - ICONS_WIDTH).max(70.0);
+        let content_height = if self.find.replace_open {
+            ROW_HEIGHT * 2.0 + ROW_GAP
+        } else {
+            ROW_HEIGHT
+        };
+
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
         ui.horizontal(|ui| {
             let (chevron_rect, chevron_response) =
-                ui.allocate_exact_size(egui::vec2(28.0, 30.0), Sense::click());
-            let chevron_fill = if self.find.replace_open {
-                theme::ACCENT_SOFT
-            } else if chevron_response.hovered() {
-                theme::SURFACE
-            } else {
-                theme::PANEL_RAISED
-            };
-            ui.painter().rect(
-                chevron_rect,
-                CornerRadius::same(4),
-                chevron_fill,
-                Stroke::new(1.0_f32, theme::ACCENT),
-                egui::StrokeKind::Inside,
-            );
-            let center = chevron_rect.center();
-            let (from_y, to_y) = if self.find.replace_open {
-                (2.0, -2.0)
-            } else {
-                (-2.0, 2.0)
-            };
-            ui.painter().line_segment(
-                [
-                    egui::pos2(center.x - 4.0, center.y + from_y),
-                    egui::pos2(center.x, center.y + to_y),
-                ],
-                Stroke::new(1.4_f32, theme::ACCENT),
-            );
-            ui.painter().line_segment(
-                [
-                    egui::pos2(center.x, center.y + to_y),
-                    egui::pos2(center.x + 4.0, center.y + from_y),
-                ],
-                Stroke::new(1.4_f32, theme::ACCENT),
-            );
-            if chevron_response
+                ui.allocate_exact_size(egui::vec2(CHEVRON_WIDTH, content_height), Sense::click());
+            let chevron = chevron_response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(if self.find.replace_open {
                     "收起替换"
                 } else {
                     "展开替换"
-                })
-                .clicked()
-            {
+                });
+            if chevron.hovered() {
+                ui.painter().rect_filled(
+                    egui::Rect::from_center_size(chevron_rect.center(), egui::vec2(18.0, 22.0)),
+                    CornerRadius::same(3),
+                    theme::SURFACE,
+                );
+            }
+            let chevron_color = if chevron.hovered() {
+                theme::TEXT
+            } else {
+                theme::TEXT_DIM
+            };
+            let center = chevron_rect.center();
+            let chevron_stroke = Stroke::new(1.3_f32, chevron_color);
+            if self.find.replace_open {
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(center.x - 4.5, center.y - 1.5),
+                        egui::pos2(center.x, center.y + 2.5),
+                    ],
+                    chevron_stroke,
+                );
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(center.x, center.y + 2.5),
+                        egui::pos2(center.x + 4.5, center.y - 1.5),
+                    ],
+                    chevron_stroke,
+                );
+            } else {
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(center.x - 2.5, center.y - 5.0),
+                        egui::pos2(center.x + 2.5, center.y),
+                    ],
+                    chevron_stroke,
+                );
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(center.x + 2.5, center.y),
+                        egui::pos2(center.x - 2.5, center.y + 5.0),
+                    ],
+                    chevron_stroke,
+                );
+            }
+            if chevron.clicked() {
                 self.find.replace_open = !self.find.replace_open;
             }
-            let query_width = (available - 260.0).clamp(140.0, 420.0);
-            let query = ui.add(
-                TextEdit::singleline(&mut self.find.query)
-                    .id(Id::new("simple_embedded_find_query"))
-                    .font(FontId::monospace(12.0))
-                    .text_color(theme::TEXT)
-                    .background_color(theme::BG)
-                    .desired_width(query_width)
-                    .hint_text(RichText::new("查找").color(theme::TEXT_FAINT)),
-            );
-            if self.find.focus_query {
-                query.request_focus();
-                self.find.focus_query = false;
-            }
-            if query.changed() {
-                self.find.dirty = true;
-            }
-            if query.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                next = true;
-            }
+            ui.add_space(CHEVRON_GAP);
 
-            if ui
-                .selectable_label(self.find.case_sensitive, RichText::new("Aa").size(11.0))
-                .on_hover_text("区分大小写")
-                .clicked()
-            {
-                self.find.case_sensitive = !self.find.case_sensitive;
-                self.find.dirty = true;
-            }
-            if ui
-                .selectable_label(self.find.whole_word, RichText::new("ab").size(11.0))
-                .on_hover_text("全字匹配")
-                .clicked()
-            {
-                self.find.whole_word = !self.find.whole_word;
-                self.find.dirty = true;
-            }
-            if ui
-                .selectable_label(self.find.use_regex, RichText::new(".*").size(11.0))
-                .on_hover_text("正则表达式")
-                .clicked()
-            {
-                self.find.use_regex = !self.find.use_regex;
-                self.find.dirty = true;
-            }
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, ROW_GAP);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let (query, query_rect) = find_text_field(
+                        ui,
+                        Id::new("simple_embedded_find_query"),
+                        &mut self.find.query,
+                        "查找",
+                        input_width,
+                        if status.is_empty() { 4.0 } else { 46.0 },
+                    );
+                    if self.find.focus_query {
+                        query.request_focus();
+                        self.find.focus_query = false;
+                    }
+                    if query.changed() {
+                        self.find.dirty = true;
+                    }
+                    if query.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                        if ui.input(|input| input.modifiers.shift) {
+                            previous = true;
+                        } else {
+                            next = true;
+                        }
+                    }
+                    if !status.is_empty() {
+                        ui.painter().text(
+                            egui::pos2(query_rect.right() - 8.0, query_rect.center().y),
+                            Align2::RIGHT_CENTER,
+                            &status,
+                            FontId::proportional(10.0),
+                            status_color,
+                        );
+                    }
+                    if let Some(error) = &error_text {
+                        let _ = query.on_hover_text(error);
+                    }
+                    ui.add_space(6.0);
+                    if find_toggle(ui, "Aa", self.find.case_sensitive, "区分大小写 (Alt+C)") {
+                        self.find.case_sensitive = !self.find.case_sensitive;
+                        self.find.dirty = true;
+                    }
+                    if find_toggle(ui, "ab", self.find.whole_word, "全字匹配 (Alt+W)") {
+                        self.find.whole_word = !self.find.whole_word;
+                        self.find.dirty = true;
+                    }
+                    if find_toggle(ui, ".*", self.find.use_regex, "使用正则表达式 (Alt+R)") {
+                        self.find.use_regex = !self.find.use_regex;
+                        self.find.dirty = true;
+                    }
+                    ui.add_space(6.0);
+                    if find_icon_button(ui, FindGlyph::Previous, "上一个匹配 (Shift+Enter)") {
+                        previous = true;
+                    }
+                    if find_icon_button(ui, FindGlyph::Next, "下一个匹配 (Enter)") {
+                        next = true;
+                    }
+                    ui.add_space(6.0);
+                    if find_icon_button(ui, FindGlyph::Menu, "全工程搜索 (Ctrl+Shift+F)") {
+                        self.project_search.open = true;
+                        self.project_search.focus_query = true;
+                    }
+                    ui.add_space(2.0);
+                    if find_icon_button(ui, FindGlyph::Close, "关闭查找 (Esc)") {
+                        self.find.open = false;
+                        self.focus_editor = true;
+                    }
+                });
 
-            if let Some(active) = self.active {
-                if let Some(doc) = self.tabs.get(active) {
-                    self.find
-                        .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
-                }
-            }
-
-            let status = if let Some(error) = &self.find.error {
-                error.clone()
-            } else if self.find.query.is_empty() {
-                String::new()
-            } else if self.find.matches.is_empty() {
-                "无结果".to_owned()
-            } else {
-                format!("{}/{}", self.find.active + 1, self.find.matches.len())
-            };
-            let status_color = if self.find.error.is_some() {
-                theme::ERROR
-            } else {
-                theme::TEXT_FAINT
-            };
-            ui.label(RichText::new(status).size(10.5).color(status_color));
-
-            if ui
-                .add(small_flat_button("↑", theme::TEXT_DIM))
-                .on_hover_text("上一个匹配")
-                .clicked()
-            {
-                previous = true;
-            }
-            if ui
-                .add(small_flat_button("↓", theme::TEXT_DIM))
-                .on_hover_text("下一个匹配")
-                .clicked()
-            {
-                next = true;
-            }
-            if ui
-                .add(small_flat_button("≡", theme::TEXT_DIM))
-                .on_hover_text("全工程搜索 (Ctrl+Shift+F)")
-                .clicked()
-            {
-                self.project_search.open = true;
-                self.project_search.focus_query = true;
-            }
-            if ui
-                .add(small_flat_button("×", theme::TEXT_DIM))
-                .on_hover_text("关闭查找")
-                .clicked()
-            {
-                self.find.open = false;
-                self.focus_editor = true;
-            }
-        });
-
-        if self.find.replace_open {
-            ui.add_space(3.0);
-            ui.horizontal(|ui| {
-                ui.add_space(28.0);
-                let replace_width = (available - 150.0).clamp(140.0, 520.0);
-                let replace = ui.add(
-                    TextEdit::singleline(&mut self.find.replacement)
-                        .id(Id::new("simple_embedded_find_replace"))
-                        .font(FontId::monospace(12.0))
-                        .text_color(theme::TEXT)
-                        .background_color(theme::BG)
-                        .desired_width(replace_width)
-                        .hint_text(RichText::new("替换").color(theme::TEXT_FAINT)),
-                );
-                if replace.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                    replace_current = true;
-                }
-                if ui
-                    .selectable_label(self.find.preserve_case, RichText::new("AB").size(11.0))
-                    .on_hover_text("保留大小写")
-                    .clicked()
-                {
-                    self.find.preserve_case = !self.find.preserve_case;
-                }
-                if ui
-                    .add(small_flat_button("替换", theme::TEXT_DIM))
-                    .on_hover_text("替换当前匹配")
-                    .clicked()
-                {
-                    replace_current = true;
-                }
-                if ui
-                    .add(small_flat_button("全部", theme::TEXT_DIM))
-                    .on_hover_text("全部替换")
-                    .clicked()
-                {
-                    replace_all = true;
+                if self.find.replace_open {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let (replace, replace_rect) = find_text_field(
+                            ui,
+                            Id::new("simple_embedded_find_replace"),
+                            &mut self.find.replacement,
+                            "替换",
+                            input_width,
+                            28.0,
+                        );
+                        if replace.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                        {
+                            replace_current = true;
+                        }
+                        let ab_rect = egui::Rect::from_min_max(
+                            egui::pos2(replace_rect.right() - 26.0, replace_rect.top() + 2.0),
+                            egui::pos2(replace_rect.right() - 3.0, replace_rect.bottom() - 2.0),
+                        );
+                        let ab = ui
+                            .interact(
+                                ab_rect,
+                                Id::new("simple_embedded_find_preserve_case"),
+                                Sense::click(),
+                            )
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("保留大小写 (Alt+P)");
+                        if ab.hovered() {
+                            ui.painter()
+                                .rect_filled(ab_rect, CornerRadius::same(3), theme::HOVER);
+                        }
+                        ui.painter().text(
+                            ab_rect.center(),
+                            Align2::CENTER_CENTER,
+                            "AB",
+                            FontId::proportional(10.5),
+                            if self.find.preserve_case {
+                                theme::ACCENT
+                            } else {
+                                theme::TEXT_DIM
+                            },
+                        );
+                        if ab.clicked() {
+                            self.find.preserve_case = !self.find.preserve_case;
+                        }
+                        ui.add_space(6.0);
+                        if find_icon_button(ui, FindGlyph::Replace, "替换当前匹配") {
+                            replace_current = true;
+                        }
+                        ui.add_space(2.0);
+                        if find_icon_button(ui, FindGlyph::ReplaceAll, "全部替换") {
+                            replace_all = true;
+                        }
+                    });
                 }
             });
-        }
+        });
 
         if next {
             self.find_next(ui.ctx(), true);
@@ -2819,6 +2893,8 @@ impl App {
         let word_wrap = self.settings.word_wrap;
         let relative_line_numbers = self.settings.relative_line_numbers;
         let show_whitespace = self.settings.show_whitespace;
+        let show_indent_guides = self.settings.show_indent_guides;
+        let indent_width = self.settings.indent_width.max(1) as usize;
         let ruler_column = self.settings.ruler_column;
         let focus_editor = if is_active_pane {
             std::mem::take(&mut self.focus_editor)
@@ -2831,7 +2907,15 @@ impl App {
             false
         };
         let font_id = FontId::monospace(font_size);
-        let viewport_width = ui.available_width();
+        let available_width = ui.available_width();
+        let full_height = ui.available_height();
+        let show_minimap = self.settings.show_minimap && available_width > 520.0;
+        let minimap_width = crate::minimap::WIDTH;
+        let viewport_width = if show_minimap {
+            (available_width - minimap_width - 8.0).max(180.0)
+        } else {
+            available_width
+        };
         let rows = ((ui.available_height() / (font_size * 1.35)).ceil() as usize).max(20);
         let cache = doc.layout_cache.clone();
         let revision = doc.buffer.revision_handle();
@@ -2872,57 +2956,85 @@ impl App {
 
         let mut response: Option<egui::Response> = None;
         let mut gutter: Option<(Arc<egui::Galley>, egui::Pos2)> = None;
-        let scroll_output = ScrollArea::both()
-            .id_salt(scroll_id)
-            .auto_shrink([false, false])
-            .max_height(ui.available_height())
-            .show(ui, |ui| {
-                ui.set_min_width(viewport_width.max(80.0));
-                let output = TextEdit::multiline(&mut doc.buffer)
-                    .id(editor_id)
-                    .code_editor()
-                    .interactive(!read_only)
-                    .font(FontId::monospace(font_size))
-                    .desired_width(if word_wrap {
-                        viewport_width.max(80.0)
-                    } else {
-                        f32::INFINITY
-                    })
-                    .desired_rows(rows)
-                    .frame(Frame::new().inner_margin(Margin {
-                        left: text_margin_left,
-                        right: 14,
-                        top: 8,
-                        bottom: 8,
-                    }))
-                    .layouter(&mut layouter)
-                    .hint_text("开始输入代码…")
-                    .show(ui);
+        let mut scroll_output = None;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(viewport_width, full_height),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    scroll_output = Some(
+                        ScrollArea::both()
+                            .id_salt(scroll_id)
+                            .auto_shrink([false, false])
+                            .max_height(ui.available_height())
+                            .show(ui, |ui| {
+                                ui.set_min_width(viewport_width.max(80.0));
+                                let output = TextEdit::multiline(&mut doc.buffer)
+                                    .id(editor_id)
+                                    .code_editor()
+                                    .interactive(!read_only)
+                                    .font(FontId::monospace(font_size))
+                                    .desired_width(if word_wrap {
+                                        viewport_width.max(80.0)
+                                    } else {
+                                        f32::INFINITY
+                                    })
+                                    .desired_rows(rows)
+                                    .frame(Frame::new().inner_margin(Margin {
+                                        left: text_margin_left,
+                                        right: 14,
+                                        top: 8,
+                                        bottom: 8,
+                                    }))
+                                    .layouter(&mut layouter)
+                                    .hint_text("开始输入代码…")
+                                    .show(ui);
 
-                if let Some(cursor_range) = output.cursor_range {
-                    doc.update_cursor(cursor_range.primary.index);
-                    if focus_editor {
-                        // Clicking a tab or file should place the caret, not
-                        // preserve a stale cross-tab selection.
-                        let mut state = output.state;
-                        state
-                            .cursor
-                            .set_char_range(Some(egui::text::CCursorRange::one(
-                                cursor_range.primary,
-                            )));
-                        state.store(ui.ctx(), output.response.response.id);
-                    }
+                                if let Some(cursor_range) = output.cursor_range {
+                                    doc.update_cursor(cursor_range.primary.index);
+                                    if focus_editor {
+                                        // Clicking a tab or file should place the caret, not
+                                        // preserve a stale cross-tab selection.
+                                        let mut state = output.state;
+                                        state.cursor.set_char_range(Some(
+                                            egui::text::CCursorRange::one(cursor_range.primary),
+                                        ));
+                                        state.store(ui.ctx(), output.response.response.id);
+                                    }
+                                }
+                                if scroll_cursor {
+                                    let caret = output
+                                        .galley
+                                        .pos_from_cursor(egui::text::CCursor::new(doc.cursor_index))
+                                        .translate(output.galley_pos.to_vec2());
+                                    ui.scroll_to_rect(caret, None);
+                                }
+                                gutter = Some((Arc::clone(&output.galley), output.galley_pos));
+                                response = Some(output.response.response);
+                            }),
+                    );
+                },
+            );
+            if show_minimap {
+                ui.add_space(8.0);
+                if let Some(output) = &scroll_output {
+                    crate::minimap::show(
+                        ui,
+                        crate::minimap::View {
+                            text: doc.buffer.as_string(),
+                            revision: doc.buffer.revision(),
+                            scroll: output,
+                            width: minimap_width,
+                            height: full_height,
+                            line_count,
+                        },
+                        &mut doc.minimap_cache,
+                    );
                 }
-                if scroll_cursor {
-                    let caret = output
-                        .galley
-                        .pos_from_cursor(egui::text::CCursor::new(doc.cursor_index))
-                        .translate(output.galley_pos.to_vec2());
-                    ui.scroll_to_rect(caret, None);
-                }
-                gutter = Some((Arc::clone(&output.galley), output.galley_pos));
-                response = Some(output.response.response);
-            });
+            }
+        });
+        let scroll_output = scroll_output.expect("scroll area is always created");
 
         if let Some((galley, galley_pos)) = &gutter {
             let viewport = scroll_output.inner_rect;
@@ -3029,6 +3141,23 @@ impl App {
                 ),
             );
             let painter = ui.painter().with_clip_rect(viewport);
+            if show_indent_guides {
+                let active_level = doc
+                    .buffer
+                    .as_string()
+                    .split('\n')
+                    .nth(doc.cursor_line.saturating_sub(1))
+                    .map(|line| leading_indent_columns(line, indent_width) / indent_width)
+                    .unwrap_or(0);
+                paint_indent_guides(
+                    &painter,
+                    &galley,
+                    galley_pos,
+                    viewport,
+                    indent_width,
+                    active_level,
+                );
+            }
             if ruler_column > 0 {
                 let char_width = ui
                     .ctx()
@@ -4028,6 +4157,10 @@ impl App {
                         ui.checkbox(&mut draft.show_hidden, "显示隐藏文件");
                     });
                     ui.horizontal(|ui| {
+                        ui.checkbox(&mut draft.show_minimap, "代码预览小地图");
+                        ui.checkbox(&mut draft.show_indent_guides, "缩进参考线");
+                    });
+                    ui.horizontal(|ui| {
                         ui.checkbox(&mut draft.relative_line_numbers, "相对行号");
                         ui.checkbox(&mut draft.show_whitespace, "显示空白字符");
                         ui.label(
@@ -4194,6 +4327,8 @@ impl App {
             self.settings.debug_program = draft.debug_program.trim().to_owned();
             self.settings.gdb_path = draft.gdb_path.trim().to_owned();
             self.settings.auto_scroll_output = draft.auto_scroll_output;
+            self.settings.show_minimap = draft.show_minimap;
+            self.settings.show_indent_guides = draft.show_indent_guides;
             self.settings.show_hidden = draft.show_hidden;
             self.settings.respect_gitignore = draft.respect_gitignore;
             self.settings.ignore_patterns = draft.ignore_patterns.trim().to_owned();
@@ -4955,6 +5090,290 @@ impl App {
                         });
                     });
             });
+    }
+}
+
+fn find_text_field(
+    ui: &mut egui::Ui,
+    id: Id,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    reserved_right: f32,
+) -> (egui::Response, egui::Rect) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), Sense::hover());
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(4),
+        theme::SURFACE,
+        Stroke::new(1.0_f32, theme::BORDER_SOFT),
+        egui::StrokeKind::Inside,
+    );
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + 7.0, rect.top() + 1.0),
+        egui::pos2(rect.right() - reserved_right.max(3.0), rect.bottom() - 1.0),
+    );
+    let hit = ui
+        .interact(rect, id.with("field-hit"), Sense::click())
+        .on_hover_cursor(egui::CursorIcon::Text);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    let response = child.add_sized(
+        [inner.width().max(8.0), inner.height()],
+        TextEdit::singleline(text)
+            .id(id)
+            .frame(Frame::NONE)
+            .margin(Margin::symmetric(0, 2))
+            .font(FontId::proportional(12.0))
+            .text_color(theme::TEXT)
+            .background_color(Color32::TRANSPARENT)
+            .hint_text(RichText::new(hint).size(12.0).color(theme::TEXT_FAINT)),
+    );
+    if hit.clicked() {
+        ui.memory_mut(|memory| memory.request_focus(id));
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(4),
+            Stroke::new(1.0_f32, theme::ACCENT),
+            egui::StrokeKind::Inside,
+        );
+    }
+    (response, rect)
+}
+
+fn find_toggle(ui: &mut egui::Ui, label: &str, active: bool, tooltip: &str) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tooltip);
+    let visual_rect = rect.shrink(1.0);
+    if active {
+        ui.painter().rect(
+            visual_rect,
+            CornerRadius::same(3),
+            theme::ACCENT_SOFT,
+            Stroke::new(1.0_f32, theme::ACCENT_DARK),
+            egui::StrokeKind::Inside,
+        );
+    } else if response.hovered() {
+        ui.painter()
+            .rect_filled(visual_rect, CornerRadius::same(3), theme::SURFACE);
+    }
+    let color = if active {
+        theme::ACCENT
+    } else if response.hovered() {
+        theme::TEXT
+    } else {
+        theme::TEXT_DIM
+    };
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(11.0),
+        color,
+    );
+    response.clicked()
+}
+
+#[derive(Clone, Copy)]
+enum FindGlyph {
+    Previous,
+    Next,
+    Menu,
+    Close,
+    Replace,
+    ReplaceAll,
+}
+
+fn find_icon_button(ui: &mut egui::Ui, glyph: FindGlyph, tooltip: &str) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tooltip);
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect.shrink(1.0), CornerRadius::same(3), theme::SURFACE);
+    }
+    let color = if response.hovered() {
+        theme::TEXT
+    } else {
+        theme::TEXT_DIM
+    };
+    paint_find_glyph(ui.painter(), rect, glyph, color);
+    response.clicked()
+}
+
+fn paint_find_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: FindGlyph, color: Color32) {
+    let center = rect.center();
+    let stroke = Stroke::new(1.2_f32, color);
+    match glyph {
+        FindGlyph::Previous | FindGlyph::Next => {
+            let direction = if matches!(glyph, FindGlyph::Previous) {
+                -1.0
+            } else {
+                1.0
+            };
+            let tip = egui::pos2(center.x, center.y + 5.0 * direction);
+            let tail = egui::pos2(center.x, center.y - 5.0 * direction);
+            painter.line_segment([tail, tip], stroke);
+            painter.line_segment(
+                [egui::pos2(center.x - 3.5, tip.y - 3.0 * direction), tip],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(center.x + 3.5, tip.y - 3.0 * direction), tip],
+                stroke,
+            );
+        }
+        FindGlyph::Menu => {
+            for offset in [-4.0_f32, 0.0, 4.0] {
+                painter.line_segment(
+                    [
+                        egui::pos2(center.x - 6.0, center.y + offset),
+                        egui::pos2(center.x + 6.0, center.y + offset),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        FindGlyph::Close => {
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 5.0, center.y - 5.0),
+                    egui::pos2(center.x + 5.0, center.y + 5.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(center.x + 5.0, center.y - 5.0),
+                    egui::pos2(center.x - 5.0, center.y + 5.0),
+                ],
+                stroke,
+            );
+        }
+        FindGlyph::Replace | FindGlyph::ReplaceAll => {
+            let front = egui::Rect::from_center_size(
+                egui::pos2(center.x, center.y + 2.0),
+                egui::vec2(12.0, 8.0),
+            );
+            if matches!(glyph, FindGlyph::ReplaceAll) {
+                painter.rect_stroke(
+                    front.translate(egui::vec2(2.0, -2.0)),
+                    CornerRadius::same(2),
+                    stroke,
+                    egui::StrokeKind::Inside,
+                );
+                painter.rect_filled(front, CornerRadius::same(2), theme::PANEL_RAISED);
+            }
+            painter.rect_stroke(
+                front,
+                CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            let elbow = egui::pos2(center.x - 1.0, center.y - 3.0);
+            painter.add(egui::Shape::line(
+                vec![
+                    egui::pos2(center.x - 7.0, center.y - 6.0),
+                    egui::pos2(center.x - 7.0, center.y - 3.0),
+                    elbow,
+                ],
+                stroke,
+            ));
+            painter.line_segment([egui::pos2(elbow.x - 2.5, elbow.y - 2.0), elbow], stroke);
+            painter.line_segment([egui::pos2(elbow.x - 2.5, elbow.y + 2.0), elbow], stroke);
+        }
+    }
+}
+
+fn leading_indent_columns(line: &str, tab_width: usize) -> usize {
+    let tab_width = tab_width.max(1);
+    let mut columns = 0usize;
+    for ch in line.chars() {
+        match ch {
+            ' ' => columns += 1,
+            '\t' => columns += tab_width - (columns % tab_width),
+            _ => break,
+        }
+    }
+    columns
+}
+
+fn paint_indent_guides(
+    painter: &egui::Painter,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    viewport: egui::Rect,
+    indent_width: usize,
+    active_level: usize,
+) {
+    if indent_width == 0 || galley.rows.is_empty() {
+        return;
+    }
+    let first_visible = galley
+        .rows
+        .partition_point(|row| galley_pos.y + row.pos.y + row.row.height() < viewport.top());
+    let mut start = first_visible.min(galley.rows.len());
+    while start > 0 && !galley.rows[start - 1].ends_with_newline {
+        start -= 1;
+    }
+    let mut guides: Option<Vec<(usize, f32)>> = None;
+    for row in galley.rows.iter().skip(start) {
+        let top = galley_pos.y + row.pos.y;
+        let bottom = top + row.row.height();
+        if top > viewport.bottom() {
+            break;
+        }
+        if guides.is_none() {
+            let mut levels = Vec::new();
+            let mut columns = 0usize;
+            let mut level = 1usize;
+            let base_x = galley_pos.x + row.pos.x;
+            for (index, glyph) in row.row.glyphs.iter().enumerate() {
+                match glyph.chr {
+                    ' ' => columns += 1,
+                    '\t' => columns += indent_width - (columns % indent_width),
+                    _ => break,
+                }
+                while level * indent_width <= columns {
+                    levels.push((level, base_x + row.row.x_offset(index + 1)));
+                    level += 1;
+                }
+            }
+            if columns > 0 {
+                levels.insert(0, (0, base_x));
+            }
+            guides = Some(levels);
+        }
+        if let Some(levels) = &guides {
+            for (level, x) in levels {
+                if *x <= viewport.left() + 2.0 || *x >= viewport.right() - 4.0 {
+                    continue;
+                }
+                let color = if *level == active_level && active_level > 0 {
+                    Color32::from_rgba_unmultiplied(88, 196, 221, 155)
+                } else {
+                    Color32::from_rgba_unmultiplied(130, 145, 165, 72)
+                };
+                painter.line_segment(
+                    [
+                        egui::pos2(*x, top.max(viewport.top())),
+                        egui::pos2(*x, bottom.min(viewport.bottom())),
+                    ],
+                    Stroke::new(1.0_f32, color),
+                );
+            }
+        }
+        if row.ends_with_newline {
+            guides = None;
+        }
     }
 }
 

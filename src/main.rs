@@ -18,6 +18,7 @@ mod ignore;
 mod indent;
 mod log;
 mod makefile;
+mod minimap;
 mod navigation;
 mod project_meta;
 mod registers;

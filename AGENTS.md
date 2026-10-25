@@ -51,6 +51,7 @@ src/project_meta.rs    Makefile / Keil .uvprojx 工程元数据提取
 src/editor.rs          EditorBuffer（String + revision）和 Document
 src/file_tree.rs       惰性目录树
 src/highlight.rs       syntect 高亮和 galley 缓存
+src/minimap.rs         编辑器右侧代码预览、缩略行缓存和滚动跳转
 src/log.rs             ANSI SGR、错误分级、日志上限
 src/theme.rs           配色和按钮样式
 src/util.rs            路径、换行、系统集成辅助
@@ -95,6 +96,8 @@ docs/                  README 截图和使用教程
 - 文件上限 16 MB，二进制文件拒绝打开。
 - 打开文件/切换 Tab 时，`focus_editor` 会请求焦点并清掉跨 Tab 的旧选区。
 - 左侧行号与当前行高亮；`Settings.relative_line_numbers` 切换相对行号，`Settings.ruler_column` 可选 80/120 列标尺，`Settings.show_whitespace` 显示空格/Tab/换行标记。
+- `minimap.rs` 在编辑区右侧绘制约 76px 的代码预览：按 revision 缓存抽样行，用缩进/长度和近似语法色渲染；缩略图可点击或拖动跳转，并显示当前视口位置。`Settings.show_minimap` 控制开关，窗口过窄时自动隐藏。
+- 缩进参考线按 `Settings.indent_width` 在每级缩进位置绘制，当前行所在缩进级别的参考线会高亮；`Settings.show_indent_guides` 控制开关。
 - 书签按 `Document.bookmarks` 保存在内存中；`Ctrl+F2` 切换，`F2` / `Shift+F2` 前后跳转，书签行在行号栏左侧显示强调色竖条。
 - `brackets.rs` 提供 C 风格注释/字符串感知的括号匹配；光标靠近括号时高亮配对，`Ctrl+]` 跳到配对括号。
 - 查找/替换由 `FindState` 管理，支持大小写、全字匹配（`ab`）、正则和替换时保留大小写（`AB`）；匹配范围通过 `LayoutSpec.search_ranges` 进入高亮缓存，替换使用 `EditorBuffer::set_text`。当前文件内查找由右上角浮层完成。
@@ -116,9 +119,9 @@ docs/                  README 截图和使用教程
 - 粘贴由编辑器在 TextEdit 前拦截 `Event::Paste`：`indent::adjust_pasted` 统一换行并按当前行缩进对齐后续行，同时保留粘贴内容相对缩进；只读或编辑器未聚焦时不拦截。
 - 分屏只从标签页右键菜单进入：`向右拆分` / `拆分和移动 → 向上拆分` / `取消拆分`。`split_primary` + `split_path` + `split_direction` 决定两个窗格，两个窗格都调用 `show_code_editor`，都可编辑；`split_focus` 记录焦点窗格，点击窗格会切换 active。当前不支持同一个文件在两个窗格重复打开。
 - 标签页右键菜单还提供关闭其他、关闭右侧标签页、关闭已保存、全部关闭；批量关闭遇到未保存文件时走 `PendingAction::CloseTabs` 确认。快捷键：Ctrl+F4 关闭当前，Ctrl+\ 向右拆分，Ctrl+K U 关闭已保存，Ctrl+K W 全部关闭，Ctrl+K Ctrl+\ 向上拆分。
-- 查找是编辑器右上角的约 560px 浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / `Ctrl+H` 打开，不占用独立行；替换行通过左侧下拉箭头展开，宽度不变。`Ctrl+G` 打开跳行浮层。
+- 查找是编辑器右上角的约 420px 紧凑浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / `Ctrl+H` 打开，不占用独立行；左侧下拉箭头展开替换行，宽度不变，`AB` 保留大小写在替换输入框内，替换/全部替换为图标按钮。`Ctrl+G` 打开同宽的跳行浮层，输入框复用查找输入框样式；提示文字为普通次要色，不使用色块。
 - 面包屑栏只显示从工程根目录开始的路径（`doc.rel_path` 的 `/` 替换为 ` > `）和未保存标记；编码、行尾、语言、只读、寄存器、数组、符号、格式化、自动换行、保存移到最底部状态栏。补全和列编辑不出现在可见工具栏。
-- 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::GUTTER` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。编辑器卡底部两角由 `paint_bottom_corners` 补绘 `GUTTER` 圆角，输出面板原生日志区使用 `EDITOR_BG` 并撑满可用空间。
+- 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::GUTTER` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。右侧操作栏宽约 58px（原 110px 的一半），按钮内边距同步收窄。编辑器卡底部两角由 `paint_bottom_corners` 补绘 `GUTTER` 圆角，输出面板标题栏紧贴面板顶部，拖动区域合并到标题栏顶部 4px，日志区使用 `EDITOR_BG` 并撑满剩余空间。
 - 最底部状态栏是贯穿整个窗口宽度的矩形条（无圆角、无外圈间隙），内容靠右排列：右侧操作按钮 + 行列/缩进/编码/行尾/语言信息。
 - `column.rs` 仍保留旧列编辑算法；`column_select.rs` + `ColumnSelectionState` 提供 Ctrl+Alt+鼠标左键拖动的矩形列选择，蓝色高亮，Ctrl+C 复制、Delete/Backspace 删除、直接输入替换。列编辑对话框已不在任何可见入口暴露。
 - 目前没有多光标；列选择是单一矩形区域，不支持多个独立光标。
