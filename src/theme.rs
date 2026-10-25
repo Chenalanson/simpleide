@@ -83,7 +83,7 @@ pub fn install(ctx: &egui::Context) {
         style.spacing.interact_size.y = 28.0;
         style.spacing.scroll.bar_width = 9.0;
         style.interaction.resize_grab_radius_side = 7.0;
-        style.animation_time = 0.12;
+        style.animation_time = 0.20;
 
         style.text_styles.insert(
             TextStyle::Heading,

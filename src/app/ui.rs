@@ -313,6 +313,23 @@ impl App {
                 let mut resource_open = self.resource_open;
                 let mut info_open = self.info_open;
                 let mut tree_clipped = false;
+                let resource_anim = ui.ctx().animate_bool_with_time_and_easing(
+                    Id::new("simple_embedded_resource_anim"),
+                    resource_open,
+                    0.22,
+                    egui::emath::easing::cubic_in_out,
+                );
+                let info_anim = ui.ctx().animate_bool_with_time_and_easing(
+                    Id::new("simple_embedded_info_anim"),
+                    info_open,
+                    0.22,
+                    egui::emath::easing::cubic_in_out,
+                );
+                if (resource_anim > 0.0 && resource_anim < 1.0)
+                    || (info_anim > 0.0 && info_anim < 1.0)
+                {
+                    ui.ctx().request_repaint();
+                }
 
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), ui.available_height()),
@@ -325,7 +342,7 @@ impl App {
                             .show(ui, |ui| {
                                 ui.spacing_mut().interact_size.y = 18.0;
                                 ui.horizontal(|ui| {
-                                    if section_chevron(ui, resource_open).clicked() {
+                                    if section_chevron(ui, resource_anim).clicked() {
                                         resource_open = !resource_open;
                                     }
                                     let (bar_rect, _) = ui
@@ -424,8 +441,8 @@ impl App {
                                 });
                             });
 
-                        if resource_open {
-                            ui.add_space(6.0);
+                        if resource_open || resource_anim > 0.001 {
+                            ui.add_space(6.0 * resource_anim);
                             let tree_budget = if has_project {
                                 (ui.available_height() - 56.0).max(80.0)
                             } else {
@@ -436,10 +453,27 @@ impl App {
                             } else {
                                 tree_budget
                             };
-                            let tree_output = ScrollArea::vertical()
+                            let measured_id = Id::new("simple_embedded_file_tree_measured");
+                            let measured = ui
+                                .data(|data| data.get_temp::<f32>(measured_id))
+                                .unwrap_or(tree_cap);
+                            let target_height = measured.clamp(1.0, tree_cap);
+                            let fully_open = resource_open && resource_anim >= 0.999;
+                            let view_height = if fully_open {
+                                target_height
+                            } else {
+                                (target_height * resource_anim).max(1.0)
+                            };
+                            let mut area = ScrollArea::vertical()
                                 .id_salt("simple_embedded_file_tree")
-                                .max_height(tree_cap)
-                                .auto_shrink([false, true])
+                                .max_height(view_height)
+                                .auto_shrink([false, !fully_open]);
+                            if !fully_open {
+                                area = area.scroll_bar_visibility(
+                                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                );
+                            }
+                            let tree_output = area
                                 .show(ui, |ui| {
                                     Frame::new().inner_margin(Margin::symmetric(5, 4)).show(
                                         ui,
@@ -479,8 +513,12 @@ impl App {
                                         },
                                     );
                                 });
+                            let measured_height = tree_output.content_size.y.max(1.0);
+                            ui.data_mut(|data| {
+                                data.insert_temp(measured_id, measured_height);
+                            });
 
-                            if has_project {
+                            if has_project && fully_open {
                                 let clipped = tree_output.content_size.y
                                     > tree_output.inner_rect.height() + 0.5;
                                 tree_clipped = clipped;
@@ -514,33 +552,42 @@ impl App {
                         }
 
                         if has_project {
-                            if info_open {
-                                ui.add_space(6.0);
-                                info_header_row(ui, &mut info_open);
-                                ui.add_space(6.0);
-                                Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
-                                    ui,
-                                    |ui| {
-                                        let height = (ui.available_height() - 2.0).max(80.0);
-                                        ScrollArea::vertical()
-                                            .id_salt("simple_embedded_project_meta")
-                                            .max_height(height)
-                                            .auto_shrink([false, false])
-                                            .show(ui, |ui| self.show_project_meta(ui, actions));
-                                    },
-                                );
-                            } else if tree_clipped {
+                            let header_height = 32.0;
+                            let closed_pad = if !info_open && tree_clipped {
                                 // Center the collapsed project-info header in the
                                 // space left below the file tree so the gaps above
                                 // and below the header have the same height.
-                                let header_height = 32.0;
                                 let remaining = (panel_bottom - ui.cursor().top()).max(0.0);
-                                let pad = ((remaining - header_height) * 0.5).max(0.0);
-                                ui.add_space(pad);
-                                info_header_row(ui, &mut info_open);
-                                ui.add_space(pad);
+                                ((remaining - header_height) * 0.5).max(0.0)
                             } else {
-                                info_header_row(ui, &mut info_open);
+                                0.0
+                            };
+                            let leading = if info_open {
+                                6.0 * info_anim
+                            } else {
+                                closed_pad * (1.0 - info_anim)
+                            };
+                            ui.add_space(leading);
+                            info_header_row(ui, &mut info_open, info_anim);
+                            if info_open || info_anim > 0.001 {
+                                ui.add_space(6.0 * info_anim);
+                                let available = (ui.available_height() - 2.0).max(1.0);
+                                let height = (available * info_anim).max(1.0);
+                                Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
+                                    ui,
+                                    |ui| {
+                                        let mut area = ScrollArea::vertical()
+                                            .id_salt("simple_embedded_project_meta")
+                                            .max_height(height)
+                                            .auto_shrink([false, false]);
+                                        if !(info_open && info_anim >= 0.999) {
+                                            area = area.scroll_bar_visibility(
+                                                egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                            );
+                                        }
+                                        area.show(ui, |ui| self.show_project_meta(ui, actions));
+                                    },
+                                );
                             }
                         }
                     },
@@ -5426,13 +5473,13 @@ fn apply_tab_indent(
     }
 }
 
-fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool) {
+fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool, openness: f32) {
     Frame::new()
         .inner_margin(Margin::symmetric(11, 6))
         .show(ui, |ui| {
             ui.set_min_height(20.0);
             ui.horizontal(|ui| {
-                if section_chevron(ui, *info_open).clicked() {
+                if section_chevron(ui, openness).clicked() {
                     *info_open = !*info_open;
                 }
                 let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
@@ -5456,9 +5503,9 @@ fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool) {
         });
 }
 
-fn section_chevron(ui: &mut egui::Ui, open: bool) -> egui::Response {
+fn section_chevron(ui: &mut egui::Ui, openness: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::click());
-    paint_chevron(ui.painter(), rect, open, theme::ACCENT);
+    paint_chevron_openness(ui.painter(), rect, openness, theme::ACCENT);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -5628,9 +5675,17 @@ fn meta_group_impl(
     };
     let id = ui.make_persistent_id(("simple_embedded_meta_group", title));
     let selected_id = egui::Id::new("simple_embedded_meta_list_selected");
-    let mut open = ui
-        .data_mut(|data| data.get_persisted::<bool>(id))
-        .unwrap_or(default_open);
+    let old_open = ui.data_mut(|data| data.get_persisted::<bool>(id));
+    let anim_id = id.with("anim");
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        anim_id,
+        old_open.unwrap_or(default_open),
+    );
+    let openness = state.openness(ui.ctx());
+    if openness > 0.0 && openness < 1.0 {
+        ui.ctx().request_repaint();
+    }
     let selected = ui.data_mut(|data| data.get_persisted::<egui::Id>(selected_id)) == Some(id);
 
     let row_height = 22.0;
@@ -5657,7 +5712,7 @@ fn meta_group_impl(
         |ui| {
             ui.style_mut().interaction.selectable_labels = false;
             let (chevron_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::hover());
-            paint_chevron(ui.painter(), chevron_rect, open, theme::ACCENT);
+            paint_chevron_openness(ui.painter(), chevron_rect, openness, theme::ACCENT);
             ui.label(RichText::new(title).size(12.5).strong().color(if selected {
                 theme::TEXT
             } else {
@@ -5711,57 +5766,36 @@ fn meta_group_impl(
         if let Some(clicked) = add_clicked.as_mut() {
             **clicked = true;
         }
-        open = true;
-        ui.data_mut(|data| {
-            data.insert_persisted(selected_id, id);
-            data.insert_persisted(id, true);
-        });
+        state.set_open(true);
+        ui.ctx().request_repaint();
+        ui.data_mut(|data| data.insert_persisted(selected_id, id));
     } else if response.clicked() {
         ui.data_mut(|data| data.insert_persisted(selected_id, id));
-        open = !open;
-        ui.data_mut(|data| data.insert_persisted(id, open));
+        state.toggle(ui);
     }
-    if open {
+    state.show_body_unindented(ui, |ui| {
         ui.add_space(2.0);
         ui.indent(id.with("body"), |ui| content(ui));
         ui.add_space(3.0);
-    }
+    });
 }
 
-fn paint_chevron(painter: &egui::Painter, rect: egui::Rect, open: bool, color: Color32) {
+fn paint_chevron_openness(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    openness: f32,
+    color: Color32,
+) {
     let center = rect.center();
     let stroke = Stroke::new(1.6_f32, color);
-    if open {
-        painter.line_segment(
-            [
-                egui::pos2(center.x - 4.0, center.y - 2.0),
-                egui::pos2(center.x, center.y + 2.0),
-            ],
-            stroke,
-        );
-        painter.line_segment(
-            [
-                egui::pos2(center.x, center.y + 2.0),
-                egui::pos2(center.x + 4.0, center.y - 2.0),
-            ],
-            stroke,
-        );
-    } else {
-        painter.line_segment(
-            [
-                egui::pos2(center.x - 2.0, center.y - 4.0),
-                egui::pos2(center.x + 2.0, center.y),
-            ],
-            stroke,
-        );
-        painter.line_segment(
-            [
-                egui::pos2(center.x + 2.0, center.y),
-                egui::pos2(center.x - 2.0, center.y + 4.0),
-            ],
-            stroke,
-        );
-    }
+    let angle = openness.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
+    let (sin, cos) = angle.sin_cos();
+    let rotate = |x: f32, y: f32| egui::vec2(x * cos - y * sin, x * sin + y * cos);
+    let first = center + rotate(-2.0, -4.0);
+    let middle = center + rotate(2.0, 0.0);
+    let last = center + rotate(-2.0, 4.0);
+    painter.line_segment([first, middle], stroke);
+    painter.line_segment([middle, last], stroke);
 }
 
 fn meta_row(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -5788,9 +5822,17 @@ fn meta_editable_list(
 ) {
     let id = ui.make_persistent_id(("simple_embedded_meta_list", label));
     let selected_id = egui::Id::new("simple_embedded_meta_list_selected");
-    let mut open = ui
-        .data_mut(|data| data.get_persisted::<bool>(id))
-        .unwrap_or(true);
+    let old_open = ui.data_mut(|data| data.get_persisted::<bool>(id));
+    let anim_id = id.with("anim");
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        anim_id,
+        old_open.unwrap_or(true),
+    );
+    let openness = state.openness(ui.ctx());
+    if openness > 0.0 && openness < 1.0 {
+        ui.ctx().request_repaint();
+    }
     let selected = ui.data_mut(|data| data.get_persisted::<egui::Id>(selected_id)) == Some(id);
 
     let row_height = 22.0;
@@ -5818,7 +5860,7 @@ fn meta_editable_list(
         |ui| {
             ui.style_mut().interaction.selectable_labels = false;
             let (chevron_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::hover());
-            paint_chevron(ui.painter(), chevron_rect, open, theme::ACCENT);
+            paint_chevron_openness(ui.painter(), chevron_rect, openness, theme::ACCENT);
             ui.label(RichText::new(label).size(11.0).color(if selected {
                 theme::TEXT
             } else {
@@ -5846,35 +5888,32 @@ fn meta_editable_list(
         actions.push(Action::AddMetaItem(field));
     }
     if response.clicked() && !plus_clicked {
-        open = !open;
-        ui.data_mut(|data| data.insert_persisted(id, open));
+        state.toggle(ui);
     }
-    if !open {
-        return;
-    }
-
-    if items.is_empty() {
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            ui.label(RichText::new("未检测").size(11.0).color(theme::TEXT_FAINT));
-        });
-    } else {
-        for item in items {
+    state.show_body_unindented(ui, |ui| {
+        if items.is_empty() {
             ui.horizontal(|ui| {
                 ui.add_space(14.0);
-                let response = ui.add(
-                    Label::new(
-                        RichText::new(format!("• {item}"))
-                            .monospace()
-                            .size(11.0)
-                            .color(theme::TEXT_DIM),
-                    )
-                    .truncate(),
-                );
-                response.on_hover_text(item);
+                ui.label(RichText::new("未检测").size(11.0).color(theme::TEXT_FAINT));
             });
+        } else {
+            for item in items {
+                ui.horizontal(|ui| {
+                    ui.add_space(14.0);
+                    let response = ui.add(
+                        Label::new(
+                            RichText::new(format!("• {item}"))
+                                .monospace()
+                                .size(11.0)
+                                .color(theme::TEXT_DIM),
+                        )
+                        .truncate(),
+                    );
+                    response.on_hover_text(item);
+                });
+            }
         }
-    }
+    });
 }
 
 fn paint_plus_button(ui: &mut egui::Ui) -> egui::Response {
@@ -6222,20 +6261,21 @@ impl App {
                     .fill(theme::PANEL_RAISED)
                     .stroke(Stroke::new(1.0_f32, color.gamma_multiply(0.65)))
                     .corner_radius(7)
-                    .inner_margin(Margin::symmetric(13, 9))
+                    .inner_margin(Margin::symmetric(14, 10))
                     .show(ui, |ui| {
-                        ui.set_max_width(400.0);
+                        ui.set_max_width(460.0);
+                        ui.spacing_mut().item_spacing.x = 8.0;
                         ui.horizontal(|ui| {
-                            colored_dot(ui, color, 6.0);
+                            colored_dot(ui, color, 6.5);
                             let icon = match severity {
                                 Severity::Error => "错误",
                                 Severity::Warning => "提示",
                                 Severity::Success => "完成",
                                 _ => "信息",
                             };
-                            ui.label(RichText::new(icon).size(9.5).strong().color(color));
+                            ui.label(RichText::new(icon).size(10.5).strong().color(color));
                             ui.add(
-                                Label::new(RichText::new(&message).size(11.0).color(theme::TEXT))
+                                Label::new(RichText::new(&message).size(12.5).color(theme::TEXT))
                                     .wrap(),
                             );
                         });
