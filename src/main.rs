@@ -39,8 +39,15 @@ use eframe::egui;
 
 fn main() -> eframe::Result<()> {
     let mut args = std::env::args_os().skip(1);
-    let initial_project = args.next().map(PathBuf::from).filter(|path| path.is_dir());
-    let initial_file = args.next().map(PathBuf::from).filter(|path| path.is_file());
+    let first = args.next().map(PathBuf::from).filter(|path| path.exists());
+    let second = args.next().map(PathBuf::from).filter(|path| path.is_file());
+    let (initial_project, initial_file) = match first {
+        Some(path) if path.is_dir() || (path.is_file() && config::is_workspace_file(&path)) => {
+            (Some(path), second)
+        }
+        Some(path) if path.is_file() => (None, Some(path)),
+        _ => (None, second),
+    };
 
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1360.0, 850.0])

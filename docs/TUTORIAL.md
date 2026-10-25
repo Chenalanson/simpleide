@@ -1,6 +1,6 @@
 # Simple embedded 使用教程
 
-这是一份从打开软件到完成第一次构建、烧录的完整教程。Simple embedded 的目标很简单：**工程文件夹就是工程**，你不需要先创建 `.eide` 文件、选择芯片或配置内存布局。
+这是一份从打开软件到完成第一次构建、烧录的完整教程。Simple embedded 的目标很简单：**工程文件夹就是工程**，你不需要先创建 `.eide` 文件、选择芯片或配置内存布局；构建与烧录配置保存在工程内 `.simple-embedded/settings.json`。
 
 ---
 
@@ -27,6 +27,12 @@ cargo run --release
 cargo run --release -- D:\firmware\my-board src\main.c
 ```
 
+也可以直接传入工作区文件，程序会打开它指向的工程目录：
+
+```powershell
+cargo run --release -- D:\firmware\my-board\my-board.se-workspace
+```
+
 启动后，左上角显示构建卡片。未导入工程时：
 
 - 名称显示为“未导入工程”
@@ -34,8 +40,9 @@ cargo run --release -- D:\firmware\my-board src\main.c
 - 点击 **导入**
 - 或按 `Ctrl+O`
 - 或直接把文件夹拖进窗口
+- 或点 **工作区 → 打开工作区文件…** 选择 `.se-workspace` / `.code-workspace`
 
-第一次打开时会自动记住这个工程；下次启动会尝试重新打开它。导入后按钮会变成 **更换 / 配置**。
+第一次打开时会自动记住这个工程；下次启动会尝试重新打开它。导入后按钮会变成 **更换 / 配置 / 工作区**。
 
 ---
 
@@ -53,7 +60,8 @@ cargo run --release -- D:\firmware\my-board src\main.c
 ```
 
 - 左侧构建卡片顶部显示当前工程名和完整路径
-- 构建卡片里的 **配置** 用于修改构建命令，**更换** 用于切换工程
+- 构建卡片里的 **配置** 用于修改构建命令，**更换** 用于切换工程，**工作区** 可生成/打开工作区文件并关联双击打开
+- 工程构建与烧录配置保存在工程内 `.simple-embedded/settings.json`，换机器或重新打开工程不会丢失；Keil `.uvprojx` 不会被修改
 - 资源管理器第一行是工程根目录，点击可展开/收起，下面才是工程内容
 - 文件树较长时，拖动资源管理器与工程信息之间的分割线，可以调整两块区域的高度；位置会记住
 - 拖动左栏右侧边缘，可以调整整个左栏的宽度
@@ -70,7 +78,7 @@ cargo run --release -- D:\firmware\my-board src\main.c
 - Makefile 工程保存这些修改时会同步到 Makefile（修改前自动备份）；Keil `.uvprojx` 不会被修改
 - 左侧点文件夹展开，点文件在中间打开
 - 文件有修改时，Tab 上会出现黄色圆点，窗口标题也会标记为未保存
-- 底部输出面板可以拖动顶部手柄调整高度；收起后也能直接向上拉出，高度会记住；也可以点标题左侧的 **收起/展开**
+- 底部输出面板可切换 **构建输出 / 调试输出**，可以拖动顶部手柄调整高度；收起后也能直接向上拉出，高度会记住；也可以点标题左侧的 **收起/展开**
 
 ---
 
@@ -103,7 +111,7 @@ Simple embedded 会自动检查工程根目录：
 
 如果根目录没有这些文件，构建按钮会被禁用。点击左上角工程卡片里的 **配置**，手动填写命令即可；设置里也可以重新点击 **自动检测**。
 
-> Simple embedded 不会在工程里创建任何配置文件。工程文件夹可以直接提交到 Git、拷贝给同事，仍然是一个普通工程。
+> Simple embedded 只在工程内创建 `.simple-embedded/settings.json`（构建/烧录配置）和用户主动生成的 `.se-workspace`；不会创建 `.eide` 等专有格式，也不会修改 Keil `.uvprojx`。工程文件夹仍然可以直接提交到 Git 或拷贝给同事。
 
 ---
 
@@ -146,9 +154,9 @@ Simple embedded 会自动检查工程根目录：
 - 文件树右键 **十六进制查看**，或 `Ctrl+Shift+H` 查看当前文件；显示偏移、十六进制和 ASCII，可直接把字节生成 C 数组
 - 工具栏 **数组** 或 `Ctrl+Shift+A` 生成 C 数组：优先使用选中内容，否则使用当前文件；可修改变量名、十六进制/十进制和每行字节数，并一键复制
 - 工具栏 **寄存器** 或 `Ctrl+Shift+R` 浏览外设寄存器：优先解析工程内 `.svd` 文件，其次读取芯片支持包里的 SVD，否则列出头文件中 `*_BASE` / `*_ADDR` / `*_ADDRESS` 宏及其地址；支持按名称、地址或说明过滤，点击跳到定义行
-- 右侧 **调试** 按钮或 `F5` 启动 gdb；`F9` 切换当前行断点，`F10` 下一步，`F11` 单步，`Shift+F11` 跳出，`Shift+F5` 停止
+- 右侧 **调试** 按钮或 `F5` 启动 gdb；编辑器右上角会出现调试浮层，用图案按钮继续、停止、下一步、单步和跳出；`F9` 切换当前行断点，快捷键分别是 `F10` 下一步、`F11` 单步、`Shift+F11` 跳出、`Shift+F5` 停止
 - 调试程序默认在 `build/`、`Debug/`、`Release/`、`out/` 中寻找最新的 ELF/AXF/EXE，也可在设置里手动填写；gdb 路径同样可手动指定，ARM 目标需要使用 arm-none-eabi-gdb
-- 调试窗口下方可直接输入 gdb 命令（如 `info locals`、`bt`、`continue`）并查看输出
+- 调试输出显示在底部输出面板的 **调试输出** 页，可以在最下方输入 gdb 命令（如 `info locals`、`bt`、`continue`）并查看结果
 - 粘贴多行文本时会自动对齐到当前行缩进，并保留粘贴内容的相对缩进
 - 按住 `Ctrl+Alt` 在编辑器中按住鼠标左键拖动，可进行矩形列选择；`Ctrl+C` 复制、`Delete/Backspace` 删除、直接输入会替换矩形区域
 - 右键标签页可 **关闭 / 关闭其他 / 关闭右侧标签页 / 关闭已保存 / 全部关闭**；**保存**、**另存为**；**复制路径 / 复制相对路径 / 复制痕迹导航路径**；**在文件资源管理器中显示**、**在资源管理器视图中显示**；以及 **向右拆分**、**拆分和移动 → 向上拆分**、**取消拆分**。两个拆分窗格都可编辑，点击窗格即可切换
@@ -258,9 +266,10 @@ powershell -ExecutionPolicy Bypass -File scripts\package-tools.ps1
 ```text
 %APPDATA%\SimpleEmbedded\settings.json
 %APPDATA%\SimpleEmbedded\backups\
+<工程目录>\.simple-embedded\settings.json
 ```
 
-设置按工程分别保存。Makefile 工程在保存构建选项或 C/C++ 属性时会同时写入 Makefile；Keil 工程只保存在本机设置。修改后点击 **保存** 才会生效。
+全局设置保存最近工程、编辑器偏好等；每个工程的构建与烧录配置保存在工程内 `.simple-embedded/settings.json`，打开工程时优先读取该文件。旧版本保存在用户目录里的每工程配置会在打开工程时自动迁移。Makefile 工程在保存构建选项或 C/C++ 属性时还会同时写入 Makefile；Keil `.uvprojx` 不会被修改。修改后点击 **保存** 才会生效。
 
 ---
 
@@ -351,7 +360,7 @@ ssh -o BatchMode=yes user@host "cd '/home/user/firmware' && make -j8"
 
 ## 8. 设置与持久化
 
-设置文件位置：
+全局设置文件位置：
 
 ```text
 %APPDATA%\SimpleEmbedded\settings.json
@@ -360,15 +369,23 @@ ssh -o BatchMode=yes user@host "cd '/home/user/firmware' && make -j8"
 里面保存：
 
 - 最近工程列表
-- 每个工程各自的 Build/Clean/Rebuild/Flash/SSH 配置
 - 代码字号
 - 自动换行
 - 输出自动滚动
 - 是否显示隐藏文件
+- 旧版本每工程配置的迁移缓存
 
-删除这个文件即可恢复首次启动状态。
+工程自己的构建与烧录配置位于：
 
-工程目录本身**不会**被写入配置。
+```text
+<工程目录>\.simple-embedded\settings.json
+```
+
+这是普通 JSON，可以手改，也可以和源码一起提交。打开工程时优先使用它；旧版本的用户目录配置会自动迁移。
+
+构建卡片的 **工作区** 菜单可以生成 `<工程名>.se-workspace`。文件内容是 VS Code 风格的 `folders` 字段，生成时会把 `.se-workspace` 关联到当前程序，之后双击即可打开工程。移动程序后重新点一次“生成并关联工作区文件”即可更新关联。
+
+删除全局设置文件即可恢复首次启动状态；删除工程的 `.simple-embedded` 目录会清除该工程的本地配置。
 
 ---
 

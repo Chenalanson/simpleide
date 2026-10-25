@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align, Button, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText,
-    ScrollArea, Sense, Stroke, ViewportCommand,
+    self, Align, Button, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, RichText,
+    ScrollArea, Sense, Stroke, TextEdit, ViewportCommand,
 };
 #[cfg(target_os = "windows")]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -66,6 +66,13 @@ enum SettingsTab {
     Editor,
     Debug,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum OutputView {
+    #[default]
+    Build,
+    Debug,
 }
 
 struct SettingsDraft {
@@ -480,6 +487,9 @@ struct Toast {
 
 enum Action {
     OpenPicker,
+    OpenWorkspacePicker,
+    CreateWorkspace,
+    OpenProjectConfig,
     OpenFile(PathBuf),
     OpenAt(String, usize, usize),
     SetEncoding(TextEncoding),
@@ -529,6 +539,8 @@ enum Action {
     BrowsePyOcd,
     ClearLog,
     CopyLog,
+    ClearDebugLog,
+    CopyDebugLog,
     Reveal(PathBuf),
     OpenVscode(PathBuf),
     ToggleWrap,
@@ -561,6 +573,7 @@ pub struct App {
     hex: HexState,
     array: ArrayState,
     debug: DebugState,
+    output_view: OutputView,
     completion: CompletionState,
     member_index: Option<crate::completion::MemberIndex>,
     goto_line: GotoLineState,
@@ -588,6 +601,7 @@ pub struct App {
     toast: Option<Toast>,
     allow_close: bool,
     focus_editor: bool,
+    last_editor_rect: Option<egui::Rect>,
     last_title: String,
     native_theme_requested: bool,
     native_titlebar_styled: bool,
@@ -629,6 +643,7 @@ impl App {
             hex: HexState::default(),
             array: ArrayState::default(),
             debug: DebugState::default(),
+            output_view: OutputView::default(),
             completion: CompletionState::default(),
             member_index: None,
             goto_line: GotoLineState::default(),
@@ -656,6 +671,7 @@ impl App {
             toast: None,
             allow_close: false,
             focus_editor: false,
+            last_editor_rect: None,
             last_title: String::new(),
             native_theme_requested: false,
             native_titlebar_styled: false,
@@ -679,7 +695,18 @@ impl App {
     }
 
     fn load_project(&mut self, path: &Path, announce: bool) -> bool {
-        let root = match util::canonical_project(path) {
+        let path = if path.is_file() && crate::config::is_workspace_file(path) {
+            match crate::config::resolve_workspace_file(path) {
+                Ok(path) => path,
+                Err(err) => {
+                    self.set_toast(err, Severity::Error);
+                    return false;
+                }
+            }
+        } else {
+            path.to_path_buf()
+        };
+        let root = match util::canonical_project(&path) {
             Ok(root) => root,
             Err(err) => {
                 self.set_toast(err, Severity::Error);
@@ -699,16 +726,43 @@ impl App {
         }
 
         self.build.reset();
+        self.debug_stop();
+        self.debug.open = false;
+        self.debug.target = None;
+        self.output_view = OutputView::Build;
 
-        let mut config = self.settings.build_config_for(&root);
+        let mut config_error = None;
+        let mut created_config = false;
+        let (mut config, from_project) = match crate::config::ProjectSettings::load(&root) {
+            Ok(Some(settings)) => (settings.build, true),
+            Ok(None) => (self.settings.build_config_for(&root), false),
+            Err(err) => {
+                config_error = Some(err);
+                (self.settings.build_config_for(&root), false)
+            }
+        };
         if let Some(makefile) = makefile::find_makefile(&root) {
             let fallback = config.build_options.clone();
             if let Some(options) = makefile::read_options(&makefile, &fallback) {
                 config.build_options = options;
             }
         }
-        let key = project_key(&root);
-        if !self.settings.build_configs.contains_key(&key) {
+        let mut config_in_project = from_project;
+        if !from_project && config_error.is_none() {
+            match crate::config::ProjectSettings::save(&root, &config) {
+                Ok(_) => {
+                    created_config = true;
+                    config_in_project = true;
+                }
+                Err(err) => config_error = Some(err),
+            }
+        }
+        if config_in_project {
+            // The project file is authoritative; drop the old user-directory
+            // cache so deleting `.simple-embedded` really resets the project.
+            self.settings.build_configs.remove(&project_key(&root));
+        } else {
+            // Keep a fallback for read-only projects or malformed project files.
             self.settings.set_build_config(&root, &config);
         }
         let tool_known = detected_tool(&root).is_some();
@@ -739,9 +793,19 @@ impl App {
         self.settings.remember_project(&root);
         self.settings.save();
 
-        if announce {
+        if let Some(err) = config_error {
+            self.set_toast(err, Severity::Warning);
+        } else if announce {
             if tool_known || !self.build_config.build_command.trim().is_empty() {
-                self.set_toast(format!("已打开工程 {project_name}"), Severity::Success);
+                let suffix = if created_config {
+                    "，已创建 .simple-embedded/settings.json"
+                } else {
+                    ""
+                };
+                self.set_toast(
+                    format!("已打开工程 {project_name}{suffix}"),
+                    Severity::Success,
+                );
             } else {
                 self.set_toast(
                     "工程已打开，但没有检测到构建系统，请打开设置填写命令",
@@ -753,6 +817,17 @@ impl App {
     }
 
     fn request_open_project(&mut self, path: PathBuf) {
+        let path = if path.is_file() && crate::config::is_workspace_file(&path) {
+            match crate::config::resolve_workspace_file(&path) {
+                Ok(path) => path,
+                Err(err) => {
+                    self.set_toast(err, Severity::Error);
+                    return;
+                }
+            }
+        } else {
+            path
+        };
         if let Some(project) = &self.project {
             if same_path(&project.root, &path) {
                 self.set_toast("该工程已经打开", Severity::Info);
@@ -1468,7 +1543,19 @@ impl App {
         }
     }
 
+    fn focus_debug_output(&mut self) {
+        self.output_view = OutputView::Debug;
+        if !self.settings.output_open {
+            self.settings.output_open = true;
+            if self.settings.output_height < 100.0 {
+                self.settings.output_height = 214.0;
+            }
+            self.settings.save();
+        }
+    }
+
     fn debug_continue(&mut self) {
+        self.focus_debug_output();
         if self.debug.session.is_none() && !self.start_debug_session() {
             return;
         }
@@ -1483,6 +1570,7 @@ impl App {
     }
 
     fn debug_command(&mut self, command: &str) {
+        self.focus_debug_output();
         let Some(session) = &mut self.debug.session else {
             self.set_toast("请先启动调试会话", Severity::Warning);
             return;
@@ -2418,6 +2506,7 @@ impl App {
             return;
         }
         self.build.log.clear_diagnostics();
+        self.output_view = OutputView::Build;
 
         match self.save_all_dirty() {
             Ok(saved) if saved > 0 => {
@@ -2606,8 +2695,7 @@ impl App {
         let library_dirs = self.effective_library_dirs().to_vec();
         let defines = self.effective_defines().to_vec();
 
-        self.settings.set_build_config(&root, &self.build_config);
-        self.settings.save();
+        self.persist_build_config();
 
         let Some(makefile_path) = makefile::find_makefile(&root) else {
             return Ok(false);
@@ -2630,7 +2718,17 @@ impl App {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             return;
         };
-        self.settings.set_build_config(&root, &self.build_config);
+        match crate::config::ProjectSettings::save(&root, &self.build_config) {
+            Ok(_) => {
+                // The project file is authoritative once it can be written.
+                self.settings.build_configs.remove(&project_key(&root));
+            }
+            Err(err) => {
+                // Fall back to the user directory for read-only projects.
+                self.settings.set_build_config(&root, &self.build_config);
+                self.set_toast(format!("工程配置保存失败：{err}"), Severity::Error);
+            }
+        }
         self.settings.save();
     }
 
@@ -2779,8 +2877,7 @@ impl App {
             .and_then(|path| makefile::read_options(&path, &fallback))
             .unwrap_or_else(|| fallback.clone());
         self.build_config.build_options = options.clone();
-        self.settings.set_build_config(&root, &self.build_config);
-        self.settings.save();
+        self.persist_build_config();
 
         let result = self.sync_makefile_options(&root, &before, &options);
         self.notify_sync("已保存构建选项", result, Severity::Success);
@@ -3204,7 +3301,7 @@ impl App {
                 .collect()
         });
         for path in dropped {
-            if path.is_dir() {
+            if path.is_dir() || (path.is_file() && crate::config::is_workspace_file(&path)) {
                 self.request_open_project(path);
                 break;
             }
@@ -3232,6 +3329,68 @@ impl App {
         if let Some(path) = dialog.pick_folder() {
             self.request_open_project(path);
         }
+    }
+
+    fn pick_workspace_file(&mut self) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("打开工作区文件")
+            .add_filter(
+                "Simple embedded 工作区",
+                &["se-workspace", "code-workspace"],
+            );
+        if let Some(project) = &self.project {
+            dialog = dialog.set_directory(&project.root);
+        } else if let Some(recent) = self.settings.recent_projects.first() {
+            dialog = dialog.set_directory(recent);
+        }
+        if let Some(path) = dialog.pick_file() {
+            self.request_open_project(path);
+        }
+    }
+
+    fn create_workspace(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Warning);
+            return;
+        };
+        if let Err(err) = crate::config::ProjectSettings::save(&root, &self.build_config) {
+            self.set_toast(format!("工程配置保存失败：{err}"), Severity::Error);
+            return;
+        }
+        match crate::config::write_workspace_file(&root) {
+            Ok(path) => {
+                let display = util::display_path(&path);
+                if let Some(tree) = &mut self.tree {
+                    tree.refresh();
+                }
+                match crate::config::register_workspace_association() {
+                    Ok(_) => self.set_toast(
+                        format!("已生成 {display}，双击即可打开工程"),
+                        Severity::Success,
+                    ),
+                    Err(err) => self.set_toast(
+                        format!("已生成 {display}，但关联双击失败：{err}"),
+                        Severity::Warning,
+                    ),
+                }
+            }
+            Err(err) => self.set_toast(err, Severity::Error),
+        }
+    }
+
+    fn open_project_config(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Warning);
+            return;
+        };
+        let path = crate::config::ProjectSettings::path(&root);
+        if !crate::config::ProjectSettings::exists(&root) {
+            if let Err(err) = crate::config::ProjectSettings::save(&root, &self.build_config) {
+                self.set_toast(format!("工程配置保存失败：{err}"), Severity::Error);
+                return;
+            }
+        }
+        self.open_file(path);
     }
 
     fn refresh_support_packs(&mut self) {
@@ -3274,6 +3433,9 @@ impl App {
         for action in actions {
             match action {
                 Action::OpenPicker => self.pick_project_folder(),
+                Action::OpenWorkspacePicker => self.pick_workspace_file(),
+                Action::CreateWorkspace => self.create_workspace(),
+                Action::OpenProjectConfig => self.open_project_config(),
                 Action::OpenFile(path) => self.open_file(path),
                 Action::OpenAt(path, line, column) => self.open_at(ctx, &path, line, column),
                 Action::SetEncoding(encoding) => self.set_encoding(encoding),
@@ -3297,7 +3459,10 @@ impl App {
                 }
                 Action::OpenHex(path) => self.open_hex(&path),
                 Action::OpenArrayGenerator => self.open_array_generator(ctx),
-                Action::OpenDebug => self.debug.open = true,
+                Action::OpenDebug => {
+                    self.debug.open = true;
+                    self.focus_debug_output();
+                }
                 Action::DebugContinue => self.debug_continue(),
                 Action::DebugStepOver => self.debug_command("next"),
                 Action::DebugStepInto => self.debug_command("step"),
@@ -3399,6 +3564,26 @@ impl App {
                     } else {
                         ctx.copy_text(self.build.log.all_text());
                         self.set_toast("构建输出已复制到剪贴板", Severity::Info);
+                    }
+                }
+                Action::ClearDebugLog => {
+                    if let Some(session) = &mut self.debug.session {
+                        session.log.clear();
+                    } else {
+                        self.debug.log.clear();
+                    }
+                }
+                Action::CopyDebugLog => {
+                    let text = if let Some(session) = &self.debug.session {
+                        session.log.join("\n")
+                    } else {
+                        self.debug.log.join("\n")
+                    };
+                    if text.is_empty() {
+                        self.set_toast("调试输出为空", Severity::Info);
+                    } else {
+                        ctx.copy_text(text);
+                        self.set_toast("调试输出已复制到剪贴板", Severity::Info);
                     }
                 }
                 Action::Reveal(path) => util::open_in_file_manager(&path),
@@ -3618,7 +3803,7 @@ impl eframe::App for App {
             self.show_array_generator(&ctx);
         }
         if self.debug.open && !modal_open {
-            self.show_debug_window(&ctx, &mut actions);
+            self.show_debug_overlay(&ctx, &mut actions);
         }
         if self.completion.open && !modal_open {
             self.show_completion(&ctx);
@@ -3879,7 +4064,7 @@ impl App {
 
                         ui.add_space(6.0);
                         let debug_tip = if self.debug.session.is_some() {
-                            "打开调试窗口 (F5 继续)"
+                            "打开调试控制 (F5 继续)"
                         } else {
                             "启动 gdb 调试（需在设置中配置调试程序）"
                         };
@@ -3899,12 +4084,45 @@ impl App {
 
     fn show_output_panel(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let open = self.settings.output_open;
-        let running = self.build.is_running();
-        let log_count = self.build.log.len();
+        let build_running = self.build.is_running();
+        let debug_view = self.output_view == OutputView::Debug;
+        let debug_log = self
+            .debug
+            .session
+            .as_ref()
+            .map(|session| session.log.clone())
+            .unwrap_or_else(|| self.debug.log.clone());
+        let debug_count = debug_log.len();
+        let log_count = if debug_view {
+            debug_count
+        } else {
+            self.build.log.len()
+        };
         let problem_count = self.build.log.problem_count();
+        let debug_running = self
+            .debug
+            .session
+            .as_mut()
+            .map(|session| session.is_running())
+            .unwrap_or(false);
+        let debug_has_session = self.debug.session.is_some();
         let mut auto_scroll = self.settings.auto_scroll_output;
         let mut toggle_output = false;
-        let (status_color, status_text) = self.build_status();
+        let (status_color, status_text) = if debug_view {
+            if self.debug.error.is_some() {
+                (theme::ERROR, "错误".to_owned())
+            } else if debug_has_session {
+                if debug_running {
+                    (theme::SUCCESS, "调试器运行中".to_owned())
+                } else {
+                    (theme::TEXT_FAINT, "调试器已停止".to_owned())
+                }
+            } else {
+                (theme::TEXT_FAINT, "未启动".to_owned())
+            }
+        } else {
+            self.build_status()
+        };
         let full_height = ui.available_height().max(100.0);
         let output_panel_id = egui::Id::new("simple_embedded_build_output");
         let height = if open {
@@ -3966,126 +4184,157 @@ impl App {
                     })
                     .inner_margin(Margin::symmetric(10, 3))
                     .show(ui, |ui| {
-                        ui.spacing_mut().interact_size.y = 24.0;
-                        ui.horizontal(|ui| {
-                            let toggle_label = if open { "收起" } else { "展开" };
-                            if ui
-                                .add(
-                                    Button::new(
-                                        RichText::new(toggle_label)
-                                            .size(12.0)
-                                            .color(theme::TEXT_FAINT),
-                                    )
-                                    .frame(false),
-                                )
-                                .on_hover_text(if open {
-                                    "收起输出面板"
-                                } else {
-                                    "展开输出面板"
-                                })
-                                .clicked()
-                            {
-                                toggle_output = true;
-                            }
-
-                            let (bar_rect, _) =
-                                ui.allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
-                            ui.painter().rect_filled(
-                                bar_rect,
-                                CornerRadius::same(1),
-                                theme::ACCENT,
-                            );
-                            ui.label(
-                                RichText::new("构建输出")
-                                    .size(12.5)
-                                    .strong()
-                                    .color(theme::TEXT_DIM),
-                            );
-
-                            colored_dot(ui, status_color, 6.0);
-                            ui.label(RichText::new(status_text).size(12.0).color(status_color));
-
-                            if problem_count > 0 {
-                                ui.label(
-                                    RichText::new(format!("{problem_count} 条问题"))
-                                        .size(11.0)
-                                        .color(theme::ERROR),
-                                );
-                            }
-
-                            ui.add_space(6.0);
-                            for (filter, label) in [
-                                (LogFilter::All, "全部"),
-                                (LogFilter::Errors, "错误"),
-                                (LogFilter::Warnings, "警告"),
-                            ] {
-                                let active = self.log_filter == filter;
-                                let color = if active {
-                                    theme::ACCENT
-                                } else {
-                                    theme::TEXT_FAINT
-                                };
+                        ui.spacing_mut().interact_size.y = 22.0;
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 22.0),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                let toggle_label = if open { "收起" } else { "展开" };
                                 if ui
-                                    .add_sized(
-                                        [38.0, 18.0],
-                                        Button::new(RichText::new(label).size(11.0).color(color))
-                                            .fill(if active {
-                                                theme::ACCENT_SOFT
-                                            } else {
-                                                Color32::TRANSPARENT
-                                            })
-                                            .frame(active)
-                                            .corner_radius(3),
+                                    .add(
+                                        Button::new(
+                                            RichText::new(toggle_label)
+                                                .size(12.0)
+                                                .color(theme::TEXT_FAINT),
+                                        )
+                                        .frame(false),
                                     )
+                                    .on_hover_text(if open {
+                                        "收起输出面板"
+                                    } else {
+                                        "展开输出面板"
+                                    })
                                     .clicked()
                                 {
-                                    self.log_filter = filter;
-                                }
-                            }
-
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let auto = ui.checkbox(
-                                    &mut auto_scroll,
-                                    RichText::new("自动滚动").size(12.0).color(theme::TEXT_DIM),
-                                );
-                                auto.on_hover_text("构建输出增加时自动滚动到底部");
-
-                                let copy_enabled = log_count > 0;
-                                let copy = ui.add_enabled(
-                                    copy_enabled,
-                                    small_flat_button("复制", theme::TEXT_DIM),
-                                );
-                                if copy.clicked() {
-                                    actions.push(Action::CopyLog);
+                                    toggle_output = true;
                                 }
 
-                                let clear = ui.add_enabled(
-                                    log_count > 0,
-                                    small_flat_button("清空", theme::TEXT_DIM),
+                                let (bar_rect, _) =
+                                    ui.allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
+                                ui.painter().rect_filled(
+                                    bar_rect,
+                                    CornerRadius::same(1),
+                                    theme::ACCENT,
                                 );
-                                if clear.clicked() {
-                                    actions.push(Action::ClearLog);
+                                if output_view_tab(ui, "构建输出", !debug_view)
+                                    .on_hover_text("查看构建输出")
+                                    .clicked()
+                                {
+                                    self.output_view = OutputView::Build;
+                                }
+                                if output_view_tab(ui, "调试输出", debug_view)
+                                    .on_hover_text("查看调试输出")
+                                    .clicked()
+                                {
+                                    self.output_view = OutputView::Debug;
                                 }
 
-                                if running {
-                                    let stop = ui.add(
-                                        Button::new(
-                                            RichText::new("停止").size(12.0).color(theme::ERROR),
-                                        )
-                                        .fill(theme::ERROR.gamma_multiply(0.12))
-                                        .stroke(Stroke::new(
-                                            1.0_f32,
-                                            theme::ERROR.gamma_multiply(0.45),
-                                        ))
-                                        .corner_radius(4)
-                                        .min_size(egui::vec2(0.0, 21.0)),
+                                colored_dot(ui, status_color, 6.0);
+                                ui.label(RichText::new(status_text).size(12.0).color(status_color));
+
+                                if debug_view {
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        RichText::new(format!("{debug_count} 行"))
+                                            .size(11.0)
+                                            .color(theme::TEXT_FAINT),
                                     );
-                                    if stop.clicked() {
-                                        actions.push(Action::StopTask);
+                                } else if problem_count > 0 {
+                                    ui.label(
+                                        RichText::new(format!("{problem_count} 条问题"))
+                                            .size(11.0)
+                                            .color(theme::ERROR),
+                                    );
+                                }
+
+                                if !debug_view {
+                                    ui.add_space(6.0);
+                                    for (filter, label) in [
+                                        (LogFilter::All, "全部"),
+                                        (LogFilter::Errors, "错误"),
+                                        (LogFilter::Warnings, "警告"),
+                                    ] {
+                                        let active = self.log_filter == filter;
+                                        let color = if active {
+                                            theme::ACCENT
+                                        } else {
+                                            theme::TEXT_FAINT
+                                        };
+                                        if ui
+                                            .add_sized(
+                                                [38.0, 22.0],
+                                                Button::new(
+                                                    RichText::new(label).size(11.5).color(color),
+                                                )
+                                                .fill(if active {
+                                                    theme::ACCENT_SOFT
+                                                } else {
+                                                    Color32::TRANSPARENT
+                                                })
+                                                .frame(active)
+                                                .corner_radius(3),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.log_filter = filter;
+                                        }
                                     }
                                 }
-                            });
-                        });
+
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    let auto = ui.checkbox(
+                                        &mut auto_scroll,
+                                        RichText::new("自动滚动").size(12.0).color(theme::TEXT_DIM),
+                                    );
+                                    auto.on_hover_text("输出增加时自动滚动到底部");
+
+                                    let copy_enabled = log_count > 0;
+                                    let copy = ui.add_enabled(
+                                        copy_enabled,
+                                        small_flat_button("复制", theme::TEXT_DIM),
+                                    );
+                                    if copy.clicked() {
+                                        if debug_view {
+                                            actions.push(Action::CopyDebugLog);
+                                        } else {
+                                            actions.push(Action::CopyLog);
+                                        }
+                                    }
+
+                                    let clear = ui.add_enabled(
+                                        log_count > 0,
+                                        small_flat_button("清空", theme::TEXT_DIM),
+                                    );
+                                    if clear.clicked() {
+                                        if debug_view {
+                                            actions.push(Action::ClearDebugLog);
+                                        } else {
+                                            actions.push(Action::ClearLog);
+                                        }
+                                    }
+
+                                    if build_running && !debug_view {
+                                        let stop = ui.add(
+                                            Button::new(
+                                                RichText::new("停止")
+                                                    .size(12.0)
+                                                    .color(theme::ERROR),
+                                            )
+                                            .fill(theme::ERROR.gamma_multiply(0.12))
+                                            .stroke(Stroke::new(
+                                                1.0_f32,
+                                                theme::ERROR.gamma_multiply(0.45),
+                                            ))
+                                            .corner_radius(4)
+                                            .min_size(egui::vec2(0.0, 21.0)),
+                                        );
+                                        if stop.clicked() {
+                                            actions.push(Action::StopTask);
+                                        }
+                                    }
+                                });
+                            },
+                        );
                     });
                 let header_rect = header.response.rect;
                 let handle_color = if handle.hovered() || handle.dragged() {
@@ -4115,7 +4364,9 @@ impl App {
                         .show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
                             ui.set_min_height(ui.available_height());
-                            if !self.build.log.is_empty() {
+                            if debug_view {
+                                self.show_debug_output(ui, actions, &debug_log, auto_scroll);
+                            } else if !self.build.log.is_empty() {
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 let row_height = 18.0;
                                 let filter = self.log_filter;
@@ -4297,6 +4548,85 @@ impl App {
             self.settings.save();
         }
     }
+
+    fn show_debug_output(
+        &mut self,
+        ui: &mut egui::Ui,
+        actions: &mut Vec<Action>,
+        log: &[String],
+        auto_scroll: bool,
+    ) {
+        let input_height = 28.0;
+        let log_height = (ui.available_height() - input_height - 4.0).max(28.0);
+        let mut scroll = ScrollArea::vertical()
+            .id_salt("simple_embedded_debug_log")
+            .max_height(log_height)
+            .auto_shrink([false, false]);
+        if auto_scroll {
+            scroll = scroll.stick_to_bottom(true);
+        }
+        scroll.show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            if let Some(error) = &self.debug.error {
+                ui.label(RichText::new(error).size(11.0).color(theme::ERROR));
+            }
+            if log.is_empty() {
+                ui.label(
+                    RichText::new("启动 gdb 后，这里显示调试输出")
+                        .size(11.0)
+                        .color(theme::TEXT_FAINT),
+                );
+            }
+            for line in log {
+                let color = if line.contains("Error")
+                    || line.contains("error")
+                    || line.starts_with("No ")
+                {
+                    theme::ERROR
+                } else if line.starts_with('[') {
+                    theme::INFO
+                } else {
+                    theme::TEXT_DIM
+                };
+                ui.label(RichText::new(line).monospace().size(11.5).color(color));
+            }
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let send_width = 48.0;
+            let response = ui.add(
+                TextEdit::singleline(&mut self.debug.input)
+                    .id(Id::new("simple_embedded_debug_input"))
+                    .font(FontId::monospace(11.5))
+                    .text_color(theme::TEXT)
+                    .background_color(theme::BG)
+                    .desired_width((ui.available_width() - send_width - 8.0).max(80.0))
+                    .hint_text(
+                        RichText::new("gdb 命令，例如 info locals").color(theme::TEXT_FAINT),
+                    ),
+            );
+            let submitted =
+                response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            if submitted || ui.add(small_flat_button("发送", theme::ACCENT)).clicked() {
+                let command = self.debug.input.trim().to_owned();
+                if !command.is_empty() {
+                    self.debug.input.clear();
+                    actions.push(Action::DebugSend(command));
+                }
+            }
+        });
+    }
+}
+
+fn output_view_tab(ui: &mut egui::Ui, label: &str, active: bool) -> egui::Response {
+    ui.add(
+        Button::new(RichText::new(label).size(12.5).strong().color(if active {
+            theme::TEXT
+        } else {
+            theme::TEXT_FAINT
+        }))
+        .frame(false),
+    )
 }
 
 fn small_flat_button(text: &str, color: Color32) -> egui::Button<'static> {

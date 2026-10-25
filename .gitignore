@@ -4,3 +4,5 @@
 /examples/blink/build
 *.log
 /.opencode/
+.simple-embedded/
+*.se-workspace

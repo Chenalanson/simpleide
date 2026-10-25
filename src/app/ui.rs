@@ -262,8 +262,10 @@ impl App {
                                 }
                                 ui.add_space(6.0);
                                 let spacing = ui.spacing().item_spacing.x;
+                                let columns = 3.0;
                                 let button_width =
-                                    ((ui.available_width() - spacing) / 2.0).max(0.0);
+                                    ((ui.available_width() - spacing * (columns - 1.0)) / columns)
+                                        .max(0.0);
                                 ui.horizontal(|ui| {
                                     let left_text = if has_project { "更换" } else { "导入" };
                                     let left = if has_project {
@@ -306,6 +308,44 @@ impl App {
                                     {
                                         actions.push(Action::OpenSettings);
                                     }
+                                    let workspace = if has_project {
+                                        egui::Button::new(
+                                            RichText::new("工作区")
+                                                .size(12.5)
+                                                .color(theme::ACCENT),
+                                        )
+                                        .fill(theme::SURFACE)
+                                        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                                        .corner_radius(6)
+                                    } else {
+                                        theme::secondary_button("工作区")
+                                    };
+                                    let workspace_response = ui
+                                        .add_sized([button_width, 28.0], workspace)
+                                        .on_hover_text(
+                                            "生成 .se-workspace，双击即可打开本工程",
+                                        );
+                                    egui::Popup::menu(&workspace_response).show(|ui| {
+                                        ui.set_min_width(190.0);
+                                        if has_project
+                                            && ui.button("生成并关联工作区文件").clicked()
+                                        {
+                                            actions.push(Action::CreateWorkspace);
+                                            ui.close();
+                                        }
+                                        if ui.button("打开工作区文件...").clicked() {
+                                            actions.push(Action::OpenWorkspacePicker);
+                                            ui.close();
+                                        }
+                                        if has_project {
+                                            ui.separator();
+                                            if ui.button("打开工程配置 settings.json").clicked()
+                                            {
+                                                actions.push(Action::OpenProjectConfig);
+                                                ui.close();
+                                            }
+                                        }
+                                    });
                                 });
                             });
                     });
@@ -313,20 +353,24 @@ impl App {
                 let mut resource_open = self.resource_open;
                 let mut info_open = self.info_open;
                 let mut tree_clipped = false;
-                let resource_anim = ui.ctx().animate_bool_with_time_and_easing(
-                    Id::new("simple_embedded_resource_anim"),
-                    resource_open,
-                    0.22,
-                    egui::emath::easing::cubic_in_out,
-                );
-                let info_anim = ui.ctx().animate_bool_with_time_and_easing(
-                    Id::new("simple_embedded_info_anim"),
-                    info_open,
-                    0.22,
-                    egui::emath::easing::cubic_in_out,
-                );
-                if (resource_anim > 0.0 && resource_anim < 1.0)
-                    || (info_anim > 0.0 && info_anim < 1.0)
+                let mut resource_state =
+                    egui::collapsing_header::CollapsingState::load_with_default_open(
+                        ui.ctx(),
+                        Id::new("simple_embedded_resource_body"),
+                        resource_open,
+                    );
+                resource_state.set_open(resource_open);
+                let resource_openness = resource_state.openness(ui.ctx());
+                let mut info_state =
+                    egui::collapsing_header::CollapsingState::load_with_default_open(
+                        ui.ctx(),
+                        Id::new("simple_embedded_info_body"),
+                        info_open,
+                    );
+                info_state.set_open(info_open);
+                let info_openness = info_state.openness(ui.ctx());
+                if (resource_openness > 0.0 && resource_openness < 1.0)
+                    || (info_openness > 0.0 && info_openness < 1.0)
                 {
                     ui.ctx().request_repaint();
                 }
@@ -342,8 +386,9 @@ impl App {
                             .show(ui, |ui| {
                                 ui.spacing_mut().interact_size.y = 18.0;
                                 ui.horizontal(|ui| {
-                                    if section_chevron(ui, resource_anim).clicked() {
+                                    if section_chevron(ui, resource_openness).clicked() {
                                         resource_open = !resource_open;
+                                        resource_state.set_open(resource_open);
                                     }
                                     let (bar_rect, _) = ui
                                         .allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
@@ -441,8 +486,8 @@ impl App {
                                 });
                             });
 
-                        if resource_open || resource_anim > 0.001 {
-                            ui.add_space(6.0 * resource_anim);
+                        resource_state.show_body_unindented(ui, |ui| {
+                            ui.add_space(6.0);
                             let tree_budget = if has_project {
                                 (ui.available_height() - 56.0).max(80.0)
                             } else {
@@ -453,27 +498,10 @@ impl App {
                             } else {
                                 tree_budget
                             };
-                            let measured_id = Id::new("simple_embedded_file_tree_measured");
-                            let measured = ui
-                                .data(|data| data.get_temp::<f32>(measured_id))
-                                .unwrap_or(tree_cap);
-                            let target_height = measured.clamp(1.0, tree_cap);
-                            let fully_open = resource_open && resource_anim >= 0.999;
-                            let view_height = if fully_open {
-                                target_height
-                            } else {
-                                (target_height * resource_anim).max(1.0)
-                            };
-                            let mut area = ScrollArea::vertical()
+                            let tree_output = ScrollArea::vertical()
                                 .id_salt("simple_embedded_file_tree")
-                                .max_height(view_height)
-                                .auto_shrink([false, !fully_open]);
-                            if !fully_open {
-                                area = area.scroll_bar_visibility(
-                                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
-                                );
-                            }
-                            let tree_output = area
+                                .max_height(tree_cap)
+                                .auto_shrink([false, true])
                                 .show(ui, |ui| {
                                     Frame::new().inner_margin(Margin::symmetric(5, 4)).show(
                                         ui,
@@ -513,43 +541,40 @@ impl App {
                                         },
                                     );
                                 });
-                            let measured_height = tree_output.content_size.y.max(1.0);
-                            ui.data_mut(|data| {
-                                data.insert_temp(measured_id, measured_height);
-                            });
 
-                            if has_project && fully_open {
+                            if has_project {
                                 let clipped = tree_output.content_size.y
                                     > tree_output.inner_rect.height() + 0.5;
                                 tree_clipped = clipped;
-                                let can_resize = info_open && clipped;
-                                let (split_rect, split_response) = ui.allocate_exact_size(
-                                    egui::vec2(ui.available_width(), 8.0),
-                                    if can_resize {
-                                        Sense::drag()
+                                if resource_open && resource_openness >= 0.999 {
+                                    let can_resize = info_open && clipped;
+                                    let (split_rect, split_response) = ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), 8.0),
+                                        if can_resize {
+                                            Sense::drag()
+                                        } else {
+                                            Sense::hover()
+                                        },
+                                    );
+                                    let split_response = if can_resize {
+                                        split_response
+                                            .on_hover_cursor(egui::CursorIcon::ResizeVertical)
                                     } else {
-                                        Sense::hover()
-                                    },
-                                );
-                                let split_response = if can_resize {
-                                    split_response.on_hover_cursor(egui::CursorIcon::ResizeVertical)
-                                } else {
-                                    split_response
-                                };
-                                if split_response.dragged() {
-                                    self.left_split = (self.left_split
-                                        + split_response.drag_delta().y / tree_budget)
-                                        .clamp(0.18, 0.82);
-                                    self.settings.left_split = self.left_split;
+                                        split_response
+                                    };
+                                    if split_response.dragged() {
+                                        self.left_split = (self.left_split
+                                            + split_response.drag_delta().y / tree_budget)
+                                            .clamp(0.18, 0.82);
+                                        self.settings.left_split = self.left_split;
+                                    }
+                                    if split_response.drag_stopped() {
+                                        self.settings.save();
+                                    }
+                                    let _ = split_rect;
                                 }
-                                if split_response.drag_stopped() {
-                                    self.settings.save();
-                                }
-                                let _ = split_rect;
                             }
-                        } else if has_project {
-                            // Keep the project-info header tight under the collapsed explorer.
-                        }
+                        });
 
                         if has_project {
                             let header_height = 32.0;
@@ -562,17 +587,14 @@ impl App {
                             } else {
                                 0.0
                             };
-                            let leading = if info_open {
-                                6.0 * info_anim
-                            } else {
-                                closed_pad * (1.0 - info_anim)
-                            };
+                            let leading =
+                                6.0 * info_openness + closed_pad * (1.0 - info_openness);
                             ui.add_space(leading);
-                            info_header_row(ui, &mut info_open, info_anim);
-                            if info_open || info_anim > 0.001 {
-                                ui.add_space(6.0 * info_anim);
-                                let available = (ui.available_height() - 2.0).max(1.0);
-                                let height = (available * info_anim).max(1.0);
+                            info_header_row(ui, &mut info_open, info_openness);
+                            info_state.set_open(info_open);
+                            info_state.show_body_unindented(ui, |ui| {
+                                ui.add_space(6.0);
+                                let height = (ui.available_height() - 2.0).max(80.0);
                                 Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
                                     ui,
                                     |ui| {
@@ -580,7 +602,7 @@ impl App {
                                             .id_salt("simple_embedded_project_meta")
                                             .max_height(height)
                                             .auto_shrink([false, false]);
-                                        if !(info_open && info_anim >= 0.999) {
+                                        if !(info_open && info_openness >= 0.999) {
                                             area = area.scroll_bar_visibility(
                                                 egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
                                             );
@@ -588,7 +610,7 @@ impl App {
                                         area.show(ui, |ui| self.show_project_meta(ui, actions));
                                     },
                                 );
-                            }
+                            });
                         }
                     },
                 );
@@ -1085,6 +1107,7 @@ impl App {
                         "请在左上角选择工程并开始"
                     };
                     let rect = ui.max_rect();
+                    self.last_editor_rect = Some(rect);
                     ui.painter().text(
                         rect.center(),
                         Align2::CENTER_CENTER,
@@ -1101,6 +1124,7 @@ impl App {
                 self.show_tab_strip(ui, actions);
                 self.show_editor_toolbar(ui, actions);
                 let editor_rect = ui.available_rect_before_wrap();
+                self.last_editor_rect = Some(editor_rect);
                 let active_index = self.active.unwrap_or(0);
                 let primary_index = self
                     .split_primary
@@ -2750,11 +2774,7 @@ impl App {
         }
     }
 
-    pub(super) fn show_debug_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
-        let mut open = self.debug.open;
-        let mut action = None;
-        let mut clear_log = false;
-        let mut send = false;
+    pub(super) fn show_debug_overlay(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let running = self
             .debug
             .session
@@ -2766,174 +2786,136 @@ impl App {
             .session
             .as_ref()
             .is_some_and(|session| session.started);
-        let target = self
-            .debug
-            .target
+        let has_session = self.debug.session.is_some();
+        let (status_color, status) = if self.debug.error.is_some() {
+            (theme::ERROR, "错误")
+        } else if has_session {
+            if running {
+                (theme::SUCCESS, "运行中")
+            } else {
+                (theme::TEXT_FAINT, "已停止")
+            }
+        } else {
+            (theme::TEXT_FAINT, "未启动")
+        };
+        let target_path = self.debug.target.clone();
+        let target_name = target_path
             .as_ref()
-            .map(|path| util::display_path(path))
+            .map(|path| util::file_name(path))
             .unwrap_or_else(|| "未选择调试程序".to_owned());
-        let log = self
-            .debug
-            .session
-            .as_ref()
-            .map(|session| session.log.clone())
-            .unwrap_or_else(|| self.debug.log.clone());
-        egui::Window::new("调试")
-            .id(Id::new("simple_embedded_debug"))
-            .title_bar(false)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([820.0, 520.0])
-            .min_height(420.0)
-            .frame(
-                Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
-                    .inner_margin(Margin::same(12))
-                    .corner_radius(6),
-            )
+        let target_full = target_path.as_ref().map(|path| util::display_path(path));
+        let breakpoints = self.debug.breakpoints.len();
+        let screen = ctx.content_rect();
+        let anchor = self.last_editor_rect.unwrap_or(screen);
+        let width = 300.0_f32.min((anchor.width() - 20.0).max(260.0));
+        let max_x = (screen.right() - width - 8.0).max(screen.left() + 8.0);
+        let position = egui::pos2(
+            (anchor.right() - width - 12.0).clamp(screen.left() + 8.0, max_x),
+            (anchor.top() + 8.0).max(screen.top() + 8.0),
+        );
+        let mut close = false;
+        let mut action = None;
+        egui::Area::new(Id::new("simple_embedded_debug_overlay"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(position)
             .show(ctx, |ui| {
-                ui.set_min_width(780.0);
-                ui.set_min_height(390.0);
-                ui.visuals_mut().override_text_color = Some(theme::TEXT);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("调试").size(16.0).strong().color(theme::TEXT));
-                    let (status_color, status) = if self.debug.error.is_some() {
-                        (theme::ERROR, "错误")
-                    } else if self.debug.session.is_some() {
-                        if running {
-                            (theme::SUCCESS, "调试器运行中")
-                        } else {
-                            (theme::TEXT_FAINT, "调试器已停止")
-                        }
-                    } else {
-                        (theme::TEXT_FAINT, "未启动")
-                    };
-                    ui.label(RichText::new(status).size(11.0).color(status_color));
-                    ui.label(RichText::new(&target).size(10.5).color(theme::TEXT_FAINT));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if window_close_button(ui) {
-                            open = false;
-                        }
-                    });
-                });
-                if let Some(error) = &self.debug.error {
-                    ui.label(RichText::new(error).size(11.0).color(theme::ERROR));
-                }
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let start_label = if self.debug.session.is_none() {
-                        "启动"
-                    } else if started {
-                        "继续"
-                    } else {
-                        "运行"
-                    };
-                    if ui.add(theme::primary_button(start_label)).clicked() {
-                        action = Some(Action::DebugContinue);
-                    }
-                    if ui
-                        .add(theme::secondary_button("下一步"))
-                        .on_hover_text("F10")
-                        .clicked()
-                    {
-                        action = Some(Action::DebugStepOver);
-                    }
-                    if ui
-                        .add(theme::secondary_button("单步"))
-                        .on_hover_text("F11")
-                        .clicked()
-                    {
-                        action = Some(Action::DebugStepInto);
-                    }
-                    if ui
-                        .add(theme::secondary_button("跳出"))
-                        .on_hover_text("Shift+F11")
-                        .clicked()
-                    {
-                        action = Some(Action::DebugFinish);
-                    }
-                    if ui
-                        .add(theme::secondary_button("停止"))
-                        .on_hover_text("Shift+F5")
-                        .clicked()
-                    {
-                        action = Some(Action::DebugStop);
-                    }
-                    if ui.add(theme::secondary_button("清空")).clicked() {
-                        clear_log = true;
-                    }
-                    ui.label(
-                        RichText::new(format!("{} 个断点", self.debug.breakpoints.len()))
-                            .size(10.5)
-                            .color(theme::TEXT_FAINT),
-                    );
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let response = ui.add(
-                        TextEdit::singleline(&mut self.debug.input)
-                            .id(Id::new("simple_embedded_debug_input"))
-                            .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
-                            .desired_width(420.0)
-                            .hint_text(
-                                RichText::new("gdb 命令，例如 info locals")
-                                    .color(theme::TEXT_FAINT),
-                            ),
-                    );
-                    if (response.lost_focus()
-                        && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                        || ui.button("发送").clicked()
-                    {
-                        send = true;
-                    }
-                });
-                ui.separator();
-                ScrollArea::vertical()
-                    .id_salt("simple_embedded_debug_console")
-                    .stick_to_bottom(true)
-                    .max_height(330.0)
-                    .auto_shrink([false, false])
+                Frame::new()
+                    .fill(theme::PANEL_RAISED)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .corner_radius(8)
+                    .inner_margin(Margin::symmetric(10, 7))
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        if log.is_empty() {
-                            ui.label(
-                                RichText::new("启动 gdb 后，这里显示调试输出")
-                                    .size(11.0)
-                                    .color(theme::TEXT_FAINT),
+                        ui.set_width(width - 20.0);
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+                        ui.horizontal(|ui| {
+                            colored_dot(ui, status_color, 6.0);
+                            ui.label(RichText::new("调试").size(12.5).strong().color(theme::TEXT));
+                            ui.label(RichText::new(status).size(10.5).color(status_color));
+                            let target = ui.add(
+                                Label::new(
+                                    RichText::new(target_name.clone())
+                                        .size(10.5)
+                                        .color(theme::TEXT_FAINT),
+                                )
+                                .truncate(),
                             );
+                            if let Some(full) = &target_full {
+                                target.on_hover_text(full);
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if window_close_button(ui) {
+                                    close = true;
+                                }
+                            });
+                        });
+                        if let Some(error) = &self.debug.error {
+                            ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
                         }
-                        for line in &log {
-                            let color = if line.contains("Error")
-                                || line.contains("error")
-                                || line.starts_with("No ")
-                            {
-                                theme::ERROR
-                            } else if line.starts_with('[') {
-                                theme::INFO
+                        ui.horizontal(|ui| {
+                            let continue_tip = if !has_session {
+                                "启动调试 (F5)"
+                            } else if started {
+                                "继续 (F5)"
                             } else {
-                                theme::TEXT_DIM
+                                "运行 (F5)"
                             };
-                            ui.label(RichText::new(line).monospace().size(11.5).color(color));
-                        }
+                            if debug_icon_button(ui, DebugIcon::Continue, true, continue_tip)
+                                .clicked()
+                            {
+                                action = Some(Action::DebugContinue);
+                            }
+                            if debug_icon_button(
+                                ui,
+                                DebugIcon::StepOver,
+                                has_session,
+                                "下一步 (F10)",
+                            )
+                            .clicked()
+                            {
+                                action = Some(Action::DebugStepOver);
+                            }
+                            if debug_icon_button(
+                                ui,
+                                DebugIcon::StepInto,
+                                has_session,
+                                "单步进入 (F11)",
+                            )
+                            .clicked()
+                            {
+                                action = Some(Action::DebugStepInto);
+                            }
+                            if debug_icon_button(
+                                ui,
+                                DebugIcon::StepOut,
+                                has_session,
+                                "跳出 (Shift+F11)",
+                            )
+                            .clicked()
+                            {
+                                action = Some(Action::DebugFinish);
+                            }
+                            if debug_icon_button(
+                                ui,
+                                DebugIcon::Stop,
+                                has_session,
+                                "停止 (Shift+F5)",
+                            )
+                            .clicked()
+                            {
+                                action = Some(Action::DebugStop);
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(
+                                    RichText::new(format!("{breakpoints} 断点"))
+                                        .size(10.0)
+                                        .color(theme::TEXT_FAINT),
+                                );
+                            });
+                        });
                     });
             });
-        self.debug.open = open;
-        if clear_log {
-            if let Some(session) = &mut self.debug.session {
-                session.log.clear();
-            } else {
-                self.debug.log.clear();
-            }
-        }
-        if send {
-            let command = self.debug.input.trim().to_owned();
-            if !command.is_empty() {
-                self.debug.input.clear();
-                action = Some(Action::DebugSend(command));
-            }
+        if close {
+            self.debug.open = false;
         }
         if let Some(action) = action {
             actions.push(action);
@@ -3853,7 +3835,7 @@ impl App {
                         .color(theme::TEXT),
                 );
                 ui.label(
-                    RichText::new("保存在本机工程设置")
+                    RichText::new("保存在工程 .simple-embedded/settings.json")
                         .size(10.5)
                         .color(theme::TEXT_FAINT),
                 );
@@ -3866,7 +3848,7 @@ impl App {
             ui.add_space(2.0);
             ui.label(
                 RichText::new(
-                    "Make 工程保存时会按差异同步到 Makefile；Keil 工程只保存到本机设置，不修改 .uvprojx。",
+                    "Make 工程保存时会按差异同步到 Makefile；Keil 工程写入工程配置，不修改 .uvprojx。",
                 )
                 .size(10.5)
                 .color(theme::TEXT_FAINT),
@@ -4115,7 +4097,7 @@ impl App {
             });
             ui.add_space(2.0);
             ui.label(
-                RichText::new("保存在本机工程设置中；烧录始终在本地工程目录执行。")
+                RichText::new("保存在工程 .simple-embedded/settings.json；烧录始终在本地工程目录执行。")
                     .size(10.5)
                     .color(theme::TEXT_FAINT),
             );
@@ -4421,7 +4403,7 @@ impl App {
             });
             ui.add_space(2.0);
             ui.label(
-                RichText::new("保存在本机工程设置中，不会修改 Makefile 或 .uvprojx。")
+                RichText::new("保存在工程 .simple-embedded/settings.json；Makefile 工程会按差异同步，Keil .uvprojx 不会被修改。")
                     .size(10.5)
                     .color(theme::TEXT_FAINT),
             );
@@ -4579,7 +4561,7 @@ impl App {
             });
             ui.add_space(3.0);
             ui.label(
-                RichText::new("保存在本机工程设置中，不会修改 Makefile 或 .uvprojx。")
+                RichText::new("保存在工程 .simple-embedded/settings.json；Makefile 工程会按差异同步，Keil .uvprojx 不会被修改。")
                     .size(10.5)
                     .color(theme::TEXT_FAINT),
             );
@@ -4661,11 +4643,6 @@ impl App {
                         .size(18.0)
                         .strong()
                         .color(theme::TEXT),
-                );
-                ui.label(
-                    RichText::new("零项目文件 · 构建配置保存在本机")
-                        .size(10.0)
-                        .color(theme::TEXT_FAINT),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
@@ -5055,7 +5032,7 @@ impl App {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut draft.show_hidden, "显示隐藏文件");
-                            ui.checkbox(&mut draft.auto_scroll_output, "构建输出自动滚动");
+                            ui.checkbox(&mut draft.auto_scroll_output, "输出自动滚动");
                         });
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut draft.respect_gitignore, "遵循 .gitignore");
@@ -5073,7 +5050,7 @@ impl App {
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new(format!(
-                                "构建命令保存在 {}，不会向工程目录写入任何文件。",
+                                "全局设置保存在 {}；工程构建与烧录配置保存在工程的 .simple-embedded/settings.json。",
                                 settings_path().display()
                             ))
                             .size(9.0)
@@ -5192,10 +5169,9 @@ impl App {
             self.settings.ignore_patterns = draft.ignore_patterns.trim().to_owned();
             self.settings.save();
 
-            if let Some(root) = &project_root {
+            if project_root.is_some() {
                 self.build_config = draft.config.clone();
-                self.settings.set_build_config(root, &draft.config);
-                self.settings.save();
+                self.persist_build_config();
             }
             if let Some(tree) = &mut self.tree {
                 tree.set_show_hidden(draft.show_hidden);
@@ -6314,6 +6290,157 @@ fn window_close_button(ui: &mut egui::Ui) -> bool {
         },
     );
     response.clicked()
+}
+
+#[derive(Clone, Copy)]
+enum DebugIcon {
+    Continue,
+    StepOver,
+    StepInto,
+    StepOut,
+    Stop,
+}
+
+fn debug_icon_button(
+    ui: &mut egui::Ui,
+    icon: DebugIcon,
+    enabled: bool,
+    tip: &str,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(30.0, 26.0),
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    if enabled && response.hovered() {
+        ui.painter()
+            .rect_filled(rect.shrink(2.0), CornerRadius::same(4), theme::HOVER);
+    }
+    let color = if !enabled {
+        theme::TEXT_FAINT
+    } else if matches!(icon, DebugIcon::Stop) {
+        theme::ERROR
+    } else if response.hovered() {
+        theme::ACCENT
+    } else {
+        theme::TEXT_DIM
+    };
+    paint_debug_icon(ui.painter(), rect, icon, color);
+    if enabled {
+        response.on_hover_text(tip)
+    } else {
+        response.on_disabled_hover_text(tip)
+    }
+}
+
+fn paint_debug_icon(painter: &egui::Painter, rect: egui::Rect, icon: DebugIcon, color: Color32) {
+    let center = rect.center();
+    let stroke = Stroke::new(1.6_f32, color);
+    match icon {
+        DebugIcon::Continue => {
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    center + egui::vec2(-4.0, -6.0),
+                    center + egui::vec2(-4.0, 6.0),
+                    center + egui::vec2(6.0, 0.0),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        DebugIcon::Stop => {
+            painter.rect_filled(
+                egui::Rect::from_center_size(center, egui::vec2(9.0, 9.0)),
+                CornerRadius::same(1),
+                color,
+            );
+        }
+        DebugIcon::StepOver => {
+            painter.add(egui::Shape::line(
+                vec![
+                    center + egui::vec2(-7.0, -1.0),
+                    center + egui::vec2(-4.0, -5.0),
+                    center + egui::vec2(1.0, -5.0),
+                    center + egui::vec2(4.0, -2.0),
+                ],
+                stroke,
+            ));
+            paint_debug_arrow(
+                painter,
+                center + egui::vec2(5.0, -1.0),
+                egui::vec2(1.0, 0.4),
+                color,
+            );
+            painter.circle_filled(center + egui::vec2(-1.0, 4.0), 2.0, color);
+        }
+        DebugIcon::StepInto => {
+            painter.add(egui::Shape::line(
+                vec![
+                    center + egui::vec2(-7.0, -5.0),
+                    center + egui::vec2(-7.0, 4.0),
+                    center + egui::vec2(7.0, 4.0),
+                    center + egui::vec2(7.0, -5.0),
+                ],
+                stroke,
+            ));
+            painter.line_segment(
+                [
+                    center + egui::vec2(0.0, -7.0),
+                    center + egui::vec2(0.0, 1.0),
+                ],
+                stroke,
+            );
+            paint_debug_arrow(
+                painter,
+                center + egui::vec2(0.0, 2.0),
+                egui::vec2(0.0, 1.0),
+                color,
+            );
+        }
+        DebugIcon::StepOut => {
+            painter.add(egui::Shape::line(
+                vec![
+                    center + egui::vec2(-7.0, 5.0),
+                    center + egui::vec2(-7.0, -4.0),
+                    center + egui::vec2(7.0, -4.0),
+                    center + egui::vec2(7.0, 5.0),
+                ],
+                stroke,
+            ));
+            painter.line_segment(
+                [
+                    center + egui::vec2(0.0, 7.0),
+                    center + egui::vec2(0.0, -2.0),
+                ],
+                stroke,
+            );
+            paint_debug_arrow(
+                painter,
+                center + egui::vec2(0.0, -3.0),
+                egui::vec2(0.0, -1.0),
+                color,
+            );
+        }
+    }
+}
+
+fn paint_debug_arrow(
+    painter: &egui::Painter,
+    tip: egui::Pos2,
+    direction: egui::Vec2,
+    color: Color32,
+) {
+    let direction = direction.normalized();
+    let side = egui::vec2(-direction.y, direction.x);
+    let back = tip - direction * 4.5;
+    painter.add(egui::Shape::convex_polygon(
+        vec![tip, back + side * 3.0, back - side * 3.0],
+        color,
+        Stroke::NONE,
+    ));
 }
 
 fn find_text_field(

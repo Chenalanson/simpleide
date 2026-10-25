@@ -32,6 +32,16 @@ pub fn install(ctx: &egui::Context) {
     ctx.global_style_mut(|style| {
         style.visuals = egui::Visuals::dark();
 
+        // This is an end-user application, not an egui playground. The debug
+        // overlays are enabled by default in debug builds and paint red boxes
+        // around widgets whose screen rect happens to move during layout
+        // animations. That looks like a rendering bug, so keep them off.
+        #[cfg(debug_assertions)]
+        {
+            style.debug.show_unaligned = false;
+            style.debug.warn_if_rect_changes_id = false;
+        }
+
         let visuals = &mut style.visuals;
         visuals.panel_fill = BG;
         visuals.window_fill = PANEL_RAISED;

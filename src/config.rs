@@ -1,7 +1,8 @@
-//! Persisted user preferences and per-project build commands.
+//! Persisted user preferences, per-project settings, and workspace files.
 //!
-//! Nothing is written into the project itself: a folder is the project. Settings
-//! live under the user's application-data directory.
+//! A folder is still the project. Build and flash configuration may live with
+//! the project in `.simple-embedded/settings.json`; the user-wide settings file
+//! remains the fallback for older projects and for global editor preferences.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -11,13 +12,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::{RunSpec, TaskKind};
 use crate::flash::{FlashTool, OpenOcdConfig, PyOcdConfig};
-use crate::util::{display_path, project_key, shell_quote_posix};
+use crate::util::{display_path, file_name, project_key, shell_quote_posix};
 
 pub const APP_NAME: &str = "Simple embedded";
 pub const APP_AUTHOR: &str = "smallYYY";
 const APP_DATA_DIR: &str = "SimpleEmbedded";
 const LEGACY_APP_DATA_DIR: &str = "MiniEIDE";
 const MAX_RECENT_PROJECTS: usize = 8;
+
+/// Folder inside the project that holds project-local application settings.
+pub const PROJECT_CONFIG_DIR: &str = ".simple-embedded";
+/// File name of the project-local settings file.
+pub const PROJECT_CONFIG_FILE: &str = "settings.json";
+/// Extension of workspace files that can be opened by the application.
+pub const WORKSPACE_EXTENSION: &str = "se-workspace";
+const WORKSPACE_TYPE_NAME: &str = "SimpleEmbedded.Workspace";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BuildTarget {
@@ -511,6 +520,196 @@ fn find_posix_tools_dir() -> Option<PathBuf> {
     candidates
         .into_iter()
         .find(|dir| dir.join("rm.exe").is_file())
+}
+
+/// Project-local settings stored in `<project>/.simple-embedded/settings.json`.
+///
+/// The file is intentionally plain JSON so it can be edited by hand and
+/// committed next to the sources. Unknown fields are ignored on load.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectSettings {
+    pub version: u32,
+    pub build: BuildConfig,
+}
+
+impl Default for ProjectSettings {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            build: BuildConfig::default(),
+        }
+    }
+}
+
+impl ProjectSettings {
+    pub fn path(project_root: &Path) -> PathBuf {
+        project_root
+            .join(PROJECT_CONFIG_DIR)
+            .join(PROJECT_CONFIG_FILE)
+    }
+
+    pub fn exists(project_root: &Path) -> bool {
+        Self::path(project_root).is_file()
+    }
+
+    /// Load the project file. `Ok(None)` means the project has no local
+    /// settings yet; an error means the file exists but cannot be parsed.
+    pub fn load(project_root: &Path) -> Result<Option<Self>, String> {
+        let path = Self::path(project_root);
+        let Ok(bytes) = std::fs::read(&path) else {
+            return Ok(None);
+        };
+        let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+        match serde_json::from_slice::<Self>(bytes) {
+            Ok(mut settings) => {
+                settings.build.build_jobs = settings.build.build_jobs.min(128);
+                Ok(Some(settings))
+            }
+            Err(err) => Err(format!("无法解析 {}：{err}", display_path(&path))),
+        }
+    }
+
+    pub fn save(project_root: &Path, build: &BuildConfig) -> Result<PathBuf, String> {
+        let path = Self::path(project_root);
+        let Some(parent) = path.parent() else {
+            return Err("工程配置路径无效".to_owned());
+        };
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("无法创建 {}：{err}", display_path(parent)))?;
+        let settings = Self {
+            version: 1,
+            build: build.clone(),
+        };
+        let mut bytes = serde_json::to_vec_pretty(&settings)
+            .map_err(|err| format!("无法序列化工程配置：{err}"))?;
+        bytes.push(b'\n');
+        std::fs::write(&path, bytes)
+            .map_err(|err| format!("无法写入 {}：{err}", display_path(&path)))?;
+        Ok(path)
+    }
+}
+
+/// Minimal VS Code style workspace file. Only the first folder is used.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkspaceFile {
+    pub version: u32,
+    pub name: String,
+    pub folders: Vec<WorkspaceFolder>,
+    /// Optional path (relative to the workspace file) of a project settings
+    /// file. The application always prefers `<folder>/.simple-embedded`.
+    pub settings: Option<String>,
+}
+
+impl Default for WorkspaceFile {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            name: String::new(),
+            folders: vec![WorkspaceFolder {
+                path: ".".to_owned(),
+            }],
+            settings: Some(format!("{PROJECT_CONFIG_DIR}/{PROJECT_CONFIG_FILE}")),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkspaceFolder {
+    pub path: String,
+}
+
+impl Default for WorkspaceFolder {
+    fn default() -> Self {
+        Self {
+            path: ".".to_owned(),
+        }
+    }
+}
+
+pub fn is_workspace_file(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case(WORKSPACE_EXTENSION)
+            || extension.eq_ignore_ascii_case("code-workspace")
+    })
+}
+
+/// Resolve a workspace file to its project folder.
+pub fn resolve_workspace_file(path: &Path) -> Result<PathBuf, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|err| format!("无法读取工作区文件 {}：{err}", display_path(path)))?;
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+    let workspace: WorkspaceFile = serde_json::from_slice(bytes)
+        .map_err(|err| format!("无法解析工作区文件 {}：{err}", display_path(path)))?;
+    let folder = workspace
+        .folders
+        .first()
+        .map(|folder| folder.path.trim())
+        .filter(|folder| !folder.is_empty())
+        .unwrap_or(".");
+    let folder = PathBuf::from(folder);
+    let folder = if folder.is_absolute() {
+        folder
+    } else {
+        path.parent().unwrap_or_else(|| Path::new(".")).join(folder)
+    };
+    if !folder.is_dir() {
+        return Err(format!("工作区指向的目录不存在：{}", display_path(&folder)));
+    }
+    Ok(folder)
+}
+
+/// Write `<project>/<name>.se-workspace` and return its path.
+pub fn write_workspace_file(project_root: &Path) -> Result<PathBuf, String> {
+    let name = file_name(project_root);
+    let path = project_root.join(format!("{name}.{WORKSPACE_EXTENSION}"));
+    let workspace = WorkspaceFile {
+        version: 1,
+        name: name.clone(),
+        folders: vec![WorkspaceFolder {
+            path: ".".to_owned(),
+        }],
+        settings: Some(format!("{PROJECT_CONFIG_DIR}/{PROJECT_CONFIG_FILE}")),
+    };
+    let mut bytes =
+        serde_json::to_vec_pretty(&workspace).map_err(|err| format!("无法序列化工作区：{err}"))?;
+    bytes.push(b'\n');
+    std::fs::write(&path, bytes)
+        .map_err(|err| format!("无法写入 {}：{err}", display_path(&path)))?;
+    Ok(path)
+}
+
+/// Register `.se-workspace` with the current executable so double-clicking a
+/// workspace file opens this application. This only touches HKCU.
+pub fn register_workspace_association() -> Result<PathBuf, String> {
+    if !cfg!(target_os = "windows") {
+        return Err("双击关联仅支持 Windows".to_owned());
+    }
+    let exe = std::env::current_exe().map_err(|err| format!("无法获取程序路径：{err}"))?;
+    let exe = display_path(&exe);
+    let extension_key = format!(r"HKCU\Software\Classes\.{WORKSPACE_EXTENSION}");
+    let class_key = format!(r"HKCU\Software\Classes\{WORKSPACE_TYPE_NAME}");
+    let icon_key = format!(r"HKCU\Software\Classes\{WORKSPACE_TYPE_NAME}\DefaultIcon");
+    let command_key = format!(r"HKCU\Software\Classes\{WORKSPACE_TYPE_NAME}\shell\open\command");
+    let command = format!("\"{exe}\" \"%1\"");
+    let entries = [
+        (extension_key.clone(), WORKSPACE_TYPE_NAME.to_owned()),
+        (class_key, "Simple embedded 工作区".to_owned()),
+        (icon_key, format!("\"{exe}\",0")),
+        (command_key, command),
+    ];
+    for (key, value) in &entries {
+        let status = std::process::Command::new("reg")
+            .args(["add", key, "/ve", "/d", value, "/f"])
+            .status()
+            .map_err(|err| format!("无法调用 reg.exe：{err}"))?;
+        if !status.success() {
+            return Err(format!("写入注册表失败：{key}"));
+        }
+    }
+    Ok(PathBuf::from(exe))
 }
 
 pub fn autodetect(project_root: &Path) -> BuildConfig {
@@ -1047,5 +1246,72 @@ mod tests {
         assert_eq!(spec.program, "openocd");
         assert!(spec.display.contains("program build/demo.hex"));
         assert!(!spec.display.starts_with("ssh"));
+    }
+
+    #[test]
+    fn project_settings_round_trip_preserves_flash_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BuildConfig {
+            build_command: "make".into(),
+            flash_tool: FlashTool::OpenOcd,
+            openocd: OpenOcdConfig {
+                executable: "C:/tools/openocd.exe".into(),
+                program_file: "${ExecutableName}.hex".into(),
+                target_config: "stm32f1x.cfg".into(),
+                interface_config: "stlink.cfg".into(),
+            },
+            ..BuildConfig::default()
+        };
+        let path = ProjectSettings::save(dir.path(), &config).unwrap();
+        assert!(path.ends_with("settings.json"));
+        assert!(path.parent().unwrap().ends_with(".simple-embedded"));
+        let loaded = ProjectSettings::load(dir.path()).unwrap().unwrap();
+        assert_eq!(loaded.build.flash_tool, FlashTool::OpenOcd);
+        assert_eq!(
+            loaded.build.openocd.executable,
+            "C:/tools/openocd.exe".to_owned()
+        );
+        assert_eq!(loaded.build.openocd.target_config, "stm32f1x.cfg");
+    }
+
+    #[test]
+    fn malformed_project_settings_are_reported_without_being_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ProjectSettings::path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{not json").unwrap();
+        assert!(ProjectSettings::load(dir.path()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"{not json");
+    }
+
+    #[test]
+    fn workspace_file_resolves_relative_project_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("demo");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = dir.path().join("demo.se-workspace");
+        std::fs::write(
+            &path,
+            br#"{"version":1,"name":"demo","folders":[{"path":"demo"}]}"#,
+        )
+        .unwrap();
+        assert!(is_workspace_file(&path));
+        assert_eq!(resolve_workspace_file(&path).unwrap(), project);
+    }
+
+    #[test]
+    fn generated_workspace_file_points_at_its_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_workspace_file(dir.path()).unwrap();
+        let expected = format!("{}.{WORKSPACE_EXTENSION}", file_name(dir.path()));
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(expected.as_str())
+        );
+        let workspace: WorkspaceFile =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(workspace.name, file_name(dir.path()));
+        assert_eq!(workspace.folders[0].path, ".");
+        assert_eq!(resolve_workspace_file(&path).unwrap(), dir.path());
     }
 }
