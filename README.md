@@ -136,7 +136,7 @@ cargo build --release
 powershell -ExecutionPolicy Bypass -File scripts\package-tools.ps1
 ```
 
-生成 `dist\simple-embedded\`（含 exe 和约 1.1 GB 的 ARM GNU 工具链 + make）。`dist/` 和 `tools/` 已加入 `.gitignore`，不会提交到仓库。
+生成 `dist\simple-embedded\`（含 exe 和约 1.1 GB 的 ARM GNU 工具链 + make）。仓库只追踪 `dist/` 下的所有 `.exe`（应用 exe 和 `tools` 里的工具 exe）；编译器 DLL、库、头文件、`tools.zip` 以及 `.compiler.tmp` / `.make.tmp` 仍被忽略，仅 exe 不足以构成完整可运行工具链。
 
 构建前会自动保存所有未保存文件，然后通过本机 shell（Windows 为 `cmd /S /C`）在工程根目录启动进程。日志从 stdout/stderr 双流读取；Windows 下停止会调用 `taskkill /T` 终止子进程树。
 

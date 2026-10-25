@@ -185,7 +185,7 @@ docs/                  README 截图和使用教程
 - 本地 Make 构建自动探测 Git for Windows / MSYS / Cygwin 的 `usr\bin` 并加入 PATH，保证 `rm` 等 POSIX 命令可执行。
 - `BuildConfig.extra_paths` 允许用户追加工具链目录，构建时统一前置到 PATH。
 - `Settings.compiler_path` / `make_path` / `use_bundled_toolchain` / `bundled_tools_dir` 是全局构建工具链配置，默认 `use_bundled_toolchain = true`。系统模式把所选编译器/make 的父目录前置到 PATH；软件自带模式使用 `bundled_tools_dir`（留空时优先 `<exe>/tools`，否则 `%APPDATA%\SimpleEmbedded\tools`；相对路径相对于 exe）中的工具。`toolchain.rs` 负责检测、PATH 目录和复制安装：安装时复制编译器根目录、make 及其 DLL，并写入 `toolchain.json`；安装完成后自动切换到软件自带模式。只影响本地构建和本地烧录，远程 SSH 不注入本地 PATH。
-- 软件自带工具的标准发布布局是 `simple-embedded.exe` + `tools/toolchain.json` + `tools/make/make.exe` + `tools/compiler/bin/arm-none-eabi-gcc.exe`。`scripts/package-tools.ps1` 会把 release exe、当前 ARM GCC 和 make 打包到 `dist/simple-embedded/`；`dist/` 和 `tools/` 必须在 `.gitignore` 中，不要把 1 GB 级工具链提交进仓库。
+- 软件自带工具的标准发布布局是 `simple-embedded.exe` + `tools/toolchain.json` + `tools/make/make.exe` + `tools/compiler/bin/arm-none-eabi-gcc.exe`。`scripts/package-tools.ps1` 会把 release exe、当前 ARM GCC 和 make 打包到 `dist/simple-embedded/`。仓库只追踪 `dist/` 下的所有 `*.exe`（应用 exe 和 `tools` 里的工具 exe）；编译器 DLL、库、头文件、`tools.zip`、`.compiler.tmp`、`.make.tmp` 仍被 `.gitignore` 忽略。仅 exe 不能构成完整可运行工具链，完整发布包仍需本地 `tools/` 目录。
 - 远程停止只保证结束本地 ssh 进程；远端进程是否退出取决于远端 shell。
 
 ### 配置
@@ -261,6 +261,7 @@ UI 改动后建议：
 - 远端：`origin` = https://gitee.com/chen_alanson/embedd.git
 - 主分支：`master`（跟踪 `origin/master`）
 - 本仓库开发时不要提交 `target/`、`examples/blink/build/`、`*.log`、`.opencode/`、`.simple-embedded/` 或 `*.se-workspace`；这些已写入 `.gitignore`。普通用户工程是否提交 `.simple-embedded/settings.json` / `.se-workspace` 由用户决定。
+- `dist/` 只追踪 `*.exe`：`.gitignore` 使用 `/dist/**/*` + `!/dist/**/` + `!/dist/**/*.exe`，并显式忽略 `.compiler.tmp` / `.make.tmp`。不要用 `git add -f` 把 DLL、工具链数据或 `tools.zip` 加进仓库。
 - 除非用户明确要求，不要自动 commit 或 push。
 - 本机 Git 全局配置路径 `D:\Cadence\SPB_Data\.gitconfig` 不存在时，Git 会报 global config 错误；可用仓库本地配置，或在命令中临时指定有效的 `GIT_CONFIG_GLOBAL`。
 - 本仓库当前本地作者配置：`chen_alanson <chen_alanson@user.noreply.gitee.com>`。

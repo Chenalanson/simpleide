@@ -1,5 +1,9 @@
 /target
-/dist
+/dist/**/*
+!/dist/**/
+!/dist/**/*.exe
+/dist/simple-embedded/tools/.compiler.tmp/
+/dist/simple-embedded/tools/.make.tmp/
 /tools
 /examples/blink/build
 /examples/test32/build
