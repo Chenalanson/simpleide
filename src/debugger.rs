@@ -157,6 +157,8 @@ impl DebugSession {
         session.send("set confirm off");
         session.send("set print pretty on");
         session.send("set breakpoint pending on");
+        // Prefer the target's comparators over very slow software watchpoints.
+        session.send("set can-use-hw-watchpoints 1");
         Ok(session)
     }
 
@@ -393,6 +395,41 @@ pub fn parse_stop_location(line: &str) -> Option<(String, usize)> {
         return None;
     }
     Some((path.to_owned(), line_no))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WatchpointNotice {
+    pub number: usize,
+    pub expression: String,
+    pub hardware: bool,
+}
+
+/// Parse gdb's watchpoint creation/hit line.
+///
+/// Examples:
+/// `Hardware watchpoint 2: counter`
+/// `Hardware read watchpoint 3: state`
+/// `Hardware access watchpoint 4: *(uint32_t*)0x20000000`
+/// `Watchpoint 5: value` (software fallback)
+pub fn parse_watchpoint(line: &str) -> Option<WatchpointNotice> {
+    let line = line.trim();
+    // GDB can prepend its prompt to a response when multiple commands are in
+    // flight, e.g. `(gdb) (gdb) Hardware watchpoint 2: uwTick`. Search for the
+    // stable "watchpoint N: expr" portion instead of requiring a clean prefix.
+    let lower = line.to_ascii_lowercase();
+    let start = lower.find("watchpoint ")?;
+    let rest = &line[start + "watchpoint ".len()..];
+    let (number, expression) = rest.split_once(':')?;
+    let number = number.trim().parse::<usize>().ok()?;
+    let expression = expression.trim();
+    if expression.is_empty() {
+        return None;
+    }
+    Some(WatchpointNotice {
+        number,
+        expression: expression.to_owned(),
+        hardware: lower[..start].contains("hardware"),
+    })
 }
 
 /// Parse gdb's warning for a breakpoint that has no compiled code.
@@ -676,6 +713,51 @@ mod tests {
             Some(("C:\\work\\main.c".to_owned(), 42))
         );
         assert_eq!(parse_uncompiled_line("Continuing."), None);
+    }
+
+    #[test]
+    fn parses_hardware_and_software_watchpoints() {
+        assert_eq!(
+            parse_watchpoint("Hardware watchpoint 2: counter"),
+            Some(WatchpointNotice {
+                number: 2,
+                expression: "counter".to_owned(),
+                hardware: true,
+            })
+        );
+        assert_eq!(
+            parse_watchpoint("Hardware read watchpoint 3: state.active"),
+            Some(WatchpointNotice {
+                number: 3,
+                expression: "state.active".to_owned(),
+                hardware: true,
+            })
+        );
+        assert_eq!(
+            parse_watchpoint("Hardware access watchpoint 4: *(uint32_t*)0x20000000"),
+            Some(WatchpointNotice {
+                number: 4,
+                expression: "*(uint32_t*)0x20000000".to_owned(),
+                hardware: true,
+            })
+        );
+        assert_eq!(
+            parse_watchpoint("Watchpoint 5: value"),
+            Some(WatchpointNotice {
+                number: 5,
+                expression: "value".to_owned(),
+                hardware: false,
+            })
+        );
+        assert_eq!(
+            parse_watchpoint("(gdb) (gdb) Hardware watchpoint 6: uwTick"),
+            Some(WatchpointNotice {
+                number: 6,
+                expression: "uwTick".to_owned(),
+                hardware: true,
+            })
+        );
+        assert_eq!(parse_watchpoint("Breakpoint 1 at 0x08000000"), None);
     }
 
     #[test]

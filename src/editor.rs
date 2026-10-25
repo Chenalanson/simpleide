@@ -118,6 +118,8 @@ pub struct Document {
     pub bookmarks: BTreeSet<usize>,
     pub layout_cache: SharedLayoutCache,
     pub minimap_cache: Option<crate::minimap::Cache>,
+    pub macro_issues: Vec<crate::macro_check::MacroIssue>,
+    pub macro_issue_revision: u64,
 }
 
 impl Document {
@@ -143,6 +145,8 @@ impl Document {
             bookmarks: BTreeSet::new(),
             layout_cache: highlight::new_cache(),
             minimap_cache: None,
+            macro_issues: Vec::new(),
+            macro_issue_revision: u64::MAX,
         })
     }
 

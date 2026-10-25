@@ -1,3 +1,8 @@
+#define SE_DUP_PIN GPIO_PIN0
+#define SE_DUP_PIN1 GPIO_PIN0
+#define SE_DUP_PORT GPIO_D
+#define SE_DUP_PORT1 GPIO_D
+
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
@@ -27,7 +32,12 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+#define PWM1PIN    GPIO_PIN0
+#define PWM1PORT    GPIO_D
+#define PWM2PIN    GPIO_PIN0
+#define PWM2PORT    GPIO_D
+#define PWM3PIN    GPIO_PIN0
+#define PWM3PORT    GPIO_D
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -182,12 +192,5 @@ void assert_failed(uint8_t *file, uint32_t line)
 }
 #endif /* USE_FULL_ASSERT */
 
-/* Simple embedded memory-check test. Intentionally out of bounds; not called. */
-__attribute__((unused))
-static void se_memory_check_test(void)
-{
-  int values[4];
-  values[4] = 123;
-  values[5] = values[4];
-}
+
 

@@ -87,6 +87,7 @@ struct SettingsDraft {
     word_wrap: bool,
     relative_line_numbers: bool,
     show_whitespace: bool,
+    check_duplicate_macro_values: bool,
     ruler_column: u16,
     use_spaces: bool,
     indent_width: u8,
@@ -99,6 +100,7 @@ struct SettingsDraft {
     auto_scroll_output: bool,
     show_minimap: bool,
     show_indent_guides: bool,
+    show_hover_info: bool,
     show_hidden: bool,
     respect_gitignore: bool,
     ignore_patterns: String,
@@ -324,14 +326,65 @@ struct DebugState {
     log_scan: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum MemoryCheckTab {
+    #[default]
+    Static,
+    Dynamic,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum WatchKind {
+    #[default]
+    Write,
+    Read,
+    Access,
+}
+
+impl WatchKind {
+    fn command(self) -> &'static str {
+        match self {
+            Self::Write => "watch",
+            Self::Read => "rwatch",
+            Self::Access => "awatch",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Write => "写入",
+            Self::Read => "读取",
+            Self::Access => "读写",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct HwWatchpoint {
+    number: Option<usize>,
+    expression: String,
+    kind: WatchKind,
+    hardware: Option<bool>,
+    hits: usize,
+    old_value: Option<String>,
+    new_value: Option<String>,
+}
+
 #[derive(Default)]
 struct MemoryCheckState {
     open: bool,
+    tab: MemoryCheckTab,
     findings: Vec<crate::memory_check::Finding>,
     files: usize,
     arrays: usize,
     error: Option<String>,
     query: String,
+    watch_input: String,
+    watch_kind: WatchKind,
+    watchpoints: Vec<HwWatchpoint>,
+    watch_filter: String,
+    watch_error: Option<String>,
+    watch_log_scan: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -414,6 +467,7 @@ struct SymbolState {
     truncated: bool,
     error: Option<String>,
     query: String,
+    scanned: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1018,6 +1072,8 @@ impl App {
         ));
         self.tabs.clear();
         self.active = None;
+        self.symbols.items.clear();
+        self.symbols.scanned = false;
         self.split_path = None;
         self.split_primary = None;
         self.split_focus = 0;
@@ -1358,6 +1414,7 @@ impl App {
             self.set_toast("请先打开一个工程文件夹", Severity::Warning);
             return;
         };
+        self.memory_check.tab = MemoryCheckTab::Static;
         let ignore = IgnoreRules::load(
             &root,
             self.settings.respect_gitignore,
@@ -1392,13 +1449,228 @@ impl App {
         }
     }
 
+    fn open_memory_check(&mut self) {
+        if self.project.is_none() {
+            self.set_toast("请先打开一个工程", Severity::Warning);
+            return;
+        }
+        if self.debug.session.is_some() {
+            self.memory_check.open = true;
+            self.memory_check.tab = MemoryCheckTab::Dynamic;
+            self.memory_check.watch_error = None;
+        } else {
+            self.run_memory_check();
+        }
+    }
+
+    fn add_hardware_watchpoint(&mut self, expression: &str, kind: WatchKind) {
+        let expression = expression.trim();
+        if expression.is_empty() {
+            return;
+        }
+        if self.debug.running {
+            self.set_toast("目标正在运行，请先暂停再添加 watchpoint", Severity::Warning);
+            return;
+        }
+        let Some(session) = &mut self.debug.session else {
+            self.set_toast("请先启动调试会话", Severity::Warning);
+            return;
+        };
+        session.send("set can-use-hw-watchpoints 1");
+        session.send(&format!("{} {expression}", kind.command()));
+        self.memory_check.watchpoints.push(HwWatchpoint {
+            number: None,
+            expression: expression.to_owned(),
+            kind,
+            hardware: None,
+            hits: 0,
+            old_value: None,
+            new_value: None,
+        });
+        self.memory_check.watch_input.clear();
+        self.memory_check.watch_error = None;
+        self.memory_check.open = true;
+        self.memory_check.tab = MemoryCheckTab::Dynamic;
+        self.set_toast(
+            format!("已发送 {} {expression}，等待 GDB 分配编号", kind.command()),
+            Severity::Info,
+        );
+    }
+
+    fn remove_hardware_watchpoint(&mut self, index: usize) {
+        if index >= self.memory_check.watchpoints.len() {
+            return;
+        }
+        let watchpoint = self.memory_check.watchpoints.remove(index);
+        if let Some(number) = watchpoint.number {
+            if let Some(session) = &mut self.debug.session {
+                session.send(&format!("delete {number}"));
+            }
+        }
+    }
+
+    fn clear_hardware_watchpoints(&mut self) {
+        let numbers = self
+            .memory_check
+            .watchpoints
+            .iter()
+            .filter_map(|watchpoint| watchpoint.number)
+            .collect::<Vec<_>>();
+        if let Some(session) = &mut self.debug.session {
+            for number in numbers {
+                session.send(&format!("delete {number}"));
+            }
+        }
+        self.memory_check.watchpoints.clear();
+        self.memory_check.watch_error = None;
+    }
+
+    /// Follow new gdb console lines for watchpoint creation and hits. This is
+    /// intentionally separate from Live Watch polling: watchpoints are driven
+    /// by target stops, not by a timer.
+    fn poll_watchpoints(&mut self) {
+        let Some(session) = self.debug.session.as_ref() else {
+            return;
+        };
+        if self.memory_check.watch_log_scan > session.log.len() {
+            self.memory_check.watch_log_scan = 0;
+        }
+        if session.log.len() <= self.memory_check.watch_log_scan {
+            return;
+        }
+        let fresh = session.log[self.memory_check.watch_log_scan..].to_vec();
+        self.memory_check.watch_log_scan = session.log.len();
+
+        let mut hit = None;
+        let mut created_watch = false;
+        for (index, line) in fresh.iter().enumerate() {
+            let trimmed = line.trim();
+            let hardware_error = trimmed.contains("Cannot insert hardware watchpoint")
+                || trimmed.contains("Could not insert hardware watchpoint")
+                || trimmed.contains("No more hardware watchpoints");
+            let expression_error = trimmed.contains("No symbol")
+                || trimmed.contains("Cannot watch")
+                || trimmed.contains("No watchpoint")
+                || trimmed.contains("A syntax error")
+                || trimmed.contains("Expression cannot be evaluated");
+            let has_pending = self
+                .memory_check
+                .watchpoints
+                .iter()
+                .any(|watchpoint| watchpoint.number.is_none());
+            if (hardware_error || (has_pending && expression_error))
+                && self.memory_check.watch_error.as_deref() != Some(trimmed)
+            {
+                self.memory_check.watch_error = Some(trimmed.to_owned());
+                self.set_toast(trimmed.to_owned(), Severity::Warning);
+            }
+            let Some(notice) = crate::debugger::parse_watchpoint(line) else {
+                continue;
+            };
+            let mut old_value = None;
+            let mut new_value = None;
+            for value in fresh.iter().skip(index + 1).take(6) {
+                let value = value.trim();
+                if let Some(old) = value.strip_prefix("Old value = ") {
+                    old_value = Some(old.to_owned());
+                }
+                if let Some(new) = value.strip_prefix("New value = ") {
+                    new_value = Some(new.to_owned());
+                }
+                if old_value.is_some() && new_value.is_some() {
+                    break;
+                }
+            }
+            let position = self.memory_check.watchpoints.iter().position(|watchpoint| {
+                watchpoint.number == Some(notice.number)
+                    || (watchpoint.number.is_none() && watchpoint.expression == notice.expression)
+            });
+            let position = position.or_else(|| {
+                if old_value.is_none() && new_value.is_none() {
+                    self.memory_check
+                        .watchpoints
+                        .iter()
+                        .position(|watchpoint| watchpoint.number.is_none())
+                } else {
+                    None
+                }
+            });
+            let position = match position {
+                Some(position) => position,
+                None if old_value.is_none() && new_value.is_none() => {
+                    self.memory_check.watchpoints.push(HwWatchpoint {
+                        number: Some(notice.number),
+                        expression: notice.expression.clone(),
+                        kind: WatchKind::Write,
+                        hardware: Some(notice.hardware),
+                        hits: 0,
+                        old_value: None,
+                        new_value: None,
+                    });
+                    self.memory_check.watchpoints.len() - 1
+                }
+                None => continue,
+            };
+            let watchpoint = &mut self.memory_check.watchpoints[position];
+            watchpoint.number = Some(notice.number);
+            watchpoint.hardware = Some(notice.hardware);
+            if old_value.is_some() || new_value.is_some() {
+                watchpoint.hits = watchpoint.hits.saturating_add(1);
+                watchpoint.old_value = old_value.clone();
+                watchpoint.new_value = new_value.clone();
+                hit = Some((
+                    notice.number,
+                    watchpoint.expression.clone(),
+                    old_value,
+                    new_value,
+                ));
+            } else {
+                created_watch = true;
+            }
+        }
+        if created_watch {
+            self.memory_check.watch_error = None;
+        }
+
+        if let Some((number, expression, old_value, new_value)) = hit {
+            self.debug.running = false;
+            let change = match (old_value, new_value) {
+                (Some(old), Some(new)) => format!("{old} -> {new}"),
+                _ => "值已改变".to_owned(),
+            };
+            self.set_toast(
+                format!("watchpoint #{number} 命中：{expression}（{change}）"),
+                Severity::Warning,
+            );
+            if self.memory_check.open {
+                self.memory_check.tab = MemoryCheckTab::Dynamic;
+            }
+        }
+    }
+
     fn current_word(&self) -> Option<String> {
         let doc = self.active_document()?;
         crate::navigation::word_at(doc.buffer.as_string(), doc.cursor_index).map(|value| value.0)
     }
 
+    fn hover_info(
+        &self,
+        pane_index: usize,
+        word: &str,
+        line: usize,
+    ) -> Option<crate::hover::HoverInfo> {
+        let doc = self.tabs.get(pane_index)?;
+        crate::hover::build(
+            &doc.path,
+            doc.buffer.as_string(),
+            word,
+            line,
+            &self.symbols.items,
+        )
+    }
+
     fn ensure_symbols(&mut self) {
-        if self.symbols.items.is_empty() {
+        if !self.symbols.scanned {
             self.refresh_symbols();
         }
     }
@@ -1908,6 +2180,9 @@ impl App {
         self.debug.running = false;
         self.debug.open = true;
         self.debug.error = None;
+        self.memory_check.watchpoints.clear();
+        self.memory_check.watch_error = None;
+        self.memory_check.watch_log_scan = 0;
         self.debug.log.clear();
         self.debug.target = Some(target.clone());
         self.debug.watch_refresh = None;
@@ -2103,6 +2378,9 @@ impl App {
             self.debug.running = false;
             self.debug.error = None;
             self.debug.log.push("[调试启动已取消]".to_owned());
+            self.memory_check.watchpoints.clear();
+            self.memory_check.watch_error = None;
+            self.memory_check.watch_log_scan = 0;
             return;
         }
         if let Some(mut session) = self.debug.session.take() {
@@ -2119,6 +2397,9 @@ impl App {
         self.debug.error = None;
         self.debug.current_source = None;
         self.debug.log_scan = 0;
+        self.memory_check.watchpoints.clear();
+        self.memory_check.watch_error = None;
+        self.memory_check.watch_log_scan = 0;
         self.debug.peripheral_values.clear();
         self.debug.peripheral_open.clear();
         self.debug.peripheral_initialized = false;
@@ -2807,10 +3088,12 @@ impl App {
                 self.symbols.items = outcome.symbols;
                 self.symbols.truncated = outcome.truncated;
                 self.symbols.error = None;
+                self.symbols.scanned = true;
             }
             Err(err) => {
                 self.symbols.items.clear();
                 self.symbols.error = Some(err);
+                self.symbols.scanned = true;
             }
         }
     }
@@ -2953,6 +3236,7 @@ impl App {
             doc.language = language;
             doc.saved_revision = doc.buffer.revision();
             doc.layout_cache = highlight::new_cache();
+            doc.macro_issue_revision = u64::MAX;
         }
         if self
             .split_primary
@@ -3609,6 +3893,7 @@ impl App {
             word_wrap: self.settings.word_wrap,
             relative_line_numbers: self.settings.relative_line_numbers,
             show_whitespace: self.settings.show_whitespace,
+            check_duplicate_macro_values: self.settings.check_duplicate_macro_values,
             ruler_column: self.settings.ruler_column,
             use_spaces: self.settings.use_spaces,
             indent_width: self.settings.indent_width,
@@ -3621,6 +3906,7 @@ impl App {
             auto_scroll_output: self.settings.auto_scroll_output,
             show_minimap: self.settings.show_minimap,
             show_indent_guides: self.settings.show_indent_guides,
+            show_hover_info: self.settings.show_hover_info,
             show_hidden: self.settings.show_hidden,
             respect_gitignore: self.settings.respect_gitignore,
             ignore_patterns: self.settings.ignore_patterns.clone(),
@@ -4928,6 +5214,7 @@ impl App {
                 .as_deref()
                 .map(|root| util::relative_display(root, &path))
                 .unwrap_or_else(|| util::display_path(&path));
+            doc.macro_issue_revision = u64::MAX;
         }
         let breakpoints = std::mem::take(&mut self.debug.breakpoints);
         for (path, line) in breakpoints {
@@ -5281,7 +5568,7 @@ impl App {
                 Action::ImportSupportPack(path) => self.import_support_pack_files(vec![path]),
                 Action::EditFlashConfig => self.open_flash_config(),
                 Action::EditMemoryLayout => self.open_memory_layout(),
-                Action::RunMemoryCheck => self.run_memory_check(),
+                Action::RunMemoryCheck => self.open_memory_check(),
                 Action::SetFlashTool(tool) => self.set_flash_tool(tool),
                 Action::SetOpenOcdPath(path) => self.set_openocd_path(path),
                 Action::BrowseOpenOcd => self.browse_openocd(),
@@ -5765,6 +6052,7 @@ impl eframe::App for App {
             }
         }
         self.poll_debug_location(&ctx);
+        self.poll_watchpoints();
         self.poll_debug_watch();
         self.tick_debug_watch();
         self.poll_debug_peripheral();
@@ -6137,11 +6425,13 @@ impl App {
                         }
 
                         ui.add_space(6.0);
-                        let can_check = has_project && self.debug.session.is_some();
-                        let check_tip = if can_check {
-                            "扫描数组越界、危险字符串操作、重复释放等内存问题"
+                        let can_check = has_project;
+                        let check_tip = if !has_project {
+                            "请先打开一个工程"
+                        } else if self.debug.session.is_some() {
+                            "打开动态监测：硬件 watchpoint（调试已连接）"
                         } else {
-                            "仅调试时可用：请先启动调试会话"
+                            "静态扫描数组越界、危险字符串操作、重复释放等内存问题（无需调试）"
                         };
                         let response = ui
                             .add_enabled_ui(can_check, |ui| {

@@ -113,7 +113,7 @@ fn collect_files(root: &Path, ignore: &IgnoreRules) -> Vec<PathBuf> {
 
 fn scan_file(path: &Path, text: &str, report: &mut Report) {
     let clean = sanitize(text);
-    let no_comments = strip_comments(text);
+    let no_comments = crate::util::strip_c_comments(text);
     let macros = collect_macros(&clean);
     let mut declarations = HashSet::new();
     let arrays = collect_arrays(&clean, &macros, &mut declarations);
@@ -493,68 +493,6 @@ fn sanitize(text: &str) -> String {
                 index += 1;
             }
             output.push(' ');
-            continue;
-        }
-        output.push(character);
-        index += 1;
-    }
-    output
-}
-
-fn strip_comments(text: &str) -> String {
-    let chars = text.chars().collect::<Vec<_>>();
-    let mut output = String::with_capacity(text.len());
-    let mut index = 0;
-    let mut in_string = false;
-    let mut in_char = false;
-    while index < chars.len() {
-        let character = chars[index];
-        if in_string || in_char {
-            output.push(character);
-            if character == '\\' {
-                if let Some(next) = chars.get(index + 1) {
-                    output.push(*next);
-                    index += 2;
-                    continue;
-                }
-            }
-            if (in_string && character == '"') || (in_char && character == '\'') {
-                in_string = false;
-                in_char = false;
-            }
-            index += 1;
-            continue;
-        }
-        if character == '"' {
-            in_string = true;
-            output.push(character);
-            index += 1;
-            continue;
-        }
-        if character == '\'' {
-            in_char = true;
-            output.push(character);
-            index += 1;
-            continue;
-        }
-        if character == '/' && chars.get(index + 1) == Some(&'/') {
-            while index < chars.len() && chars[index] != '\n' {
-                index += 1;
-            }
-            continue;
-        }
-        if character == '/' && chars.get(index + 1) == Some(&'*') {
-            index += 2;
-            while index < chars.len() {
-                if chars[index] == '*' && chars.get(index + 1) == Some(&'/') {
-                    index += 2;
-                    break;
-                }
-                if chars[index] == '\n' {
-                    output.push('\n');
-                }
-                index += 1;
-            }
             continue;
         }
         output.push(character);

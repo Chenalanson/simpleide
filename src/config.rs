@@ -966,6 +966,7 @@ pub struct Settings {
     pub word_wrap: bool,
     pub relative_line_numbers: bool,
     pub show_whitespace: bool,
+    pub check_duplicate_macro_values: bool,
     pub ruler_column: u16,
     pub use_spaces: bool,
     pub indent_width: u8,
@@ -982,6 +983,7 @@ pub struct Settings {
     pub auto_scroll_output: bool,
     pub show_minimap: bool,
     pub show_indent_guides: bool,
+    pub show_hover_info: bool,
     pub output_open: bool,
     pub output_height: f32,
     pub left_split: f32,
@@ -1002,6 +1004,7 @@ impl Default for Settings {
             word_wrap: true,
             relative_line_numbers: false,
             show_whitespace: false,
+            check_duplicate_macro_values: false,
             ruler_column: 0,
             use_spaces: true,
             indent_width: 4,
@@ -1018,6 +1021,7 @@ impl Default for Settings {
             auto_scroll_output: true,
             show_minimap: true,
             show_indent_guides: true,
+            show_hover_info: true,
             output_open: true,
             output_height: 214.0,
             left_split: 0.5,
@@ -1181,6 +1185,13 @@ fn migrate_legacy_settings() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_defaults_keep_hover_and_optional_macro_check() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(settings.show_hover_info);
+        assert!(!settings.check_duplicate_macro_values);
+    }
 
     #[test]
     fn detects_cargo() {

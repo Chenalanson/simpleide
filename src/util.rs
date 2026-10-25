@@ -281,6 +281,71 @@ pub fn line_column_at_char(text: &str, char_index: usize) -> (usize, usize) {
     (line, column)
 }
 
+/// Removes C/C++ line and block comments while preserving line breaks and the
+/// contents of string/character literals. Useful for line-oriented static
+/// checks that must not report examples inside comments.
+pub fn strip_c_comments(text: &str) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(text.len());
+    let mut index = 0;
+    let mut in_string = false;
+    let mut in_char = false;
+    while index < chars.len() {
+        let character = chars[index];
+        if in_string || in_char {
+            output.push(character);
+            if character == '\\' {
+                if let Some(next) = chars.get(index + 1) {
+                    output.push(*next);
+                    index += 2;
+                    continue;
+                }
+            }
+            if (in_string && character == '"') || (in_char && character == '\'') {
+                in_string = false;
+                in_char = false;
+            }
+            index += 1;
+            continue;
+        }
+        if character == '"' {
+            in_string = true;
+            output.push(character);
+            index += 1;
+            continue;
+        }
+        if character == '\'' {
+            in_char = true;
+            output.push(character);
+            index += 1;
+            continue;
+        }
+        if character == '/' && chars.get(index + 1) == Some(&'/') {
+            while index < chars.len() && chars[index] != '\n' {
+                index += 1;
+            }
+            continue;
+        }
+        if character == '/' && chars.get(index + 1) == Some(&'*') {
+            index += 2;
+            while index < chars.len() {
+                if chars[index] == '*' && chars.get(index + 1) == Some(&'/') {
+                    index += 2;
+                    break;
+                }
+                if chars[index] == '\n' {
+                    output.push('\n');
+                }
+                index += 1;
+            }
+            continue;
+        }
+        output.push(character);
+        index += 1;
+    }
+    output
+}
+
 pub fn project_key(path: &Path) -> String {
     let value = path.to_string_lossy().replace('/', "\\");
     if cfg!(target_os = "windows") {

@@ -3262,12 +3262,19 @@ impl App {
     pub(super) fn show_memory_check(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let mut open = self.memory_check.open;
         let mut rescan = false;
-        egui::Window::new("非法内存检测")
+        let mut add_watch = None;
+        let mut remove_watch = None;
+        let mut clear_watch = false;
+        let mut start_debug = false;
+        let session_present = self.debug.session.is_some();
+        let session_running = self.debug.running;
+        let session_starting = self.debug.starting;
+        egui::Window::new("内存检测")
             .id(Id::new("simple_embedded_memory_check"))
             .open(&mut open)
             .resizable(true)
-            .default_size([780.0, 560.0])
-            .min_size([420.0, 260.0])
+            .default_size([800.0, 580.0])
+            .min_size([440.0, 280.0])
             .frame(
                 Frame::new()
                     .fill(theme::PANEL)
@@ -3277,124 +3284,385 @@ impl App {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("数组与内存安全扫描")
-                            .size(14.0)
-                            .strong()
-                            .color(theme::TEXT),
-                    );
-                    ui.label(
-                        RichText::new(format!(
-                            "{} 个文件 · {} 个数组 · {} 个可疑点",
-                            self.memory_check.files,
-                            self.memory_check.arrays,
-                            self.memory_check.findings.len()
-                        ))
-                        .size(10.0)
-                        .color(theme::TEXT_FAINT),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(small_flat_button("重新扫描", theme::ACCENT)).clicked() {
-                            rescan = true;
+                    for (tab, label) in [
+                        (MemoryCheckTab::Static, "静态检测"),
+                        (MemoryCheckTab::Dynamic, "动态监测"),
+                    ] {
+                        let active = self.memory_check.tab == tab;
+                        let color = if active {
+                            theme::ACCENT
+                        } else {
+                            theme::TEXT_DIM
+                        };
+                        if ui.add(small_flat_button(label, color)).clicked() {
+                            self.memory_check.tab = tab;
                         }
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(if session_present {
+                                "调试已连接"
+                            } else {
+                                "未连接调试"
+                            })
+                            .size(9.5)
+                            .color(if session_present {
+                                theme::SUCCESS
+                            } else {
+                                theme::TEXT_FAINT
+                            }),
+                        );
                     });
                 });
-                ui.label(
-                    RichText::new("仅调试时可用；静态扫描查找常量下标越界、危险字符串函数、重复释放、可疑 malloc 和返回局部数组。它不替代 ASAN/Valgrind 或硬件 watchpoint。")
-                        .size(9.5)
-                        .color(theme::TEXT_FAINT),
-                );
-                ui.add_space(5.0);
-                ui.add(
-                    TextEdit::singleline(&mut self.memory_check.query)
-                        .id(Id::new("simple_embedded_memory_check_filter"))
-                        .desired_width(f32::INFINITY)
-                        .hint_text("搜索文件、类别或说明"),
-                );
-                ui.add_space(4.0);
-                if let Some(error) = &self.memory_check.error {
-                    ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
-                }
-                let filter = self.memory_check.query.trim().to_lowercase();
-                let findings = self
-                    .memory_check
-                    .findings
-                    .iter()
-                    .filter(|finding| {
-                        filter.is_empty()
-                            || finding
-                                .path
-                                .to_string_lossy()
-                                .to_lowercase()
-                                .contains(&filter)
-                            || finding.category.to_lowercase().contains(&filter)
-                            || finding.message.to_lowercase().contains(&filter)
-                    })
-                    .collect::<Vec<_>>();
-                let remaining = ui.available_height();
-                ScrollArea::vertical()
-                    .id_salt("simple_embedded_memory_check_list")
-                    .max_height(remaining)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if findings.is_empty() {
-                            ui.label(
-                                RichText::new(
-                                    "未发现明显的数组越界或内存错误模式。复杂宏、跨文件作用域和运行时数据仍可能有问题。",
-                                )
-                                .size(11.0)
-                                .color(theme::TEXT_FAINT),
-                            );
-                            return;
-                        }
-                        for finding in findings {
-                            let color = match finding.severity {
-                                crate::memory_check::Severity::Error => theme::ERROR,
-                                crate::memory_check::Severity::Warning => theme::WARNING,
-                                crate::memory_check::Severity::Info => theme::ACCENT,
-                            };
-                            ui.horizontal(|ui| {
-                                colored_dot(ui, color, 4.0);
-                                let location = format!(
-                                    "{}:{}",
-                                    util::file_name(&finding.path),
-                                    finding.line
-                                );
-                                if ui
-                                    .add(small_flat_button(location.as_str(), color))
-                                    .on_hover_text(util::display_path(&finding.path))
-                                    .clicked()
-                                {
-                                    actions.push(Action::OpenAt(
-                                        util::display_path(&finding.path),
-                                        finding.line,
-                                        1,
-                                    ));
-                                }
-                                ui.label(
-                                    RichText::new(finding.category)
-                                        .size(9.5)
-                                        .color(theme::TEXT_FAINT),
-                                );
-                                ui.label(
-                                    RichText::new(&finding.message)
-                                        .size(10.5)
-                                        .color(theme::TEXT),
-                                );
-                            });
-                            if !finding.snippet.is_empty() {
-                                ui.label(
-                                    RichText::new(format!("    {}", finding.snippet))
-                                        .monospace()
-                                        .size(9.0)
-                                        .color(theme::TEXT_FAINT),
-                                );
+                ui.separator();
+
+                if self.memory_check.tab == MemoryCheckTab::Static {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("数组与内存安全扫描")
+                                .size(14.0)
+                                .strong()
+                                .color(theme::TEXT),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "{} 个文件 · {} 个数组 · {} 个可疑点",
+                                self.memory_check.files,
+                                self.memory_check.arrays,
+                                self.memory_check.findings.len()
+                            ))
+                            .size(10.0)
+                            .color(theme::TEXT_FAINT),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui
+                                .add(small_flat_button("重新扫描", theme::ACCENT))
+                                .clicked()
+                            {
+                                rescan = true;
                             }
-                            ui.add_space(3.0);
-                        }
+                        });
                     });
+                    ui.label(
+                        RichText::new("工程打开后即可使用；静态扫描查找常量下标越界、危险字符串函数、重复释放、可疑 malloc 和返回局部数组。它不替代 ASAN/Valgrind。")
+                            .size(9.5)
+                            .color(theme::TEXT_FAINT),
+                    );
+                    ui.add_space(5.0);
+                    ui.add(
+                        TextEdit::singleline(&mut self.memory_check.query)
+                            .id(Id::new("simple_embedded_memory_check_filter"))
+                            .desired_width(f32::INFINITY)
+                            .hint_text("搜索文件、类别或说明"),
+                    );
+                    ui.add_space(4.0);
+                    if let Some(error) = &self.memory_check.error {
+                        ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                    }
+                    let filter = self.memory_check.query.trim().to_lowercase();
+                    let findings = self
+                        .memory_check
+                        .findings
+                        .iter()
+                        .filter(|finding| {
+                            filter.is_empty()
+                                || finding
+                                    .path
+                                    .to_string_lossy()
+                                    .to_lowercase()
+                                    .contains(&filter)
+                                || finding.category.to_lowercase().contains(&filter)
+                                || finding.message.to_lowercase().contains(&filter)
+                        })
+                        .collect::<Vec<_>>();
+                    let remaining = ui.available_height();
+                    ScrollArea::vertical()
+                        .id_salt("simple_embedded_memory_check_list")
+                        .max_height(remaining)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            if findings.is_empty() {
+                                ui.label(
+                                    RichText::new(
+                                        "未发现明显的数组越界或内存错误模式。复杂宏、跨文件作用域和运行时数据仍可能有问题。",
+                                    )
+                                    .size(11.0)
+                                    .color(theme::TEXT_FAINT),
+                                );
+                                return;
+                            }
+                            for finding in findings {
+                                let color = match finding.severity {
+                                    crate::memory_check::Severity::Error => theme::ERROR,
+                                    crate::memory_check::Severity::Warning => theme::WARNING,
+                                    crate::memory_check::Severity::Info => theme::ACCENT,
+                                };
+                                ui.horizontal(|ui| {
+                                    colored_dot(ui, color, 4.0);
+                                    let location = format!(
+                                        "{}:{}",
+                                        util::file_name(&finding.path),
+                                        finding.line
+                                    );
+                                    if ui
+                                        .add(small_flat_button(location.as_str(), color))
+                                        .on_hover_text(util::display_path(&finding.path))
+                                        .clicked()
+                                    {
+                                        actions.push(Action::OpenAt(
+                                            util::display_path(&finding.path),
+                                            finding.line,
+                                            1,
+                                        ));
+                                    }
+                                    ui.label(
+                                        RichText::new(finding.category)
+                                            .size(9.5)
+                                            .color(theme::TEXT_FAINT),
+                                    );
+                                    ui.label(
+                                        RichText::new(&finding.message)
+                                            .size(10.5)
+                                            .color(theme::TEXT),
+                                    );
+                                });
+                                if !finding.snippet.is_empty() {
+                                    ui.label(
+                                        RichText::new(format!("    {}", finding.snippet))
+                                            .monospace()
+                                            .size(9.0)
+                                            .color(theme::TEXT_FAINT),
+                                    );
+                                }
+                                ui.add_space(3.0);
+                            }
+                        });
+                } else {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("硬件 watchpoint")
+                                .size(14.0)
+                                .strong()
+                                .color(theme::TEXT),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "{} 个监测点",
+                                self.memory_check.watchpoints.len()
+                            ))
+                            .size(10.0)
+                            .color(theme::TEXT_FAINT),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if !self.memory_check.watchpoints.is_empty()
+                                && ui
+                                    .add(small_flat_button("全部删除", theme::ERROR))
+                                    .clicked()
+                            {
+                                clear_watch = true;
+                            }
+                        });
+                    });
+                    ui.label(
+                        RichText::new("Cortex-M 通常支持 2-4 个硬件 watchpoint；GDB 会优先使用硬件比较器。命中后目标自动暂停并记录新旧值。")
+                            .size(9.5)
+                            .color(theme::TEXT_FAINT),
+                    );
+                    if !session_present {
+                        ui.add_space(12.0);
+                        ui.label(
+                            RichText::new("动态监测需要调试会话")
+                                .size(13.0)
+                                .strong()
+                                .color(theme::TEXT),
+                        );
+                        ui.label(
+                            RichText::new("启动调试后，在这里输入变量名或地址表达式即可添加硬件 watchpoint。")
+                                .size(10.5)
+                                .color(theme::TEXT_FAINT),
+                        );
+                        ui.add_space(8.0);
+                        if ui.add(theme::secondary_button("启动调试")).clicked() {
+                            start_debug = true;
+                        }
+                    } else {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                TextEdit::singleline(&mut self.memory_check.watch_input)
+                                    .id(Id::new("simple_embedded_watch_expression"))
+                                    .desired_width(330.0)
+                                    .hint_text("counter 或 *(uint32_t*)0x20000000"),
+                            );
+                            egui::ComboBox::from_id_salt("simple_embedded_watch_kind")
+                                .selected_text(self.memory_check.watch_kind.label())
+                                .width(76.0)
+                                .show_ui(ui, |ui| {
+                                    for kind in [
+                                        WatchKind::Write,
+                                        WatchKind::Read,
+                                        WatchKind::Access,
+                                    ] {
+                                        ui.selectable_value(
+                                            &mut self.memory_check.watch_kind,
+                                            kind,
+                                            format!("{} ({})", kind.label(), kind.command()),
+                                        );
+                                    }
+                                });
+                            let can_add = !session_running
+                                && !session_starting
+                                && !self.memory_check.watch_input.trim().is_empty();
+                            if ui
+                                .add_enabled(can_add, theme::primary_button("添加"))
+                                .clicked()
+                            {
+                                add_watch = Some((
+                                    self.memory_check.watch_input.trim().to_owned(),
+                                    self.memory_check.watch_kind,
+                                ));
+                            }
+                        });
+                        if session_starting {
+                            ui.label(
+                                RichText::new("调试正在启动，请稍候…")
+                                    .size(9.5)
+                                    .color(theme::TEXT_FAINT),
+                            );
+                        } else if session_running {
+                            ui.label(
+                                RichText::new("目标正在运行；请先按 F5 暂停，再添加 watchpoint。")
+                                    .size(9.5)
+                                    .color(theme::WARNING),
+                            );
+                        }
+                        if let Some(error) = &self.memory_check.watch_error {
+                            ui.label(RichText::new(error).size(10.0).color(theme::ERROR));
+                        }
+                        ui.add_space(4.0);
+                        ui.add(
+                            TextEdit::singleline(&mut self.memory_check.watch_filter)
+                                .id(Id::new("simple_embedded_hw_watch_filter"))
+                                .desired_width(f32::INFINITY)
+                                .hint_text("搜索表达式"),
+                        );
+                        ui.add_space(4.0);
+                        let filter = self.memory_check.watch_filter.trim().to_lowercase();
+                        let watchpoints = self
+                            .memory_check
+                            .watchpoints
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, watchpoint)| {
+                                filter.is_empty()
+                                    || watchpoint.expression.to_lowercase().contains(&filter)
+                            })
+                            .collect::<Vec<_>>();
+                        let remaining = ui.available_height();
+                        ScrollArea::vertical()
+                            .id_salt("simple_embedded_watchpoint_list")
+                            .max_height(remaining)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                if watchpoints.is_empty() {
+                                    ui.label(
+                                        RichText::new(if self.memory_check.watchpoints.is_empty() {
+                                            "尚未添加硬件 watchpoint。目标暂停后输入变量名或地址表达式，然后点击添加。"
+                                        } else {
+                                            "没有匹配的 watchpoint。"
+                                        })
+                                        .size(11.0)
+                                        .color(theme::TEXT_FAINT),
+                                    );
+                                    return;
+                                }
+                                for (index, watchpoint) in watchpoints {
+                                    ui.horizontal(|ui| {
+                                        let color = if watchpoint.hardware == Some(false) {
+                                            theme::WARNING
+                                        } else {
+                                            theme::ACCENT
+                                        };
+                                        colored_dot(ui, color, 4.0);
+                                        let number = watchpoint
+                                            .number
+                                            .map(|number| format!("#{number}"))
+                                            .unwrap_or_else(|| "#?".to_owned());
+                                        ui.label(
+                                            RichText::new(number)
+                                                .monospace()
+                                                .size(10.0)
+                                                .color(theme::TEXT_FAINT),
+                                        );
+                                        ui.label(
+                                            RichText::new(watchpoint.kind.label())
+                                                .size(9.5)
+                                                .color(theme::TEXT_FAINT),
+                                        );
+                                        ui.add(
+                                            Label::new(
+                                                RichText::new(&watchpoint.expression)
+                                                    .monospace()
+                                                    .size(11.5)
+                                                    .color(theme::TEXT),
+                                            )
+                                            .truncate(),
+                                        );
+                                        if watchpoint.hardware == Some(false) {
+                                            ui.label(
+                                                RichText::new("软件")
+                                                    .size(9.0)
+                                                    .color(theme::WARNING),
+                                            );
+                                        }
+                                        ui.label(
+                                            RichText::new(format!("命中 {} 次", watchpoint.hits))
+                                                .size(9.5)
+                                                .color(theme::TEXT_FAINT),
+                                        );
+                                        if let (Some(old), Some(new)) =
+                                            (&watchpoint.old_value, &watchpoint.new_value)
+                                        {
+                                            ui.label(
+                                                RichText::new(format!("{old} -> {new}"))
+                                                    .monospace()
+                                                    .size(9.5)
+                                                    .color(theme::SUCCESS),
+                                            );
+                                        }
+                                        ui.with_layout(
+                                            Layout::right_to_left(Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .add(small_flat_button("删除", theme::ERROR))
+                                                    .clicked()
+                                                {
+                                                    remove_watch = Some(index);
+                                                }
+                                            },
+                                        );
+                                    });
+                                    ui.add_space(2.0);
+                                }
+                            });
+                    }
+                }
             });
         self.memory_check.open = open;
+        if clear_watch {
+            self.clear_hardware_watchpoints();
+        }
+        if let Some(index) = remove_watch {
+            self.remove_hardware_watchpoint(index);
+        }
+        if let Some((expression, kind)) = add_watch {
+            self.add_hardware_watchpoint(&expression, kind);
+        }
+        if start_debug {
+            self.debug_continue();
+        }
         if rescan {
             self.run_memory_check();
         }
@@ -4465,13 +4733,16 @@ impl App {
         actions: &mut Vec<Action>,
     ) {
         let is_active_pane = self.active == Some(pane_index);
+        if is_active_pane && !self.symbols.scanned {
+            self.ensure_symbols();
+        }
         if is_active_pane {
             if let Some(doc) = self.tabs.get(pane_index) {
                 self.find
                     .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
             }
         }
-        let markers = self
+        let mut markers = self
             .tabs
             .get(pane_index)
             .map(|doc| {
@@ -4508,6 +4779,29 @@ impl App {
         let Some(doc) = self.tabs.get_mut(pane_index) else {
             return;
         };
+        if doc.macro_issue_revision != doc.buffer.revision() {
+            doc.macro_issues = if crate::macro_check::supports_macros(&doc.path) {
+                crate::macro_check::analyze(
+                    &doc.path,
+                    doc.buffer.as_string(),
+                    self.settings.check_duplicate_macro_values,
+                )
+            } else {
+                Vec::new()
+            };
+            doc.macro_issue_revision = doc.buffer.revision();
+        }
+        let macro_issues = doc.macro_issues.clone();
+        for issue in &macro_issues {
+            let severity = match issue.level {
+                crate::macro_check::MacroIssueLevel::Error => Severity::Error,
+                crate::macro_check::MacroIssueLevel::Warning => Severity::Warning,
+            };
+            let entry = markers.entry(issue.line).or_insert(severity);
+            if severity == Severity::Error {
+                *entry = Severity::Error;
+            }
+        }
         let editor_id = Id::new(("simple_embedded_code_editor", &doc.path));
         let scroll_id = Id::new(("simple_embedded_code_scroll", &doc.path));
         let read_only = doc.read_only;
@@ -4647,6 +4941,7 @@ impl App {
         let relative_line_numbers = self.settings.relative_line_numbers;
         let show_whitespace = self.settings.show_whitespace;
         let show_indent_guides = self.settings.show_indent_guides;
+        let hover_enabled = self.settings.show_hover_info;
         let indent_width = self.settings.indent_width.max(1) as usize;
         let ruler_column = self.settings.ruler_column;
         let focus_editor = if is_active_pane {
@@ -4708,6 +5003,7 @@ impl App {
         };
 
         let mut response: Option<egui::Response> = None;
+        let mut hover_word: Option<(String, usize)> = None;
         let mut gutter: Option<(Arc<egui::Galley>, egui::Pos2)> = None;
         let mut scroll_output = None;
         let mut completion_anchor = None;
@@ -4902,6 +5198,18 @@ impl App {
             crate::brackets::matching_bracket(doc.buffer.as_string(), doc.cursor_index);
         if let Some((galley, galley_pos)) = gutter {
             let viewport = scroll_output.inner_rect;
+            if hover_enabled {
+                if let Some(pointer) = ui.ctx().input(|input| input.pointer.hover_pos()) {
+                    if viewport.contains(pointer) && pointer.x >= galley_pos.x {
+                        let cursor = galley.cursor_from_pos(pointer - galley_pos);
+                        let text = doc.buffer.as_string();
+                        if let Some((word, _, _)) = crate::navigation::word_at(text, cursor.index) {
+                            let line = crate::util::line_column_at_char(text, cursor.index).0;
+                            hover_word = Some((word, line));
+                        }
+                    }
+                }
+            }
             let gutter_rect = egui::Rect::from_min_max(
                 egui::pos2(viewport.left(), viewport.top()),
                 egui::pos2(
@@ -5130,6 +5438,36 @@ impl App {
                 }
             }
 
+            let editor_text = doc.buffer.as_string();
+            let squiggle_painter = painter.with_clip_rect(viewport);
+            for issue in &macro_issues {
+                let line_start = crate::util::char_index_at_line(editor_text, issue.line);
+                let start_char = line_start + issue.column;
+                let end_char = start_char + issue.length;
+                let start_rect = galley.pos_from_cursor(egui::text::CCursor::new(start_char));
+                let end_rect = galley.pos_from_cursor(egui::text::CCursor::new(end_char));
+                let start = galley_pos + start_rect.left_bottom().to_vec2();
+                let end = galley_pos + end_rect.left_bottom().to_vec2();
+                if start.y < viewport.top() - 4.0 || start.y > viewport.bottom() + 4.0 {
+                    continue;
+                }
+                let end_x = if (start.y - end.y).abs() > 1.0 {
+                    viewport.right()
+                } else {
+                    end.x
+                };
+                let end_x = end_x.min(viewport.right());
+                if end_x > start.x {
+                    paint_wavy_underline(
+                        &squiggle_painter,
+                        start.x,
+                        end_x,
+                        start.y - 1.2,
+                        macro_issue_color(issue.level),
+                    );
+                }
+            }
+
             let gutter_response = ui
                 .interact(
                     gutter_rect,
@@ -5161,6 +5499,35 @@ impl App {
             }
         }
 
+        if hover_enabled {
+            if let Some((word, line)) = hover_word {
+                let info = self.hover_info(pane_index, &word, line);
+                let note = macro_issues
+                    .iter()
+                    .find(|issue| issue.line == line && issue.name == word)
+                    .map(|issue| (issue.description().to_owned(), issue.level));
+                if info.is_some() || note.is_some() {
+                    if let Some(response) = &response {
+                        let response = response.clone();
+                        response.on_hover_ui_at_pointer(move |ui| {
+                            if let Some(info) = &info {
+                                show_hover_info(ui, info);
+                            }
+                            if let Some((note, level)) = &note {
+                                if info.is_some() {
+                                    ui.add_space(6.0);
+                                }
+                                ui.label(
+                                    RichText::new(note)
+                                        .size(10.5)
+                                        .color(macro_issue_color(*level)),
+                                );
+                            }
+                        });
+                    }
+                }
+            }
+        }
         if let Some(response) = &response {
             if response.has_focus() {
                 self.active = Some(pane_index);
@@ -6466,6 +6833,20 @@ impl App {
 
                     if draft.tab == SettingsTab::Other {
                         ui.add_space(8.0);
+                        settings_section(ui, "编辑器提示");
+                        ui.add_space(4.0);
+                        ui.checkbox(&mut draft.show_hover_info, "变量 / 函数悬停提示")
+                            .on_hover_text(
+                                "鼠标停在标识符上时显示声明签名、注释和类型；关闭后不再弹出悬停卡片",
+                            );
+                        ui.checkbox(
+                            &mut draft.check_duplicate_macro_values,
+                            "宏重复值提示（黄色波浪线）",
+                        )
+                        .on_hover_text(
+                            "PWM1PIN / PWM2PIN / PWM3PIN 等不同宏名使用相同替换值时给出黄色波浪线；C 语言本身允许这种写法，默认关闭",
+                        );
+                        ui.add_space(8.0);
                         settings_section(ui, "文件与输出");
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
@@ -6582,6 +6963,7 @@ impl App {
             self.settings.word_wrap = draft.word_wrap;
             self.settings.relative_line_numbers = draft.relative_line_numbers;
             self.settings.show_whitespace = draft.show_whitespace;
+            self.settings.check_duplicate_macro_values = draft.check_duplicate_macro_values;
             self.settings.ruler_column = if matches!(draft.ruler_column, 80 | 120) {
                 draft.ruler_column
             } else {
@@ -6608,10 +6990,14 @@ impl App {
             self.settings.auto_scroll_output = draft.auto_scroll_output;
             self.settings.show_minimap = draft.show_minimap;
             self.settings.show_indent_guides = draft.show_indent_guides;
+            self.settings.show_hover_info = draft.show_hover_info;
             self.settings.show_hidden = draft.show_hidden;
             self.settings.respect_gitignore = draft.respect_gitignore;
             self.settings.ignore_patterns = draft.ignore_patterns.trim().to_owned();
             self.settings.save();
+            for doc in &mut self.tabs {
+                doc.macro_issue_revision = u64::MAX;
+            }
 
             if project_root.is_some() {
                 self.build_config = draft.config.clone();
@@ -7947,6 +8333,62 @@ fn debug_icon_button(
     } else {
         response.on_disabled_hover_text(tip)
     }
+}
+
+fn show_hover_info(ui: &mut egui::Ui, info: &crate::hover::HoverInfo) {
+    ui.set_max_width(520.0);
+    ui.label(
+        RichText::new(&info.signature)
+            .monospace()
+            .size(13.0)
+            .color(theme::INFO),
+    );
+    if !info.doc.is_empty() {
+        ui.add_space(5.0);
+        ui.label(RichText::new(&info.doc).size(11.5).color(theme::TEXT));
+    }
+    if !info.type_label.is_empty() && !info.type_text.is_empty() {
+        ui.add_space(5.0);
+        ui.label(
+            RichText::new(format!("{}:", info.type_label))
+                .size(10.5)
+                .color(theme::TEXT_FAINT),
+        );
+        ui.label(
+            RichText::new(&info.type_text)
+                .monospace()
+                .size(12.0)
+                .color(theme::TEXT),
+        );
+    }
+    if !info.kind.is_empty() {
+        ui.add_space(2.0);
+        ui.label(RichText::new(info.kind).size(9.5).color(theme::TEXT_FAINT));
+    }
+}
+
+fn macro_issue_color(level: crate::macro_check::MacroIssueLevel) -> Color32 {
+    match level {
+        crate::macro_check::MacroIssueLevel::Error => theme::ERROR,
+        crate::macro_check::MacroIssueLevel::Warning => theme::WARNING,
+    }
+}
+
+fn paint_wavy_underline(painter: &egui::Painter, start_x: f32, end_x: f32, y: f32, color: Color32) {
+    if end_x - start_x < 1.0 {
+        return;
+    }
+    let amplitude = 1.15;
+    let period = 4.0;
+    let mut points = Vec::new();
+    let mut x = start_x;
+    while x < end_x {
+        let phase = (x - start_x) / period * std::f32::consts::TAU;
+        points.push(egui::pos2(x, y + phase.sin() * amplitude));
+        x += 1.0;
+    }
+    points.push(egui::pos2(end_x, y));
+    painter.add(Shape::line(points, Stroke::new(1.1_f32, color)));
 }
 
 fn paint_debug_icon(painter: &egui::Painter, rect: egui::Rect, icon: DebugIcon, color: Color32) {
