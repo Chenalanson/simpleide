@@ -22,74 +22,19 @@ impl App {
             )
         });
         egui::Panel::bottom("simple_embedded_status_bar")
-            .exact_size(32.0)
+            .show_separator_line(false)
+            .exact_size(30.0)
             .frame(
                 Frame::new()
-                    .fill(theme::BG)
-                    .inner_margin(Margin::symmetric(8, 4)),
+                    .fill(theme::PANEL)
+                    .inner_margin(Margin::symmetric(10, 0)),
             )
             .show_inside(ui, |ui| {
-                ui.painter().rect(
-                    ui.max_rect(),
-                    CornerRadius::same(7),
-                    theme::PANEL,
-                    Stroke::NONE,
-                    egui::StrokeKind::Inside,
-                );
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     let text_color = theme::TEXT_FAINT;
-                    if let Some((line, column, encoding, newline, language, dirty, read_only)) =
-                        info
-                    {
-                        ui.label(
-                            RichText::new(format!("行 {line}，列 {column}"))
-                                .size(10.5)
-                                .color(text_color),
-                        );
-                        ui.add_space(6.0);
-                        let indent = if self.settings.use_spaces {
-                            format!("缩进: 空格 {}", self.settings.indent_width)
-                        } else {
-                            format!("缩进: Tab {}", self.settings.indent_width)
-                        };
-                        ui.label(RichText::new(indent).size(10.5).color(text_color));
-                        ui.add_space(6.0);
-                        ui.scope(|ui| {
-                            let visuals = ui.visuals_mut();
-                            visuals.widgets.inactive.weak_bg_fill = theme::SURFACE;
-                            visuals.widgets.inactive.bg_fill = theme::SURFACE;
-                            visuals.widgets.hovered.weak_bg_fill = theme::HOVER;
-                            visuals.widgets.hovered.bg_fill = theme::HOVER;
-                            visuals.widgets.open.weak_bg_fill = theme::SURFACE;
-                            visuals.widgets.open.bg_fill = theme::SURFACE;
-                            ui.menu_button(
-                                RichText::new(encoding.label()).size(10.5).color(text_color),
-                                |ui| {
-                                    for value in [
-                                        crate::util::TextEncoding::Utf8,
-                                        crate::util::TextEncoding::Gbk,
-                                    ] {
-                                        if ui
-                                            .selectable_label(encoding == value, value.label())
-                                            .clicked()
-                                        {
-                                            actions.push(Action::SetEncoding(value));
-                                            ui.close();
-                                        }
-                                    }
-                                },
-                            );
-                        });
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(format!("行尾: {newline}"))
-                                .size(10.5)
-                                .color(text_color),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(RichText::new(language).size(10.5).color(theme::INFO));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if let Some((_, _, _, _, _, dirty, read_only)) = info {
                             let save_color = if dirty {
                                 theme::ACCENT
                             } else {
@@ -154,10 +99,60 @@ impl App {
                             {
                                 actions.push(Action::ToggleReadOnly);
                             }
-                        });
-                    } else {
-                        ui.label(RichText::new("就绪").size(10.5).color(text_color));
-                    }
+                        }
+                        if let Some((line, column, encoding, newline, language, _, _)) = info {
+                            ui.add_space(8.0);
+                            ui.label(RichText::new(language).size(10.5).color(theme::INFO));
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(format!("行尾: {newline}"))
+                                    .size(10.5)
+                                    .color(text_color),
+                            );
+                            ui.add_space(6.0);
+                            ui.scope(|ui| {
+                                let visuals = ui.visuals_mut();
+                                visuals.widgets.inactive.weak_bg_fill = theme::SURFACE;
+                                visuals.widgets.inactive.bg_fill = theme::SURFACE;
+                                visuals.widgets.hovered.weak_bg_fill = theme::HOVER;
+                                visuals.widgets.hovered.bg_fill = theme::HOVER;
+                                visuals.widgets.open.weak_bg_fill = theme::SURFACE;
+                                visuals.widgets.open.bg_fill = theme::SURFACE;
+                                ui.menu_button(
+                                    RichText::new(encoding.label()).size(10.5).color(text_color),
+                                    |ui| {
+                                        for value in [
+                                            crate::util::TextEncoding::Utf8,
+                                            crate::util::TextEncoding::Gbk,
+                                        ] {
+                                            if ui
+                                                .selectable_label(encoding == value, value.label())
+                                                .clicked()
+                                            {
+                                                actions.push(Action::SetEncoding(value));
+                                                ui.close();
+                                            }
+                                        }
+                                    },
+                                );
+                            });
+                            ui.add_space(6.0);
+                            let indent = if self.settings.use_spaces {
+                                format!("缩进: 空格 {}", self.settings.indent_width)
+                            } else {
+                                format!("缩进: Tab {}", self.settings.indent_width)
+                            };
+                            ui.label(RichText::new(indent).size(10.5).color(text_color));
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(format!("行 {line}，列 {column}"))
+                                    .size(10.5)
+                                    .color(text_color),
+                            );
+                        } else {
+                            ui.label(RichText::new("就绪").size(10.5).color(text_color));
+                        }
+                    });
                 });
             });
     }
@@ -175,10 +170,15 @@ impl App {
         let show_hidden = self.settings.show_hidden;
 
         egui::Panel::left("simple_embedded_project_panel")
+            .show_separator_line(false)
             .resizable(true)
             .default_size(272.0)
             .size_range(230.0..=440.0)
-            .frame(Frame::new().fill(theme::BG).inner_margin(Margin::same(3)))
+            .frame(
+                Frame::new()
+                    .fill(theme::GUTTER)
+                    .inner_margin(Margin::same(3)),
+            )
             .show_inside(ui, |ui| {
                 ui.painter().rect(
                     ui.max_rect(),
@@ -690,7 +690,11 @@ impl App {
 
     pub(super) fn show_center(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         egui::CentralPanel::default()
-            .frame(Frame::new().fill(theme::BG).inner_margin(Margin::same(4)))
+            .frame(
+                Frame::new()
+                    .fill(theme::GUTTER)
+                    .inner_margin(Margin::same(4)),
+            )
             .show_inside(ui, |ui| {
                 ui.painter().rect(
                     ui.max_rect(),
@@ -752,7 +756,15 @@ impl App {
                                         self.show_code_editor(ui, primary, Some(0));
                                     },
                                 );
-                                ui.separator();
+                                let (gap_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 4.0),
+                                    Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    gap_rect,
+                                    CornerRadius::ZERO,
+                                    theme::GUTTER,
+                                );
                                 self.show_code_editor(ui, secondary, Some(1));
                             }
                         }

@@ -3,6 +3,7 @@
 use eframe::egui::{self, Color32, FontFamily, FontId, Stroke, TextStyle};
 
 pub const BG: Color32 = Color32::from_rgb(12, 15, 20);
+pub const GUTTER: Color32 = Color32::from_rgb(6, 8, 12);
 pub const PANEL: Color32 = Color32::from_rgb(18, 22, 29);
 pub const PANEL_RAISED: Color32 = Color32::from_rgb(24, 29, 38);
 pub const SURFACE: Color32 = Color32::from_rgb(29, 35, 45);

@@ -3057,8 +3057,13 @@ impl App {
         let can_flash = has_project && !running && self.build_config.has_command(TaskKind::Flash);
 
         egui::Panel::right("simple_embedded_action_rail")
+            .show_separator_line(false)
             .exact_size(110.0)
-            .frame(Frame::new().fill(theme::BG).inner_margin(Margin::same(3)))
+            .frame(
+                Frame::new()
+                    .fill(theme::GUTTER)
+                    .inner_margin(Margin::same(3)),
+            )
             .show_inside(ui, |ui| {
                 ui.painter().rect(
                     ui.max_rect(),
@@ -3223,11 +3228,16 @@ impl App {
         let mut drag_stopped = false;
 
         let panel = egui::Panel::bottom(output_panel_id)
+            .show_separator_line(false)
             .resizable(false)
             .exact_size(height);
 
         panel
-            .frame(Frame::new().fill(theme::BG).inner_margin(Margin::same(4)))
+            .frame(
+                Frame::new()
+                    .fill(theme::GUTTER)
+                    .inner_margin(Margin::same(4)),
+            )
             .show_inside(ui, |ui| {
                 ui.painter().rect(
                     ui.max_rect(),
