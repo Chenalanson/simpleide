@@ -314,6 +314,7 @@ struct DebugState {
     peripheral_filter: String,
     peripheral_values: BTreeMap<u64, String>,
     peripheral_open: BTreeSet<String>,
+    peripheral_initialized: bool,
     peripheral_refresh: Option<u64>,
     peripheral_id: u64,
     peripheral_last_refresh: Option<Instant>,
@@ -950,6 +951,7 @@ impl App {
         self.debug.registers.clear();
         self.debug.peripheral_values.clear();
         self.debug.peripheral_open.clear();
+        self.debug.peripheral_initialized = false;
         self.debug.peripheral_refresh = None;
         self.debug.peripheral_last_refresh = None;
         let mut config_in_project = from_project;
@@ -1861,6 +1863,7 @@ impl App {
         self.debug.registers.clear();
         self.debug.peripheral_values.clear();
         self.debug.peripheral_open.clear();
+        self.debug.peripheral_initialized = false;
         self.debug.peripheral_refresh = None;
         self.debug.peripheral_last_refresh = None;
         for watch in &mut self.debug.watches {
@@ -2064,6 +2067,7 @@ impl App {
         self.debug.log_scan = 0;
         self.debug.peripheral_values.clear();
         self.debug.peripheral_open.clear();
+        self.debug.peripheral_initialized = false;
         self.debug.peripheral_refresh = None;
         self.debug.peripheral_last_refresh = None;
     }
@@ -2394,10 +2398,11 @@ impl App {
         if groups.is_empty() {
             return;
         }
-        if self.debug.peripheral_open.is_empty() {
+        if !self.debug.peripheral_initialized {
             if let Some(first) = groups.keys().next().cloned() {
                 self.debug.peripheral_open.insert(first);
             }
+            self.debug.peripheral_initialized = true;
         }
         let filter_active = !filter.is_empty();
         let mut selected = Vec::new();
@@ -2413,13 +2418,6 @@ impl App {
             }
             if selected.len() >= 160 {
                 break;
-            }
-        }
-        // If a stale expanded group was filtered out, fall back to the first.
-        if selected.is_empty() {
-            if let Some((group, addresses)) = groups.iter().next() {
-                self.debug.peripheral_open.insert(group.clone());
-                selected.extend(addresses.iter().copied().take(160));
             }
         }
         if selected.is_empty() {

@@ -3703,6 +3703,29 @@ impl App {
                                 .size(10.0)
                                 .color(theme::TEXT_FAINT),
                             );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui
+                                    .add(small_flat_button("折叠全部", theme::TEXT_DIM))
+                                    .clicked()
+                                {
+                                    self.debug.peripheral_open.clear();
+                                    self.debug.peripheral_initialized = true;
+                                    self.debug.peripheral_values.clear();
+                                    self.debug.peripheral_last_refresh = None;
+                                    refresh = true;
+                                }
+                                if ui
+                                    .add(small_flat_button("展开全部", theme::TEXT_DIM))
+                                    .clicked()
+                                {
+                                    for group in groups.keys() {
+                                        self.debug.peripheral_open.insert(group.clone());
+                                    }
+                                    self.debug.peripheral_initialized = true;
+                                    self.debug.peripheral_last_refresh = None;
+                                    refresh = true;
+                                }
+                            });
                         });
                         ui.label(
                             RichText::new("点击外设名称展开/折叠；搜索时自动展开匹配分组。")
@@ -3727,11 +3750,7 @@ impl App {
                                     );
                                     return;
                                 }
-                                let width = ui.available_width();
-                                let spacing = ui.spacing().item_spacing.x;
-                                let name_width =
-                                    (width - address_width - value_width - spacing * 2.0)
-                                        .max(80.0);
+                                let name_width = 168.0;
                                 ui.horizontal(|ui| {
                                     for (label, size) in [
                                         ("寄存器", name_width),
@@ -3753,30 +3772,38 @@ impl App {
                                     let open = filter_active
                                         || self.debug.peripheral_open.contains(group);
                                     let arrow = if open { "v" } else { ">" };
-                                    ui.horizontal(|ui| {
-                                        let response = ui.add(
-                                            Button::new(
-                                                RichText::new(format!("{arrow}  {group}"))
-                                                    .size(12.5)
-                                                    .strong()
-                                                    .color(if open {
-                                                        theme::ACCENT
-                                                    } else {
-                                                        theme::TEXT
-                                                    }),
-                                            )
-                                            .frame(false)
-                                            .corner_radius(3),
+                                    let color = if open {
+                                        theme::ACCENT
+                                    } else {
+                                        theme::TEXT
+                                    };
+                                    let (header_rect, header_response) = ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), 22.0),
+                                        Sense::click(),
+                                    );
+                                    if ui.is_rect_visible(header_rect) {
+                                        let painter = ui.painter();
+                                        painter.text(
+                                            egui::pos2(header_rect.left() + 4.0, header_rect.center().y),
+                                            Align2::LEFT_CENTER,
+                                            format!("{arrow}  {group}"),
+                                            FontId::proportional(12.5),
+                                            color,
                                         );
-                                        if response.clicked() {
-                                            toggle = Some(group.clone());
-                                        }
-                                        ui.label(
-                                            RichText::new(format!("{} 个", items.len()))
-                                                .size(9.5)
-                                                .color(theme::TEXT_FAINT),
+                                        painter.text(
+                                            egui::pos2(header_rect.right() - 4.0, header_rect.center().y),
+                                            Align2::RIGHT_CENTER,
+                                            format!("{} 个", items.len()),
+                                            FontId::proportional(9.5),
+                                            theme::TEXT_FAINT,
                                         );
-                                    });
+                                    }
+                                    if header_response
+                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                        .clicked()
+                                    {
+                                        toggle = Some(group.clone());
+                                    }
                                     if !open {
                                         ui.add_space(4.0);
                                         continue;
@@ -3840,6 +3867,7 @@ impl App {
                             } else {
                                 self.debug.peripheral_open.insert(group);
                             }
+                            self.debug.peripheral_initialized = true;
                             self.debug.peripheral_last_refresh = None;
                             refresh = true;
                         }
