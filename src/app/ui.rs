@@ -4536,18 +4536,14 @@ impl App {
                 || (clicked && pointer.is_some_and(|p| gutter_rect.contains(p)))
             {
                 if let Some(pointer) = pointer.or_else(|| gutter_response.interact_pointer_pos()) {
-                    let mut clicked_line = 1usize;
-                    for row in &galley.rows {
-                        let top = galley_pos.y + row.pos.y;
-                        let bottom = top + row.size.y;
-                        if pointer.y >= top && pointer.y < bottom {
-                            actions
-                                .push(Action::ToggleBreakpointAt(doc.path.clone(), clicked_line));
-                            break;
-                        }
-                        if row.ends_with_newline {
-                            clicked_line += 1;
-                        }
+                    // Use the same galley hit-testing as the text editor. Deriving
+                    // the line from row positions alone was off by the scroll
+                    // offset and could set breakpoints on unrelated lines.
+                    let cursor = galley.cursor_from_pos(pointer - galley_pos);
+                    let (line, _) =
+                        crate::util::line_column_at_char(doc.buffer.as_string(), cursor.index);
+                    if line > 0 {
+                        actions.push(Action::ToggleBreakpointAt(doc.path.clone(), line));
                     }
                 }
             }

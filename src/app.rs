@@ -1942,6 +1942,16 @@ impl App {
         session.send(command);
     }
 
+    /// Step commands often only print the source text (`95  while (1)`) without
+    /// `at file:line`. Ask gdb for the current frame afterwards so the editor
+    /// can still follow the execution line.
+    fn debug_step_command(&mut self, command: &str) {
+        self.debug_command(command);
+        if let Some(session) = &mut self.debug.session {
+            session.send("frame");
+        }
+    }
+
     fn debug_stop(&mut self) {
         if self.debug_start.take().is_some() {
             self.debug.starting = false;
@@ -1986,6 +1996,29 @@ impl App {
                 found = Some((path, line_no));
                 break;
             }
+        }
+        let mut invalid = Vec::new();
+        for line in &fresh {
+            if let Some((path, line_no)) = crate::debugger::parse_uncompiled_line(line) {
+                if let Some(path) = self.resolve_debug_source(&path) {
+                    if self.debug.breakpoints.remove(&(path.clone(), line_no)) {
+                        invalid.push((path, line_no));
+                    }
+                }
+            }
+        }
+        if let Some((path, line_no)) = invalid.last() {
+            if let Some(session) = &mut self.debug.session {
+                session.send(&format!("clear \"{}\":{}", gdb_source_path(path), line_no));
+            }
+            self.set_toast(
+                format!(
+                    "{} 第 {} 行没有可执行代码，已移除断点",
+                    util::file_name(path),
+                    line_no
+                ),
+                Severity::Warning,
+            );
         }
         let Some((raw, line)) = found else {
             return;
@@ -3835,11 +3868,11 @@ impl App {
         } else if debug_stop {
             self.debug_stop();
         } else if debug_next {
-            self.debug_command("next");
+            self.debug_step_command("next");
         } else if debug_step {
-            self.debug_command("step");
+            self.debug_step_command("step");
         } else if debug_finish {
-            self.debug_command("finish");
+            self.debug_step_command("finish");
         }
         if breakpoint_toggle {
             self.toggle_breakpoint();
@@ -4570,9 +4603,9 @@ impl App {
                     self.focus_debug_output();
                 }
                 Action::DebugContinue => self.debug_continue(),
-                Action::DebugStepOver => self.debug_command("next"),
-                Action::DebugStepInto => self.debug_command("step"),
-                Action::DebugFinish => self.debug_command("finish"),
+                Action::DebugStepOver => self.debug_step_command("next"),
+                Action::DebugStepInto => self.debug_step_command("step"),
+                Action::DebugFinish => self.debug_step_command("finish"),
                 Action::DebugStop => self.debug_stop(),
                 Action::DebugSend(command) => self.debug_command(&command),
                 Action::ToggleBreakpointAt(path, line) => self.toggle_breakpoint_at(&path, line),

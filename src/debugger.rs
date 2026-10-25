@@ -355,6 +355,28 @@ pub fn parse_stop_location(line: &str) -> Option<(String, usize)> {
     Some((path.to_owned(), line_no))
 }
 
+/// Parse gdb's warning for a breakpoint that has no compiled code.
+///
+/// Examples:
+/// `No compiled code for line 16 in file "D:/project/Core/Src/main.c".`
+/// `No line 16 in file "D:/project/Core/Src/main.c".`
+pub fn parse_uncompiled_line(line: &str) -> Option<(String, usize)> {
+    let line = line.trim();
+    let rest = line
+        .strip_prefix("No compiled code for line ")
+        .or_else(|| line.strip_prefix("No line "))?;
+    let (line_no, rest) = rest.split_once(" in file ")?;
+    let path = rest.trim().trim_end_matches('.').trim_matches('"');
+    if path.is_empty() {
+        return None;
+    }
+    let line_no = line_no.trim().parse::<usize>().ok()?;
+    if line_no == 0 {
+        return None;
+    }
+    Some((path.to_owned(), line_no))
+}
+
 pub fn free_tcp_port() -> Result<u16, String> {
     let listener =
         TcpListener::bind(("127.0.0.1", 0)).map_err(|err| format!("无法分配调试端口：{err}"))?;
@@ -599,6 +621,21 @@ mod tests {
             None
         );
         assert_eq!(parse_stop_location("Continuing."), None);
+    }
+
+    #[test]
+    fn parses_uncompiled_breakpoint_warnings() {
+        assert_eq!(
+            parse_uncompiled_line(
+                "No compiled code for line 16 in file \"D:/project/Core/Src/main.c\"."
+            ),
+            Some(("D:/project/Core/Src/main.c".to_owned(), 16))
+        );
+        assert_eq!(
+            parse_uncompiled_line("No line 42 in file \"C:\\work\\main.c\"."),
+            Some(("C:\\work\\main.c".to_owned(), 42))
+        );
+        assert_eq!(parse_uncompiled_line("Continuing."), None);
     }
 
     #[test]
