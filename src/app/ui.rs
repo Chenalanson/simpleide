@@ -739,13 +739,13 @@ impl App {
                 if let (Some(primary), Some(secondary)) = (primary_index, secondary_index) {
                     if primary != secondary {
                         match self.split_direction {
-                            SplitDirection::Right => {
+                            SplitDirection::Right | SplitDirection::Left => {
                                 ui.columns(2, |columns| {
                                     self.show_code_editor(&mut columns[0], primary, Some(0));
                                     self.show_code_editor(&mut columns[1], secondary, Some(1));
                                 });
                             }
-                            SplitDirection::Up => {
+                            SplitDirection::Up | SplitDirection::Down => {
                                 let available = ui.available_height();
                                 let top =
                                     (available * 0.5).clamp(120.0, (available - 80.0).max(120.0));
@@ -1092,12 +1092,70 @@ impl App {
                                         ));
                                         ui.close();
                                     }
-                                    ui.menu_button("拆分和移动", |ui| {
+                                    let split_menu =
+                                        egui::containers::menu::SubMenuButton::from_button(
+                                            Button::new(
+                                                RichText::new("拆分和移动")
+                                                    .size(11.5)
+                                                    .color(theme::TEXT),
+                                            )
+                                            .right_text(
+                                                egui::containers::menu::SubMenuButton::RIGHT_ARROW,
+                                            )
+                                            .frame(true)
+                                            .min_size(egui::vec2(264.0, 24.0)),
+                                        );
+                                    split_menu.ui(ui, |ui| {
+                                        ui.set_min_width(264.0);
                                         if tab_menu_item(ui, "向上拆分", "Ctrl+K Ctrl+\\") {
                                             actions.push(Action::SplitTab(
                                                 tab_path.clone(),
                                                 SplitDirection::Up,
                                             ));
+                                            ui.close();
+                                        }
+                                        if tab_menu_item(ui, "向下拆分", "") {
+                                            actions.push(Action::SplitTab(
+                                                tab_path.clone(),
+                                                SplitDirection::Down,
+                                            ));
+                                            ui.close();
+                                        }
+                                        if tab_menu_item(ui, "向左拆分", "") {
+                                            actions.push(Action::SplitTab(
+                                                tab_path.clone(),
+                                                SplitDirection::Left,
+                                            ));
+                                            ui.close();
+                                        }
+                                        if tab_menu_item(ui, "向右拆分", "Ctrl+\\") {
+                                            actions.push(Action::SplitTab(
+                                                tab_path.clone(),
+                                                SplitDirection::Right,
+                                            ));
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if tab_menu_item(ui, "上移", "") {
+                                            actions.push(Action::MoveSplit(SplitDirection::Up));
+                                            ui.close();
+                                        }
+                                        if tab_menu_item(ui, "下移", "") {
+                                            actions.push(Action::MoveSplit(SplitDirection::Down));
+                                            ui.close();
+                                        }
+                                        if tab_menu_item(ui, "左移", "") {
+                                            actions.push(Action::MoveSplit(SplitDirection::Left));
+                                            ui.close();
+                                        }
+                                        if tab_menu_item(ui, "右移", "") {
+                                            actions.push(Action::MoveSplit(SplitDirection::Right));
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if tab_menu_item(ui, "在组中拆分", "Ctrl+K Ctrl+Shift+\\")
+                                        {
+                                            actions.push(Action::SplitGroup);
                                             ui.close();
                                         }
                                     });
@@ -3908,14 +3966,29 @@ impl App {
                     .size(10.0)
                     .color(theme::TEXT_FAINT),
             );
-            ui.add_space(8.0);
-            ui.separator();
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for (tab, label) in [
+                    (SettingsTab::Build, "构建"),
+                    (SettingsTab::Toolchain, "构建工具链"),
+                    (SettingsTab::Editor, "编辑器"),
+                    (SettingsTab::Debug, "调试"),
+                    (SettingsTab::Other, "其他"),
+                ] {
+                    if settings_tab_button(ui, draft.tab, tab, label) {
+                        draft.tab = tab;
+                    }
+                }
+            });
+            ui.add_space(6.0);
 
             ScrollArea::vertical()
                 .id_salt("simple_embedded_settings_scroll")
                 .max_height(440.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    if draft.tab == SettingsTab::Build {
                     if let Some(root) = &project_root {
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
@@ -4108,9 +4181,12 @@ impl App {
                                 .color(theme::WARNING),
                         );
                     }
+                    }
 
-                    ui.add_space(14.0);
-                    ui.separator();
+                    if draft.tab == SettingsTab::Toolchain {
+                        self.settings_toolchain_tab(ui, &mut draft);
+                    }
+                    if draft.tab == SettingsTab::Editor {
                     ui.add_space(8.0);
                     settings_section(ui, "编辑器");
                     ui.add_space(4.0);
@@ -4119,11 +4195,7 @@ impl App {
                             .text("代码字号")
                             .fixed_decimals(0),
                     );
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut draft.word_wrap, "长行自动换行");
-                        ui.checkbox(&mut draft.auto_scroll_output, "构建输出自动滚动");
-                        ui.checkbox(&mut draft.show_hidden, "显示隐藏文件");
-                    });
+                    ui.checkbox(&mut draft.word_wrap, "长行自动换行");
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut draft.show_minimap, "代码预览小地图");
                         ui.checkbox(&mut draft.show_indent_guides, "缩进参考线");
@@ -4175,52 +4247,78 @@ impl App {
                                 .hint_text("留空自动查找，或填写 clang-format.exe 路径"),
                         );
                     });
-                    ui.horizontal(|ui| {
+                    }
+
+                    if draft.tab == SettingsTab::Debug {
+                        ui.add_space(8.0);
+                        settings_section(ui, "调试");
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("调试程序")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.add(
+                                TextEdit::singleline(&mut draft.debug_program)
+                                    .desired_width(300.0)
+                                    .hint_text("可执行文件，留空自动查找 build/*.elf/exe"),
+                            );
+                        });
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("gdb 路径")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.add(
+                                TextEdit::singleline(&mut draft.gdb_path)
+                                    .desired_width(300.0)
+                                    .hint_text("留空自动查找 gdb"),
+                            );
+                        });
+                        ui.add_space(6.0);
                         ui.label(
-                            RichText::new("调试程序")
-                                .size(11.5)
-                                .color(theme::TEXT_DIM),
+                            RichText::new(
+                                "调试程序留空时会从 build/、Debug/、Release/ 中查找最新的 ELF/AXF/EXE。ARM 目标请使用 arm-none-eabi-gdb。",
+                            )
+                            .size(9.0)
+                            .color(theme::TEXT_FAINT),
                         );
-                        ui.add(
-                            TextEdit::singleline(&mut draft.debug_program)
-                                .desired_width(300.0)
-                                .hint_text("可执行文件，留空自动查找 build/*.elf/exe"),
-                        );
-                    });
-                    ui.horizontal(|ui| {
+                    }
+
+                    if draft.tab == SettingsTab::Other {
+                        ui.add_space(8.0);
+                        settings_section(ui, "文件与输出");
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut draft.show_hidden, "显示隐藏文件");
+                            ui.checkbox(&mut draft.auto_scroll_output, "构建输出自动滚动");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut draft.respect_gitignore, "遵循 .gitignore");
+                            ui.label(
+                                RichText::new("额外忽略规则")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.add(
+                                TextEdit::singleline(&mut draft.ignore_patterns)
+                                    .desired_width(260.0)
+                                    .hint_text("build/; *.tmp"),
+                            );
+                        });
+                        ui.add_space(6.0);
                         ui.label(
-                            RichText::new("gdb 路径")
-                                .size(11.5)
-                                .color(theme::TEXT_DIM),
+                            RichText::new(format!(
+                                "构建命令保存在 {}，不会向工程目录写入任何文件。",
+                                settings_path().display()
+                            ))
+                            .size(9.0)
+                            .color(theme::TEXT_FAINT),
                         );
-                        ui.add(
-                            TextEdit::singleline(&mut draft.gdb_path)
-                                .desired_width(300.0)
-                                .hint_text("留空自动查找 gdb"),
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut draft.respect_gitignore, "遵循 .gitignore");
-                        ui.label(
-                            RichText::new("额外忽略规则")
-                                .size(11.5)
-                                .color(theme::TEXT_DIM),
-                        );
-                        ui.add(
-                            TextEdit::singleline(&mut draft.ignore_patterns)
-                                .desired_width(260.0)
-                                .hint_text("build/; *.tmp"),
-                        );
-                    });
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "构建命令保存在 {}，不会向工程目录写入任何文件。",
-                            settings_path().display()
-                        ))
-                        .size(9.0)
-                        .color(theme::TEXT_FAINT),
-                    );
+                    }
                 });
 
             if let Some(error) = &draft.error {
@@ -4277,6 +4375,33 @@ impl App {
                 }
             }
 
+            let mut tool_error = None;
+            for (label, value) in [
+                ("编译器", draft.compiler_path.trim()),
+                ("make", draft.make_path.trim()),
+            ] {
+                if !value.is_empty() && !Path::new(value).is_file() {
+                    tool_error = Some(format!("{label}路径不存在：{value}"));
+                    break;
+                }
+            }
+            if tool_error.is_none() && draft.use_bundled_toolchain {
+                let root = crate::toolchain::resolve_tools_dir(&draft.bundled_tools_dir);
+                let tools = crate::toolchain::detect(&root);
+                if tools.compiler.is_none() || tools.make.is_none() {
+                    tool_error = Some(format!(
+                        "软件自带工具未安装，请先点击“安装当前工具到此目录”，或切换到系统工具。目录：{}",
+                        util::display_path(&root)
+                    ));
+                }
+            }
+            if let Some(err) = tool_error {
+                draft.error = Some(err);
+                draft.tab = SettingsTab::Toolchain;
+                self.settings_draft = Some(draft);
+                return;
+            }
+
             self.settings.font_size = draft.font_size.clamp(10.0, 28.0);
             self.settings.word_wrap = draft.word_wrap;
             self.settings.relative_line_numbers = draft.relative_line_numbers;
@@ -4292,6 +4417,10 @@ impl App {
             self.settings.autosave_delay_ms = draft.autosave_delay_ms.clamp(500, 10_000);
             self.settings.format_on_save = draft.format_on_save;
             self.settings.clang_format_path = draft.clang_format_path.trim().to_owned();
+            self.settings.compiler_path = draft.compiler_path.trim().to_owned();
+            self.settings.make_path = draft.make_path.trim().to_owned();
+            self.settings.use_bundled_toolchain = draft.use_bundled_toolchain;
+            self.settings.bundled_tools_dir = draft.bundled_tools_dir.trim().to_owned();
             self.settings.debug_program = draft.debug_program.trim().to_owned();
             self.settings.gdb_path = draft.gdb_path.trim().to_owned();
             self.settings.auto_scroll_output = draft.auto_scroll_output;
@@ -4320,6 +4449,147 @@ impl App {
         } else {
             self.settings_draft = Some(draft);
         }
+    }
+
+    fn settings_toolchain_tab(&mut self, ui: &mut egui::Ui, draft: &mut SettingsDraft) {
+        ui.add_space(8.0);
+        settings_section(ui, "工具来源");
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new(
+                "系统工具会从 PATH 查找；也可以填写编译器 / make 的完整路径，构建时自动把所在目录加入 PATH。",
+            )
+            .size(9.0)
+            .color(theme::TEXT_FAINT),
+        );
+        ui.add_space(5.0);
+        ui.horizontal(|ui| {
+            if segment_button(ui, !draft.use_bundled_toolchain, "系统已安装") {
+                draft.use_bundled_toolchain = false;
+            }
+            if segment_button(ui, draft.use_bundled_toolchain, "软件自带") {
+                draft.use_bundled_toolchain = true;
+            }
+        });
+        ui.add_space(8.0);
+        settings_path_row(
+            ui,
+            "编译器",
+            &mut draft.compiler_path,
+            "选择编译器",
+            "例如 arm-none-eabi-gcc.exe；留空使用 PATH",
+        );
+        ui.add_space(3.0);
+        settings_path_row(
+            ui,
+            "make 工具",
+            &mut draft.make_path,
+            "选择 make",
+            "例如 make.exe / mingw32-make.exe；留空使用 PATH",
+        );
+        ui.add_space(5.0);
+        if ui
+            .add(theme::secondary_button("从 PATH 自动检测"))
+            .on_hover_text("查找 arm-none-eabi-gcc / gcc / clang 以及 make / mingw32-make")
+            .clicked()
+        {
+            let (compiler, make) = crate::toolchain::detect_installed();
+            let mut found = false;
+            if let Some(compiler) = compiler {
+                draft.compiler_path = util::display_path(&compiler);
+                found = true;
+            }
+            if let Some(make) = make {
+                draft.make_path = util::display_path(&make);
+                found = true;
+            }
+            draft.error = if found {
+                None
+            } else {
+                Some("PATH 中没有找到编译器或 make，请手动浏览选择。".to_owned())
+            };
+        }
+
+        ui.add_space(12.0);
+        settings_section(ui, "软件自带工具");
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new(
+                "把当前选择的编译器和 make 复制到软件目录，之后即使系统 PATH 变化也能直接构建。复制编译器会包含整个工具链目录，可能需要一些时间。",
+            )
+            .size(9.0)
+            .color(theme::TEXT_FAINT),
+        );
+        ui.add_space(5.0);
+        settings_folder_row(
+            ui,
+            "工具目录",
+            &mut draft.bundled_tools_dir,
+            "选择软件自带工具目录",
+            "留空使用用户目录；相对路径相对于程序目录",
+        );
+        let tools_root = crate::toolchain::resolve_tools_dir(&draft.bundled_tools_dir);
+        let tools = crate::toolchain::detect(&tools_root);
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!("当前目录：{}", util::display_path(&tools_root)))
+                .size(9.0)
+                .color(theme::TEXT_FAINT),
+        );
+        tool_status_row(ui, "编译器", tools.compiler.as_deref());
+        tool_status_row(ui, "make", tools.make.as_deref());
+        ui.add_space(6.0);
+        let installing = self.toolchain_install.is_some();
+        let can_install = !installing
+            && !draft.compiler_path.trim().is_empty()
+            && !draft.make_path.trim().is_empty();
+        ui.horizontal(|ui| {
+            let install =
+                ui.add_enabled(can_install, theme::primary_button("安装当前工具到此目录"));
+            if install
+                .on_hover_text("复制编译器和 make 到上面的软件目录")
+                .clicked()
+            {
+                let compiler = PathBuf::from(draft.compiler_path.trim());
+                let make = PathBuf::from(draft.make_path.trim());
+                if !compiler.is_file() {
+                    draft.error = Some(format!("编译器不存在：{}", compiler.display()));
+                } else if !make.is_file() {
+                    draft.error = Some(format!("make 不存在：{}", make.display()));
+                } else if let Err(err) = std::fs::create_dir_all(&tools_root) {
+                    draft.error = Some(format!("无法创建 {}：{err}", tools_root.display()));
+                } else {
+                    draft.error = None;
+                    self.toolchain_status = "准备安装…".to_owned();
+                    self.toolchain_install = Some(crate::toolchain::install_async(
+                        compiler,
+                        make,
+                        tools_root.clone(),
+                    ));
+                }
+            }
+            if ui.add(theme::secondary_button("打开目录")).clicked() {
+                let _ = std::fs::create_dir_all(&tools_root);
+                util::open_in_file_manager(&tools_root);
+            }
+            if installing {
+                ui.spinner();
+            }
+        });
+        if !self.toolchain_status.is_empty() {
+            ui.add_space(3.0);
+            ui.label(
+                RichText::new(&self.toolchain_status)
+                    .size(9.5)
+                    .color(theme::TEXT_DIM),
+            );
+        }
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new("软件自带模式只影响本地构建和本地烧录；远程 SSH 构建仍使用远端工具。")
+                .size(9.0)
+                .color(theme::TEXT_FAINT),
+        );
     }
 }
 
@@ -4839,6 +5109,126 @@ fn paint_plus_button(ui: &mut egui::Ui) -> egui::Response {
         stroke,
     );
     response
+}
+
+fn settings_tab_button(
+    ui: &mut egui::Ui,
+    selected: SettingsTab,
+    tab: SettingsTab,
+    label: &str,
+) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(112.0, 30.0), Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let active = selected == tab;
+    if active {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(5), theme::ACCENT_SOFT);
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 7.0, rect.bottom() - 2.0),
+                egui::pos2(rect.right() - 7.0, rect.bottom()),
+            ),
+            CornerRadius::same(1),
+            theme::ACCENT,
+        );
+    } else if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(5), theme::SURFACE);
+    }
+    let color = if active {
+        theme::ACCENT
+    } else if response.hovered() {
+        theme::TEXT
+    } else {
+        theme::TEXT_DIM
+    };
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(11.5),
+        color,
+    );
+    response.clicked()
+}
+
+fn settings_path_row(ui: &mut egui::Ui, label: &str, value: &mut String, title: &str, hint: &str) {
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [86.0, 22.0],
+            Label::new(RichText::new(label).size(10.5).color(theme::TEXT_DIM)),
+        );
+        ui.add(
+            TextEdit::singleline(value)
+                .desired_width(388.0)
+                .hint_text(hint),
+        );
+        if ui.add(theme::secondary_button("浏览")).clicked() {
+            let mut dialog = rfd::FileDialog::new().set_title(title);
+            if let Some(parent) = Path::new(value.trim())
+                .parent()
+                .filter(|parent| parent.is_dir())
+            {
+                dialog = dialog.set_directory(parent);
+            }
+            if let Some(path) = dialog.pick_file() {
+                *value = util::display_path(&path);
+            }
+        }
+    });
+}
+
+fn settings_folder_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    title: &str,
+    hint: &str,
+) {
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [86.0, 22.0],
+            Label::new(RichText::new(label).size(10.5).color(theme::TEXT_DIM)),
+        );
+        ui.add(
+            TextEdit::singleline(value)
+                .desired_width(388.0)
+                .hint_text(hint),
+        );
+        if ui.add(theme::secondary_button("浏览")).clicked() {
+            let mut dialog = rfd::FileDialog::new().set_title(title);
+            let current = crate::toolchain::resolve_tools_dir(value);
+            if current.is_dir() {
+                dialog = dialog.set_directory(&current);
+            }
+            if let Some(path) = dialog.pick_folder() {
+                *value = util::display_path(&path);
+            }
+        }
+    });
+}
+
+fn tool_status_row(ui: &mut egui::Ui, label: &str, path: Option<&Path>) {
+    ui.horizontal(|ui| {
+        let (color, text) = match path {
+            Some(path) => (
+                theme::SUCCESS,
+                format!("已找到 {}", util::display_path(path)),
+            ),
+            None => (theme::WARNING, "未找到".to_owned()),
+        };
+        colored_dot(ui, color, 5.0);
+        ui.add(
+            Label::new(RichText::new(format!("{label}：{text}")).size(9.5).color(
+                if path.is_some() {
+                    theme::TEXT_DIM
+                } else {
+                    theme::WARNING
+                },
+            ))
+            .truncate(),
+        );
+    });
 }
 
 fn settings_section(ui: &mut egui::Ui, title: &str) {

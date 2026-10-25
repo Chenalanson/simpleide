@@ -26,6 +26,7 @@ mod search;
 mod symbols;
 mod theme;
 mod todo;
+mod toolchain;
 mod util;
 
 use std::path::PathBuf;

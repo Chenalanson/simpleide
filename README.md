@@ -50,6 +50,7 @@
 - 本地构建或远程 SSH 构建（复用系统 OpenSSH）
 - Flash 命令可选，在本地工程目录执行，方便接 J-Link / OpenOCD
 - 每工程独立构建配置，保存在用户目录，不污染工程
+- 设置分为 构建 / 构建工具链 / 编辑器 / 调试 / 其他：构建工具链可浏览编译器和 make，或一键把当前工具复制到软件自带目录，之后不依赖系统 PATH
 - 可追加工具链 PATH；本地 Make 构建会自动接入 Git for Windows / MSYS 的 `rm` 等 Unix 工具
 
 ## 运行
@@ -99,6 +100,29 @@ target\release\simple-embedded.exe
 | `CMakeLists.txt` | `cmake -S . -B build && cmake --build build` | 清理 target | clean-first |
 
 检测结果只是初始值，点击左上角工程卡片的 **配置** 可随时修改。编辑器只负责调用命令，不接管 CMake/Make/Cargo 的构建逻辑。
+
+### 软件自带工具链
+
+发布版可以把 make 和编译器放在程序同级的 `tools/` 目录，导入 Makefile 工程后直接构建，不需要用户配置系统 `PATH`：
+
+```text
+simple-embedded.exe
+tools/
+  toolchain.json
+  make/make.exe
+  compiler/bin/arm-none-eabi-gcc.exe
+```
+
+默认优先使用 `tools/`；没有 `tools/` 时回退到用户目录工具链。设置 → **构建工具链** 可以在“系统已安装 / 软件自带”之间切换，也可以浏览编译器和 make、从 PATH 自动检测，或把当前工具一键复制到软件目录。
+
+本地打包当前工具链和 release exe：
+
+```powershell
+cargo build --release
+powershell -ExecutionPolicy Bypass -File scripts\package-tools.ps1
+```
+
+生成 `dist\simple-embedded\`（含 exe 和约 1.1 GB 的 ARM GNU 工具链 + make）。`dist/` 和 `tools/` 已加入 `.gitignore`，不会提交到仓库。
 
 构建前会自动保存所有未保存文件，然后通过本机 shell（Windows 为 `cmd /S /C`）在工程根目录启动进程。日志从 stdout/stderr 双流读取；Windows 下停止会调用 `taskkill /T` 终止子进程树。
 

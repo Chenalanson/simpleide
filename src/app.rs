@@ -5,6 +5,7 @@ mod ui;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -41,7 +42,9 @@ struct Project {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SplitDirection {
     Right,
+    Left,
     Up,
+    Down,
 }
 
 impl Project {
@@ -55,9 +58,23 @@ impl Project {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsTab {
+    Build,
+    Toolchain,
+    Editor,
+    Debug,
+    Other,
+}
+
 struct SettingsDraft {
+    tab: SettingsTab,
     config: BuildConfig,
     extra_paths_text: String,
+    compiler_path: String,
+    make_path: String,
+    use_bundled_toolchain: bool,
+    bundled_tools_dir: String,
     font_size: f32,
     word_wrap: bool,
     relative_line_numbers: bool,
@@ -461,6 +478,8 @@ enum Action {
     CloseSavedTabs,
     CloseAllTabs,
     SplitTab(PathBuf, SplitDirection),
+    MoveSplit(SplitDirection),
+    SplitGroup,
     CloseSplit,
     SaveActive,
     SaveAs(usize),
@@ -492,6 +511,8 @@ pub struct App {
     build: BuildController,
     build_config: BuildConfig,
     settings_draft: Option<SettingsDraft>,
+    toolchain_install: Option<Receiver<crate::toolchain::InstallEvent>>,
+    toolchain_status: String,
     meta_draft: Option<MetaDraft>,
     meta_add: Option<MetaAddDraft>,
     build_options_draft: Option<BuildOptions>,
@@ -555,6 +576,8 @@ impl App {
             project_meta: ProjectMeta::default(),
             build_config: BuildConfig::default(),
             settings_draft: None,
+            toolchain_install: None,
+            toolchain_status: String::new(),
             meta_draft: None,
             meta_add: None,
             build_options_draft: None,
@@ -1292,8 +1315,14 @@ impl App {
             SplitDirection::Right => {
                 self.start_split(active_path, path, direction, 1);
             }
+            SplitDirection::Left => {
+                self.start_split(path, active_path, direction, 0);
+            }
             SplitDirection::Up => {
                 self.start_split(path, active_path, direction, 0);
+            }
+            SplitDirection::Down => {
+                self.start_split(active_path, path, direction, 1);
             }
         }
     }
@@ -1316,6 +1345,31 @@ impl App {
             return;
         };
         self.start_split(active_path, other, direction, 0);
+    }
+
+    fn move_split(&mut self, direction: SplitDirection) {
+        let Some(active_index) = self.active else {
+            return;
+        };
+        let Some(active_path) = self.tabs.get(active_index).map(|doc| doc.path.clone()) else {
+            return;
+        };
+        let other = self
+            .tabs
+            .iter()
+            .enumerate()
+            .find(|(index, _)| *index != active_index)
+            .map(|(_, doc)| doc.path.clone());
+        let Some(other) = other else {
+            self.set_toast("至少打开两个文件才能移动/拆分窗格", Severity::Info);
+            return;
+        };
+        match direction {
+            SplitDirection::Right => self.start_split(other, active_path, direction, 1),
+            SplitDirection::Left => self.start_split(active_path, other, direction, 0),
+            SplitDirection::Up => self.start_split(active_path, other, direction, 0),
+            SplitDirection::Down => self.start_split(other, active_path, direction, 1),
+        }
     }
 
     fn toggle_breakpoint(&mut self) {
@@ -1594,6 +1648,54 @@ impl App {
             self.refresh_git_status();
         }
         Ok(saved)
+    }
+
+    fn poll_toolchain_install(&mut self, ctx: &egui::Context) {
+        let mut finished = None;
+        loop {
+            let event = self
+                .toolchain_install
+                .as_ref()
+                .map(|receiver| receiver.try_recv());
+            let Some(event) = event else {
+                break;
+            };
+            match event {
+                Ok(crate::toolchain::InstallEvent::Progress(message)) => {
+                    self.toolchain_status = message;
+                }
+                Ok(crate::toolchain::InstallEvent::Done(result)) => {
+                    finished = Some(result);
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    finished = Some(Err("工具安装线程意外结束".to_owned()));
+                    break;
+                }
+            }
+        }
+        if let Some(result) = finished {
+            self.toolchain_install = None;
+            match result {
+                Ok(()) => {
+                    self.settings.use_bundled_toolchain = true;
+                    self.settings.save();
+                    if let Some(draft) = &mut self.settings_draft {
+                        draft.use_bundled_toolchain = true;
+                    }
+                    self.toolchain_status = "工具安装完成，已切换到软件自带工具".to_owned();
+                    self.set_toast("工具安装完成", Severity::Success);
+                }
+                Err(err) => {
+                    self.toolchain_status = format!("安装失败：{err}");
+                    self.set_toast(format!("工具安装失败：{err}"), Severity::Error);
+                }
+            }
+        }
+        if self.toolchain_install.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(120));
+        }
     }
 
     fn tick_autosave(&mut self, ctx: &egui::Context) {
@@ -2089,13 +2191,26 @@ impl App {
             }
         }
 
-        let spec = match self.build_config.make_spec(kind, &project_root) {
+        let mut spec = match self.build_config.make_spec(kind, &project_root) {
             Ok(spec) => spec,
             Err(err) => {
                 self.set_toast(err, Severity::Error);
                 return;
             }
         };
+        if self.build_config.target == BuildTarget::Local || kind == TaskKind::Flash {
+            match crate::toolchain::build_env_dirs(&self.settings) {
+                Ok(dirs) => {
+                    for dir in dirs.into_iter().rev() {
+                        spec.env_paths.insert(0, dir);
+                    }
+                }
+                Err(err) => {
+                    self.set_toast(err, Severity::Error);
+                    return;
+                }
+            }
+        }
 
         self.settings.output_open = true;
         self.settings.save();
@@ -2107,8 +2222,13 @@ impl App {
 
     fn open_settings(&mut self) {
         self.settings_draft = Some(SettingsDraft {
+            tab: SettingsTab::Build,
             extra_paths_text: self.build_config.extra_paths.join("\n"),
             config: self.build_config.clone(),
+            compiler_path: self.settings.compiler_path.clone(),
+            make_path: self.settings.make_path.clone(),
+            use_bundled_toolchain: self.settings.use_bundled_toolchain,
+            bundled_tools_dir: self.settings.bundled_tools_dir.clone(),
             font_size: self.settings.font_size,
             word_wrap: self.settings.word_wrap,
             relative_line_numbers: self.settings.relative_line_numbers,
@@ -2397,6 +2517,7 @@ impl App {
             chord_close_saved,
             chord_close_all,
             chord_split_up,
+            split_in_group,
             goto_line_open,
         ) = ctx.input(|input| {
             let command = input.modifiers.command;
@@ -2445,7 +2566,14 @@ impl App {
                 command && input.key_pressed(egui::Key::K),
                 chord_active && input.key_pressed(egui::Key::U),
                 chord_active && input.key_pressed(egui::Key::W),
-                chord_active && command && input.key_pressed(egui::Key::Backslash),
+                chord_active
+                    && command
+                    && !input.modifiers.shift
+                    && input.key_pressed(egui::Key::Backslash),
+                chord_active
+                    && command
+                    && input.modifiers.shift
+                    && input.key_pressed(egui::Key::Backslash),
                 command && !input.modifiers.shift && input.key_pressed(egui::Key::G),
             )
         });
@@ -2608,13 +2736,16 @@ impl App {
         } else if chord_split_up {
             self.chord_k_at = None;
             self.split_active(SplitDirection::Up);
+        } else if split_in_group {
+            self.chord_k_at = None;
+            self.split_active(SplitDirection::Right);
         }
         if close_tab_f4 {
             if let Some(index) = self.active {
                 self.request_close_tab(index);
             }
         }
-        if split_right && !chord_split_up {
+        if split_right && !chord_split_up && !split_in_group {
             self.split_active(SplitDirection::Right);
         }
         if format_document {
@@ -2793,6 +2924,8 @@ impl App {
                 Action::CloseSavedTabs => self.close_saved_tabs(),
                 Action::CloseAllTabs => self.request_close_all(),
                 Action::SplitTab(path, direction) => self.split_tab(path, direction),
+                Action::SplitGroup => self.split_active(SplitDirection::Right),
+                Action::MoveSplit(direction) => self.move_split(direction),
                 Action::CloseSplit => {
                     self.split_path = None;
                     self.split_primary = None;
@@ -3000,6 +3133,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.build.poll();
+        self.poll_toolchain_install(&ctx);
         if let Some(session) = &mut self.debug.session {
             session.poll();
             if self.debug.open {

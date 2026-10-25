@@ -215,6 +215,28 @@ Simple embedded 会自动检查工程根目录：
 
 点击 **自动检测** 可以重新读取根目录的构建文件。
 
+### 构建工具链
+
+设置弹窗顶部有 **构建 / 构建工具链 / 编辑器 / 调试 / 其他** 五个页签，点击后下方只显示对应页面。
+
+在 **构建工具链** 页可以：
+
+- 用 **编译器** 和 **make 工具** 的 **浏览** 按钮选择可执行文件，或直接输入完整路径；留空时使用系统 `PATH`
+- 点击 **从 PATH 自动检测** 自动填入 `arm-none-eabi-gcc` / `gcc` / `clang` 和 `make` / `mingw32-make`
+- 选择 **软件自带**，将当前选择的编译器和 make 复制到软件工具目录；以后构建不再依赖系统 `PATH`
+  - 工具目录留空时使用 `%APPDATA%\SimpleEmbedded\tools`；相对路径相对于程序目录
+  - 安装会复制整个编译器目录和 make 所需的 DLL，可能需要一些时间
+- 构建时，本地构建会把工具目录前置到 `PATH`；远程 SSH 构建仍使用远端工具
+
+发布版可以直接把工具链放在程序同级的 `tools/` 目录，应用默认优先使用它，用户导入 Makefile 工程后无需配置 `PATH`。仓库提供打包脚本：
+
+```powershell
+cargo build --release
+powershell -ExecutionPolicy Bypass -File scripts\package-tools.ps1
+```
+
+脚本会把 release exe、当前使用的 ARM GCC 和 make 复制到 `dist\simple-embedded\`，生成的目录可以直接压缩分发给其他用户。`dist/` 和 `tools/` 不进入 Git。
+
 设置和自动备份位于：
 
 ```text

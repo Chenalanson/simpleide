@@ -54,6 +54,7 @@ src/highlight.rs       syntect 高亮和 galley 缓存
 src/minimap.rs         编辑器右侧代码预览、缩略行缓存和滚动跳转
 src/log.rs             ANSI SGR、错误分级、日志上限
 src/theme.rs           配色和按钮样式
+src/toolchain.rs       系统 / 软件自带工具链检测、PATH 目录和复制安装
 src/util.rs            路径、换行、系统集成辅助
 src/brackets.rs        注释/字符串感知的括号匹配
 src/indent.rs          缩进单元、行缩进/反缩进、回车和粘贴缩进
@@ -71,6 +72,7 @@ src/debugger.rs        gdb 会话
 src/column.rs          旧批量列编辑算法
 src/column_select.rs   矩形列选择文本操作
 examples/blink/        可编译的演示固件
+scripts/package-tools.ps1  打包 release exe 和软件自带工具链到 dist
 docs/                  README 截图和使用教程
 ```
 
@@ -123,6 +125,7 @@ docs/                  README 截图和使用教程
 - 查找是编辑器右上角的约 420px 紧凑浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / `Ctrl+H` 打开，不占用独立行；左侧下拉箭头展开替换行，宽度不变，`AB` 保留大小写在替换输入框内，替换/全部替换为图标按钮。`Ctrl+G` 打开同宽的跳行浮层，输入框复用查找输入框样式；提示文字为普通次要色，不使用色块。
 - 面包屑栏只显示从工程根目录开始的路径（`doc.rel_path` 的 `/` 替换为 ` > `）和未保存标记；编码、行尾、语言、只读、寄存器、数组、符号、格式化、自动换行、保存移到最底部状态栏。补全和列编辑不出现在可见工具栏。
 - 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::GUTTER` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。右侧操作栏宽约 58px（原 110px 的一半），按钮内边距同步收窄。编辑器卡底部两角由 `paint_bottom_corners` 补绘 `GUTTER` 圆角，输出面板标题栏紧贴面板顶部，拖动区域合并到标题栏顶部 4px，日志区使用 `EDITOR_BG` 并撑满剩余空间。
+- 设置弹窗第一行是 构建 / 构建工具链 / 编辑器 / 调试 / 其他 五个页签，下方只显示当前页；构建工具链页提供编译器、make 的输入框和浏览按钮，可从 PATH 自动检测，也提供“软件自带”目录、工具状态和一键安装。
 - 最底部状态栏是贯穿整个窗口宽度的矩形条（无圆角、无外圈间隙），内容靠右排列：右侧操作按钮 + 行列/缩进/编码/行尾/语言信息。
 - `column.rs` 仍保留旧列编辑算法；`column_select.rs` + `ColumnSelectionState` 提供 Ctrl+Alt+鼠标左键拖动的矩形列选择，蓝色高亮，Ctrl+C 复制、Delete/Backspace 删除、直接输入替换。列编辑对话框已不在任何可见入口暴露。
 - 目前没有多光标；列选择是单一矩形区域，不支持多个独立光标。
@@ -159,6 +162,8 @@ docs/                  README 截图和使用教程
 - Make 命令在启动时探测 PATH：`make` → `gmake` → `mingw32-make`。
 - 本地 Make 构建自动探测 Git for Windows / MSYS / Cygwin 的 `usr\bin` 并加入 PATH，保证 `rm` 等 POSIX 命令可执行。
 - `BuildConfig.extra_paths` 允许用户追加工具链目录，构建时统一前置到 PATH。
+- `Settings.compiler_path` / `make_path` / `use_bundled_toolchain` / `bundled_tools_dir` 是全局构建工具链配置，默认 `use_bundled_toolchain = true`。系统模式把所选编译器/make 的父目录前置到 PATH；软件自带模式使用 `bundled_tools_dir`（留空时优先 `<exe>/tools`，否则 `%APPDATA%\SimpleEmbedded\tools`；相对路径相对于 exe）中的工具。`toolchain.rs` 负责检测、PATH 目录和复制安装：安装时复制编译器根目录、make 及其 DLL，并写入 `toolchain.json`；安装完成后自动切换到软件自带模式。只影响本地构建和本地烧录，远程 SSH 不注入本地 PATH。
+- 软件自带工具的标准发布布局是 `simple-embedded.exe` + `tools/toolchain.json` + `tools/make/make.exe` + `tools/compiler/bin/arm-none-eabi-gcc.exe`。`scripts/package-tools.ps1` 会把 release exe、当前 ARM GCC 和 make 打包到 `dist/simple-embedded/`；`dist/` 和 `tools/` 必须在 `.gitignore` 中，不要把 1 GB 级工具链提交进仓库。
 - 远程停止只保证结束本地 ssh 进程；远端进程是否退出取决于远端 shell。
 
 ### 配置

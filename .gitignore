@@ -1,4 +1,6 @@
 /target
+/dist
+/tools
 /examples/blink/build
 *.log
 /.opencode/
