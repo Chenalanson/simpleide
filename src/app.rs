@@ -463,6 +463,9 @@ enum Action {
     SplitTab(PathBuf, SplitDirection),
     CloseSplit,
     SaveActive,
+    SaveAs(usize),
+    CopyText(String),
+    RevealInTree(PathBuf),
     Run(TaskKind),
     StopTask,
     RefreshTree,
@@ -1497,6 +1500,80 @@ impl App {
         saved
     }
 
+    fn save_tab_as(&mut self, index: usize, ctx: &egui::Context) {
+        let Some(doc) = self.tabs.get(index) else {
+            return;
+        };
+        if doc.read_only {
+            self.set_toast("只读文件不能另存为", Severity::Warning);
+            return;
+        }
+        let old_path = doc.path.clone();
+        let name = doc.name.clone();
+        let text = doc.buffer.as_string().to_owned();
+        let line_ending = doc.line_ending;
+        let bom = doc.bom;
+        let encoding = doc.encoding;
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("另存为")
+            .set_file_name(&name);
+        if let Some(dir) = old_path.parent() {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(path) = dialog.save_file() else {
+            return;
+        };
+        if same_path(&path, &old_path) {
+            self.active = Some(index);
+            let _ = self.save_active();
+            return;
+        }
+        if let Err(err) = util::write_text_file(&path, &text, line_ending, bom, encoding) {
+            self.set_toast(format!("另存为失败：{err}"), Severity::Error);
+            return;
+        }
+        let highlighter = Arc::clone(&self.highlighter);
+        let project_root = self.project.as_ref().map(|project| project.root.clone());
+        if let Some(doc) = self.tabs.get_mut(index) {
+            doc.path = path.clone();
+            doc.name = util::file_name(&path);
+            doc.rel_path = project_root
+                .as_ref()
+                .map(|root| util::relative_display(root, &path))
+                .unwrap_or_else(|| util::display_path(&path));
+            let (syntax, language) = highlighter.detect(&path);
+            doc.syntax_name = syntax;
+            doc.language = language;
+            doc.saved_revision = doc.buffer.revision();
+            doc.layout_cache = highlight::new_cache();
+        }
+        if self
+            .split_primary
+            .as_ref()
+            .is_some_and(|primary| same_path(primary, &old_path))
+        {
+            self.split_primary = Some(path.clone());
+        }
+        if self
+            .split_path
+            .as_ref()
+            .is_some_and(|secondary| same_path(secondary, &old_path))
+        {
+            self.split_path = Some(path.clone());
+        }
+        if let Some(tree) = &mut self.tree {
+            tree.reveal(&path);
+        }
+        self.git_line_key = None;
+        self.refresh_git_status();
+        self.find.dirty = true;
+        self.set_toast(
+            format!("已另存为 {}", util::display_path(&path)),
+            Severity::Success,
+        );
+        ctx.request_repaint();
+    }
+
     fn save_all_dirty(&mut self) -> Result<usize, String> {
         let configured = self.settings.clang_format_path.clone();
         let format_on_save = self.settings.format_on_save;
@@ -2279,6 +2356,10 @@ impl App {
             open,
             save,
             save_all,
+            save_as,
+            copy_path,
+            copy_relative,
+            reveal_file_manager,
             build,
             rebuild,
             close_tab,
@@ -2322,7 +2403,11 @@ impl App {
             (
                 command && !input.modifiers.shift && input.key_pressed(egui::Key::O),
                 command && !input.modifiers.shift && input.key_pressed(egui::Key::S),
+                chord_active && input.key_pressed(egui::Key::S),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::S),
+                input.modifiers.shift && input.modifiers.alt && input.key_pressed(egui::Key::C),
+                chord_active && command && input.modifiers.shift && input.key_pressed(egui::Key::C),
+                input.modifiers.shift && input.modifiers.alt && input.key_pressed(egui::Key::R),
                 command && !input.modifiers.shift && input.key_pressed(egui::Key::B),
                 command && input.modifiers.shift && input.key_pressed(egui::Key::B),
                 command && input.key_pressed(egui::Key::W),
@@ -2367,6 +2452,35 @@ impl App {
 
         if open {
             self.pick_project_folder();
+        }
+        if save_as {
+            if let Some(index) = self.active {
+                self.save_tab_as(index, ctx);
+            }
+        }
+        if copy_path {
+            let text = self
+                .active_document()
+                .map(|doc| util::display_path(&doc.path));
+            if let Some(text) = text {
+                ctx.copy_text(text);
+                self.set_toast("已复制完整路径", Severity::Info);
+            }
+        }
+        if copy_relative {
+            let text = self
+                .active_document()
+                .map(|doc| doc.rel_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+            if let Some(text) = text {
+                ctx.copy_text(text);
+                self.set_toast("已复制相对路径", Severity::Info);
+            }
+        }
+        if reveal_file_manager {
+            let path = self.active_document().map(|doc| doc.path.clone());
+            if let Some(path) = path {
+                util::open_in_file_manager(&path);
+            }
         }
         if save_all {
             self.save_all_with_toast();
@@ -2686,6 +2800,20 @@ impl App {
                 }
                 Action::SaveActive => {
                     self.save_active();
+                }
+                Action::SaveAs(index) => self.save_tab_as(index, ctx),
+                Action::CopyText(text) => {
+                    ctx.copy_text(text);
+                    self.set_toast("已复制到剪贴板", Severity::Info);
+                }
+                Action::RevealInTree(path) => {
+                    self.resource_open = true;
+                    self.settings.resource_open = true;
+                    self.settings.save();
+                    if let Some(tree) = &mut self.tree {
+                        tree.reveal(&path);
+                    }
+                    self.set_toast("已在资源管理器中定位", Severity::Info);
                 }
                 Action::Run(kind) => self.start_task(kind),
                 Action::StopTask => {

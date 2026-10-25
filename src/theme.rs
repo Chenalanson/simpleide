@@ -28,12 +28,21 @@ pub const INFO: Color32 = Color32::from_rgb(132, 170, 215);
 pub const DIR: Color32 = Color32::from_rgb(220, 176, 100);
 
 pub fn install(ctx: &egui::Context) {
+    ctx.set_theme(egui::ThemePreference::Dark);
     ctx.global_style_mut(|style| {
         style.visuals = egui::Visuals::dark();
 
         let visuals = &mut style.visuals;
         visuals.panel_fill = BG;
-        visuals.window_fill = PANEL;
+        visuals.window_fill = PANEL_RAISED;
+        visuals.window_stroke = Stroke::new(1.0_f32, BORDER);
+        visuals.menu_corner_radius = egui::CornerRadius::same(6);
+        visuals.popup_shadow = egui::epaint::Shadow {
+            offset: [0, 6],
+            blur: 16,
+            spread: 0,
+            color: Color32::from_black_alpha(90),
+        };
         visuals.extreme_bg_color = EDITOR_BG;
         visuals.faint_bg_color = SURFACE;
         visuals.code_bg_color = EDITOR_BG;

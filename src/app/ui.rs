@@ -1022,50 +1022,86 @@ impl App {
                                 } else if response.clicked() {
                                     actions.push(Action::SelectTab(index));
                                 }
-                                if response.secondary_clicked() {
-                                    actions.push(Action::SelectTab(index));
-                                }
+                                let tab_path = doc.path.clone();
+                                let path_text = util::display_path(&tab_path);
+                                let relative_text =
+                                    doc.rel_path.replace('/', std::path::MAIN_SEPARATOR_STR);
+                                let breadcrumb_text = doc.rel_path.replace('/', " > ");
+                                let split_active = self.split_primary.is_some();
                                 response.context_menu(|ui| {
-                                    if ui.button("关闭    Ctrl+F4").clicked() {
+                                    ui.set_min_width(264.0);
+                                    if tab_menu_item(ui, "关闭", "Ctrl+F4") {
                                         actions.push(Action::CloseTab(index));
                                         ui.close();
                                     }
-                                    if ui.button("关闭其他").clicked() {
+                                    if tab_menu_item(ui, "关闭其他", "") {
                                         actions.push(Action::CloseOtherTabs(index));
                                         ui.close();
                                     }
-                                    if ui.button("关闭右侧标签页").clicked() {
+                                    if tab_menu_item(ui, "关闭右侧标签页", "") {
                                         actions.push(Action::CloseTabsToRight(index));
                                         ui.close();
                                     }
-                                    if ui.button("关闭已保存    Ctrl+K U").clicked() {
+                                    if tab_menu_item(ui, "关闭已保存", "Ctrl+K U") {
                                         actions.push(Action::CloseSavedTabs);
                                         ui.close();
                                     }
-                                    if ui.button("全部关闭    Ctrl+K W").clicked() {
+                                    if tab_menu_item(ui, "全部关闭", "Ctrl+K W") {
                                         actions.push(Action::CloseAllTabs);
                                         ui.close();
                                     }
                                     ui.separator();
-                                    if ui.button("向右拆分    Ctrl+\\").clicked() {
+                                    if tab_menu_item(ui, "保存", "Ctrl+S") {
+                                        actions.push(Action::SelectTab(index));
+                                        actions.push(Action::SaveActive);
+                                        ui.close();
+                                    }
+                                    if tab_menu_item(ui, "另存为...", "Ctrl+Shift+S") {
+                                        actions.push(Action::SaveAs(index));
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if tab_menu_item(ui, "复制路径", "Shift+Alt+C") {
+                                        actions.push(Action::CopyText(path_text.clone()));
+                                        ui.close();
+                                    }
+                                    if tab_menu_item(ui, "复制相对路径", "Ctrl+K Ctrl+Shift+C")
+                                    {
+                                        actions.push(Action::CopyText(relative_text.clone()));
+                                        ui.close();
+                                    }
+                                    if tab_menu_item(ui, "复制痕迹导航路径", "") {
+                                        actions.push(Action::CopyText(breadcrumb_text.clone()));
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if tab_menu_item(ui, "在文件资源管理器中显示", "Shift+Alt+R")
+                                    {
+                                        actions.push(Action::Reveal(tab_path.clone()));
+                                        ui.close();
+                                    }
+                                    if tab_menu_item(ui, "在资源管理器视图中显示", "") {
+                                        actions.push(Action::RevealInTree(tab_path.clone()));
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if tab_menu_item(ui, "向右拆分", "Ctrl+\\") {
                                         actions.push(Action::SplitTab(
-                                            doc.path.clone(),
+                                            tab_path.clone(),
                                             SplitDirection::Right,
                                         ));
                                         ui.close();
                                     }
                                     ui.menu_button("拆分和移动", |ui| {
-                                        if ui.button("向上拆分    Ctrl+K Ctrl+\\").clicked() {
+                                        if tab_menu_item(ui, "向上拆分", "Ctrl+K Ctrl+\\") {
                                             actions.push(Action::SplitTab(
-                                                doc.path.clone(),
+                                                tab_path.clone(),
                                                 SplitDirection::Up,
                                             ));
                                             ui.close();
                                         }
                                     });
-                                    if self.split_primary.is_some()
-                                        && ui.button("取消拆分").clicked()
-                                    {
+                                    if split_active && tab_menu_item(ui, "取消拆分", "") {
                                         actions.push(Action::CloseSplit);
                                         ui.close();
                                     }
@@ -1422,11 +1458,7 @@ impl App {
                             .color(theme::TEXT),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("×", theme::TEXT_DIM))
-                            .on_hover_text("关闭")
-                            .clicked()
-                        {
+                        if window_close_button(ui) {
                             open = false;
                         }
                     });
@@ -1586,11 +1618,7 @@ impl App {
                             .color(theme::TEXT),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("×", theme::TEXT_DIM))
-                            .on_hover_text("关闭")
-                            .clicked()
-                        {
+                        if window_close_button(ui) {
                             open = false;
                         }
                         if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
@@ -1717,11 +1745,7 @@ impl App {
                             .color(theme::TEXT),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("×", theme::TEXT_DIM))
-                            .on_hover_text("关闭")
-                            .clicked()
-                        {
+                        if window_close_button(ui) {
                             open = false;
                         }
                         if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
@@ -1868,11 +1892,7 @@ impl App {
                             .color(theme::TEXT),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("×", theme::TEXT_DIM))
-                            .on_hover_text("关闭")
-                            .clicked()
-                        {
+                        if window_close_button(ui) {
                             open = false;
                         }
                         if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
@@ -1998,11 +2018,7 @@ impl App {
                             .color(theme::TEXT_FAINT),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("×", theme::TEXT_DIM))
-                            .on_hover_text("关闭")
-                            .clicked()
-                        {
+                        if window_close_button(ui) {
                             open = false;
                         }
                         if ui
@@ -2114,11 +2130,7 @@ impl App {
                         );
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("×", theme::TEXT_DIM))
-                            .on_hover_text("关闭")
-                            .clicked()
-                        {
+                        if window_close_button(ui) {
                             open = false;
                         }
                     });
@@ -2213,11 +2225,7 @@ impl App {
                         );
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("×", theme::TEXT_DIM))
-                            .on_hover_text("关闭")
-                            .clicked()
-                        {
+                        if window_close_button(ui) {
                             open = false;
                         }
                         if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
@@ -2364,11 +2372,7 @@ impl App {
                     ui.label(RichText::new(status).size(11.0).color(status_color));
                     ui.label(RichText::new(&target).size(10.5).color(theme::TEXT_FAINT));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("×", theme::TEXT_DIM))
-                            .on_hover_text("关闭窗口（不会停止调试器）")
-                            .clicked()
-                        {
+                        if window_close_button(ui) {
                             open = false;
                         }
                     });
@@ -2539,11 +2543,7 @@ impl App {
                             .color(theme::TEXT_FAINT),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("×", theme::TEXT_DIM))
-                            .on_hover_text("关闭")
-                            .clicked()
-                        {
+                        if window_close_button(ui) {
                             open = false;
                         }
                     });
@@ -2625,11 +2625,7 @@ impl App {
                             .color(theme::ACCENT),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(small_flat_button("×", theme::TEXT_DIM))
-                            .on_hover_text("关闭")
-                            .clicked()
-                        {
+                        if window_close_button(ui) {
                             open = false;
                         }
                     });
@@ -3393,14 +3389,7 @@ impl App {
                         .color(theme::TEXT_FAINT),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add(
-                            Button::new(RichText::new("×").size(16.0).color(theme::TEXT_DIM))
-                                .frame(false),
-                        )
-                        .on_hover_text("取消")
-                        .clicked()
-                    {
+                    if window_close_button(ui) {
                         close = true;
                     }
                 });
@@ -3654,14 +3643,7 @@ impl App {
                         .color(theme::TEXT),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add(
-                            Button::new(RichText::new("×").size(16.0).color(theme::TEXT_DIM))
-                                .frame(false),
-                        )
-                        .on_hover_text("取消")
-                        .clicked()
-                    {
+                    if window_close_button(ui) {
                         close = true;
                     }
                 });
@@ -3819,14 +3801,7 @@ impl App {
                         .color(theme::TEXT),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add(
-                            Button::new(RichText::new("×").size(16.0).color(theme::TEXT_DIM))
-                                .frame(false),
-                        )
-                        .on_hover_text("取消")
-                        .clicked()
-                    {
+                    if window_close_button(ui) {
                         close = true;
                     }
                 });
@@ -3922,14 +3897,7 @@ impl App {
                         .color(theme::TEXT_FAINT),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add(
-                            Button::new(RichText::new("×").size(16.0).color(theme::TEXT_DIM))
-                                .frame(false),
-                        )
-                        .on_hover_text("取消")
-                        .clicked()
-                    {
+                    if window_close_button(ui) {
                         close = true;
                     }
                 });
@@ -5091,6 +5059,38 @@ impl App {
                     });
             });
     }
+}
+
+fn tab_menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
+    let mut button = Button::new(RichText::new(label).size(11.5).color(theme::TEXT))
+        .frame(true)
+        .min_size(egui::vec2(264.0, 24.0));
+    if !shortcut.is_empty() {
+        button = button.shortcut_text(RichText::new(shortcut).size(10.0).color(theme::TEXT_FAINT));
+    }
+    ui.add(button).clicked()
+}
+
+fn window_close_button(ui: &mut egui::Ui) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("关闭");
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect.shrink(1.0), CornerRadius::same(3), theme::SURFACE);
+    }
+    paint_find_glyph(
+        ui.painter(),
+        rect,
+        FindGlyph::Close,
+        if response.hovered() {
+            theme::TEXT
+        } else {
+            theme::TEXT_DIM
+        },
+    );
+    response.clicked()
 }
 
 fn find_text_field(
