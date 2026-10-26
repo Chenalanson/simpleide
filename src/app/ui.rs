@@ -7622,40 +7622,42 @@ fn meta_group_impl(
         .on_hover_cursor(egui::CursorIcon::PointingHand);
 
     let mut plus_clicked = false;
-    if let Some(add_tooltip) = add_tooltip {
-        let plus_rect = egui::Rect::from_center_size(
-            egui::pos2(row_rect.right() - 15.0, row_rect.center().y),
-            egui::vec2(22.0, 22.0),
-        );
-        let plus = ui
-            .interact(plus_rect, id.with("add"), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(add_tooltip);
-        if plus.hovered() {
-            ui.painter().rect_filled(
-                plus_rect,
-                CornerRadius::same(4),
-                Color32::from_rgb(28, 55, 43),
+    if hovered {
+        if let Some(add_tooltip) = add_tooltip {
+            let plus_rect = egui::Rect::from_center_size(
+                egui::pos2(row_rect.right() - 15.0, row_rect.center().y),
+                egui::vec2(22.0, 22.0),
             );
+            let plus = ui
+                .interact(plus_rect, id.with("add"), Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(add_tooltip);
+            if plus.hovered() {
+                ui.painter().rect_filled(
+                    plus_rect,
+                    CornerRadius::same(4),
+                    Color32::from_rgb(28, 55, 43),
+                );
+            }
+            let center = plus_rect.center();
+            let arm = 5.0;
+            let stroke = Stroke::new(2.4_f32, theme::SUCCESS);
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x - arm, center.y),
+                    egui::pos2(center.x + arm, center.y),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x, center.y - arm),
+                    egui::pos2(center.x, center.y + arm),
+                ],
+                stroke,
+            );
+            plus_clicked = plus.clicked();
         }
-        let center = plus_rect.center();
-        let arm = 5.0;
-        let stroke = Stroke::new(2.4_f32, theme::SUCCESS);
-        ui.painter().line_segment(
-            [
-                egui::pos2(center.x - arm, center.y),
-                egui::pos2(center.x + arm, center.y),
-            ],
-            stroke,
-        );
-        ui.painter().line_segment(
-            [
-                egui::pos2(center.x, center.y - arm),
-                egui::pos2(center.x, center.y + arm),
-            ],
-            stroke,
-        );
-        plus_clicked = plus.clicked();
     }
 
     if plus_clicked {
@@ -7768,9 +7770,11 @@ fn meta_editable_list(
             if remaining > reserved {
                 ui.add_space(remaining - reserved);
             }
-            let plus = paint_plus_button(ui);
-            plus_clicked = plus.clicked();
-            plus.on_hover_text(format!("添加{label}"));
+            if hovered {
+                let plus = paint_plus_button(ui);
+                plus_clicked = plus.clicked();
+                plus.on_hover_text(format!("添加{label}"));
+            }
         },
     );
     let response = row
