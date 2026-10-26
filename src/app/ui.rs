@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::config::autodetect;
-use crate::makefile;
 use eframe::egui::{
     self, Align, Align2, Button, Checkbox, Color32, FontId, Frame, Id, Label, Layout, Margin,
     RadioButton, RichText, ScrollArea, Sense, Shape, Stroke, TextEdit,
@@ -163,23 +162,33 @@ impl App {
             .as_ref()
             .map(|project| (project.name.clone(), util::display_path(&project.root)));
         let has_project = project_info.is_some();
-        let mode = self.build_config.mode_summary();
-        let command = self.build_config.build_command.clone();
-        let has_command = !command.trim().is_empty();
+        let mode = if has_project {
+            let toolchain = self.build_config.effective_toolchain(&self.project_meta);
+            format!(
+                "{} · {}",
+                toolchain.label(),
+                self.build_config.target.label()
+            )
+        } else {
+            self.build_config.mode_summary()
+        };
+        let has_command = !self.build_config.build_command.trim().is_empty();
         let active_path = self.active_document().map(|doc| doc.path.clone());
         let show_hidden = self.settings.show_hidden;
 
         egui::Panel::left("simple_embedded_project_panel")
             .show_separator_line(false)
             .resizable(true)
-            .default_size(272.0)
-            .size_range(230.0..=440.0)
-            .frame(
-                Frame::new()
-                    .fill(theme::GUTTER)
-                    .inner_margin(Margin::same(3)),
-            )
+            .default_size(self.settings.left_panel_width)
+            .size_range(300.0..=520.0)
+            .frame(Frame::new().fill(theme::GUTTER).inner_margin(Margin {
+                left: 3,
+                right: 0,
+                top: 3,
+                bottom: 3,
+            }))
             .show_inside(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
                 ui.painter().rect(
                     ui.max_rect(),
                     CornerRadius::same(8),
@@ -241,25 +250,6 @@ impl App {
                                         RichText::new(builder_text).size(12.0).color(builder_color),
                                     );
                                 });
-                                if has_project && has_command {
-                                    ui.add(
-                                        Label::new(
-                                            RichText::new(format!("$ {command}"))
-                                                .monospace()
-                                                .size(12.0)
-                                                .color(theme::TEXT_FAINT),
-                                        )
-                                        .truncate(),
-                                    )
-                                    .on_hover_text(&command);
-                                } else if !has_project {
-                                    ui.label(
-                                        RichText::new("$ 未配置")
-                                            .monospace()
-                                            .size(12.0)
-                                            .color(theme::TEXT_FAINT),
-                                    );
-                                }
                                 ui.add_space(6.0);
                                 let spacing = ui.spacing().item_spacing.x;
                                 let columns = 3.0;
@@ -310,9 +300,7 @@ impl App {
                                     }
                                     let workspace = if has_project {
                                         egui::Button::new(
-                                            RichText::new("工作区")
-                                                .size(12.5)
-                                                .color(theme::ACCENT),
+                                            RichText::new("工作区").size(12.5).color(theme::ACCENT),
                                         )
                                         .fill(theme::SURFACE)
                                         .stroke(Stroke::new(1.0_f32, theme::BORDER))
@@ -322,9 +310,7 @@ impl App {
                                     };
                                     let workspace_response = ui
                                         .add_sized([button_width, 28.0], workspace)
-                                        .on_hover_text(
-                                            "生成 .se-workspace，双击即可打开本工程",
-                                        );
+                                        .on_hover_text("生成 .se-workspace，双击即可打开本工程");
                                     egui::Popup::menu(&workspace_response).show(|ui| {
                                         ui.set_min_width(190.0);
                                         if has_project
@@ -623,29 +609,31 @@ impl App {
                             } else {
                                 0.0
                             };
-                            let leading =
-                                6.0 * info_openness + closed_pad * (1.0 - info_openness);
+                            let leading = 6.0 * info_openness + closed_pad * (1.0 - info_openness);
                             ui.add_space(leading);
                             info_header_row(ui, &mut info_open, info_openness);
                             info_state.set_open(info_open);
                             info_state.show_body_unindented(ui, |ui| {
                                 ui.add_space(6.0);
                                 let height = (ui.available_height() - 2.0).max(80.0);
-                                Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
-                                    ui,
-                                    |ui| {
-                                        let mut area = ScrollArea::vertical()
-                                            .id_salt("simple_embedded_project_meta")
-                                            .max_height(height)
-                                            .auto_shrink([false, false]);
-                                        if !(info_open && info_openness >= 0.999) {
-                                            area = area.scroll_bar_visibility(
-                                                egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                let area = ScrollArea::vertical()
+                                    .id_salt("simple_embedded_project_meta")
+                                    .max_height(height)
+                                    .auto_shrink([false, false])
+                                    .scroll_bar_visibility(
+                                        egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                    );
+                                area.show(ui, |ui| {
+                                    Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
+                                        ui,
+                                        |ui| {
+                                            ui.indent(
+                                                "simple_embedded_project_meta_indent",
+                                                |ui| self.show_project_meta(ui, actions),
                                             );
-                                        }
-                                        area.show(ui, |ui| self.show_project_meta(ui, actions));
-                                    },
-                                );
+                                        },
+                                    );
+                                });
                             });
                         }
                     },
@@ -658,6 +646,17 @@ impl App {
                     self.settings.save();
                 }
             });
+        if let Some(state) =
+            egui::PanelState::load(ui.ctx(), Id::new("simple_embedded_project_panel"))
+        {
+            let width = state.size().x;
+            if !ui.input(|input| input.pointer.primary_down())
+                && (width - self.settings.left_panel_width).abs() > 0.5
+            {
+                self.settings.left_panel_width = width.clamp(300.0, 520.0);
+                self.settings.save();
+            }
+        }
     }
 
     fn show_project_meta(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -679,7 +678,7 @@ impl App {
             };
             if let Some(response) = meta_row_response(ui, "工具链", &toolchain_label, false) {
                 response.on_hover_text_at_pointer(
-                    RichText::new("在 设置 → 构建 中修改")
+                    RichText::new("在 配置 → 构建 中修改")
                         .size(10.5)
                         .color(theme::TEXT_DIM),
                 );
@@ -728,8 +727,8 @@ impl App {
             meta_row(ui, "并行任务", &jobs);
             let option_lines = self.build_config.build_options.summary_lines();
             let mut edit_clicked = false;
-            let row_height = 22.0 + option_lines.len().saturating_sub(1) as f32 * 17.0;
-            let row = ui.allocate_ui_with_layout(
+            let row_height = 22.0 + option_lines.len().saturating_sub(1) as f32 * 17.0 + 30.0;
+            ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), row_height),
                 Layout::top_down(Align::Min),
                 |ui| {
@@ -749,17 +748,6 @@ impl App {
                             );
                             response.on_hover_text(first);
                         }
-                        let remaining = ui.available_width();
-                        if remaining > 60.0 {
-                            ui.add_space(remaining - 60.0);
-                        }
-                        if ui
-                            .add(small_flat_button("编辑", theme::ACCENT))
-                            .on_hover_text("编辑构建选项")
-                            .clicked()
-                        {
-                            edit_clicked = true;
-                        }
                     });
                     for line in option_lines.iter().skip(1) {
                         ui.horizontal(|ui| {
@@ -771,13 +759,17 @@ impl App {
                             response.on_hover_text(line);
                         });
                     }
+                    ui.add_space(2.0);
+                    if ui
+                        .add(theme::secondary_button("编辑"))
+                        .on_hover_text("编辑构建选项")
+                        .clicked()
+                    {
+                        edit_clicked = true;
+                    }
                 },
             );
-            let response = row
-                .response
-                .interact(Sense::click())
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            if edit_clicked || response.clicked() {
+            if edit_clicked {
                 actions.push(Action::EditBuildOptions);
             }
         });
@@ -827,13 +819,6 @@ impl App {
                             }
                             if external {
                                 ui.label(RichText::new("Keil 安装").size(8.5).color(theme::INFO));
-                                if ui
-                                    .add(small_flat_button("导入", theme::ACCENT))
-                                    .on_hover_text("复制到工程根目录")
-                                    .clicked()
-                                {
-                                    actions.push(Action::ImportSupportPack(pack.path.clone()));
-                                }
                             }
                         });
                         let response = ui.add(
@@ -867,6 +852,16 @@ impl App {
                         if let Some(error) = &pack.error {
                             ui.label(RichText::new(error).size(9.0).color(theme::WARNING));
                         }
+                        if external {
+                            ui.add_space(3.0);
+                            if ui
+                                .add(theme::secondary_button("导入"))
+                                .on_hover_text("复制到工程根目录")
+                                .clicked()
+                            {
+                                actions.push(Action::ImportSupportPack(pack.path.clone()));
+                            }
+                        }
                     }
                 }
             },
@@ -892,7 +887,7 @@ impl App {
                             .size(11.5)
                             .color(theme::TEXT_DIM),
                     )
-                    .width(190.0)
+                    .width(160.0)
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut tool, FlashTool::Custom, "自定义命令");
                         ui.selectable_value(&mut tool, FlashTool::OpenOcd, "OpenOCD");
@@ -926,7 +921,7 @@ impl App {
                     };
                     let response = egui::ComboBox::from_id_salt("simple_embedded_openocd_path")
                         .selected_text(RichText::new(short).size(11.5).color(theme::TEXT_DIM))
-                        .width(174.0)
+                        .width(160.0)
                         .show_ui(ui, |ui| {
                             for candidate in flash::openocd_candidates(&current) {
                                 let label = if candidate.eq_ignore_ascii_case("openocd") {
@@ -1024,7 +1019,7 @@ impl App {
                     };
                     let response = egui::ComboBox::from_id_salt("simple_embedded_pyocd_path")
                         .selected_text(RichText::new(short).size(11.5).color(theme::TEXT_DIM))
-                        .width(174.0)
+                        .width(160.0)
                         .show_ui(ui, |ui| {
                             for candidate in flash::pyocd_candidates(&current) {
                                 let label = if candidate.eq_ignore_ascii_case("pyocd") {
@@ -1143,14 +1138,15 @@ impl App {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add(small_flat_button("编辑", theme::ACCENT))
+                    .add(theme::secondary_button("编辑"))
                     .on_hover_text("编辑烧录工具、程序文件、OpenOCD / pyOCD 参数")
                     .clicked()
                 {
                     actions.push(Action::EditFlashConfig);
                 }
+                ui.add_space(8.0);
                 if ui
-                    .add(small_flat_button("内存布局...", theme::TEXT_DIM))
+                    .add(theme::secondary_button("内存布局..."))
                     .on_hover_text(memory_hint)
                     .clicked()
                 {
@@ -1187,9 +1183,9 @@ impl App {
             if let Some(optimization) = &meta.optimization {
                 meta_row(ui, "优化选项", optimization);
             }
-            ui.add_space(2.0);
+            ui.add_space(3.0);
             if ui
-                .add(small_flat_button("批量编辑", theme::TEXT_FAINT))
+                .add(theme::secondary_button("批量编辑"))
                 .on_hover_text("编辑包含目录、库搜索目录和预处理定义")
                 .clicked()
             {
@@ -1206,6 +1202,7 @@ impl App {
                     .inner_margin(Margin::same(4)),
             )
             .show_inside(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
                 ui.painter().rect(
                     ui.max_rect(),
                     CornerRadius::same(8),
@@ -3288,6 +3285,8 @@ impl App {
         let mut add_watch = None;
         let mut remove_watch = None;
         let mut clear_watch = false;
+        let mut clear_history = false;
+        let mut rearm_watch = false;
         let mut start_debug = false;
         let session_present = self.debug.session.is_some();
         let session_running = self.debug.running;
@@ -3469,6 +3468,9 @@ impl App {
                                 .size(14.0)
                                 .strong()
                                 .color(theme::TEXT),
+                        )
+                        .on_hover_text_at_pointer(
+                            "Cortex-M 通常支持 2-4 个硬件 watchpoint；GDB 会优先使用硬件比较器。命中后目标自动暂停并记录时间、新旧值、位置和调用栈。",
                         );
                         ui.label(
                             RichText::new(format!(
@@ -3488,11 +3490,49 @@ impl App {
                             }
                         });
                     });
-                    ui.label(
-                        RichText::new("Cortex-M 通常支持 2-4 个硬件 watchpoint；GDB 会优先使用硬件比较器。命中后目标自动暂停并记录新旧值。")
-                            .size(9.5)
-                            .color(theme::TEXT_FAINT),
-                    );
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let mut auto_start = self.settings.auto_start_watch;
+                        if ui
+                            .checkbox(
+                                &mut auto_start,
+                                RichText::new("调试时自动启动动态监测")
+                                    .size(10.5)
+                                    .color(theme::TEXT_DIM),
+                            )
+                            .on_hover_text(
+                                "启动调试会话时自动打开此面板，并重新启用已保存的 watchpoint",
+                            )
+                            .changed()
+                        {
+                            self.settings.auto_start_watch = auto_start;
+                            self.settings.save();
+                        }
+                        if session_present
+                            && !session_running
+                            && self
+                                .memory_check
+                                .watchpoints
+                                .iter()
+                                .any(|watchpoint| watchpoint.number.is_none())
+                            && ui
+                                .add(small_flat_button("重新启用监测点", theme::ACCENT))
+                                .clicked()
+                        {
+                            rearm_watch = true;
+                        }
+                        if self
+                            .memory_check
+                            .watchpoints
+                            .iter()
+                            .any(|watchpoint| !watchpoint.history.is_empty())
+                            && ui
+                                .add(small_flat_button("清空记录", theme::TEXT_FAINT))
+                                .clicked()
+                        {
+                            clear_history = true;
+                        }
+                    });
                     if !session_present {
                         ui.add_space(12.0);
                         ui.label(
@@ -3501,13 +3541,14 @@ impl App {
                                 .strong()
                                 .color(theme::TEXT),
                         );
-                        ui.label(
-                            RichText::new("启动调试后，在这里输入变量名或地址表达式即可添加硬件 watchpoint。")
-                                .size(10.5)
-                                .color(theme::TEXT_FAINT),
-                        );
                         ui.add_space(8.0);
-                        if ui.add(theme::secondary_button("启动调试")).clicked() {
+                        if ui
+                            .add(theme::secondary_button("启动调试"))
+                            .on_hover_text_at_pointer(
+                                "启动调试后，在这里输入变量名或地址表达式即可添加硬件 watchpoint。",
+                            )
+                            .clicked()
+                        {
                             start_debug = true;
                         }
                     } else {
@@ -3667,6 +3708,79 @@ impl App {
                                             },
                                         );
                                     });
+                                    if !watchpoint.history.is_empty() {
+                                        egui::CollapsingHeader::new(
+                                            RichText::new(format!(
+                                                "变化记录 ({})",
+                                                watchpoint.history.len()
+                                            ))
+                                            .size(10.0)
+                                            .color(theme::TEXT_DIM),
+                                        )
+                                        .id_salt(("simple_watch_history", index))
+                                        .default_open(false)
+                                        .show(ui, |ui| {
+                                            for event in watchpoint.history.iter().rev().take(50) {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        RichText::new(&event.time)
+                                                            .monospace()
+                                                            .size(9.5)
+                                                            .color(theme::TEXT_FAINT),
+                                                    );
+                                                    let old = event
+                                                        .old_value
+                                                        .as_deref()
+                                                        .unwrap_or("?");
+                                                    let new = event
+                                                        .new_value
+                                                        .as_deref()
+                                                        .unwrap_or("?");
+                                                    ui.label(
+                                                        RichText::new(format!("{old} -> {new}"))
+                                                            .monospace()
+                                                            .size(9.5)
+                                                            .color(theme::SUCCESS),
+                                                    );
+                                                    if let Some(location) = &event.location {
+                                                        ui.add(
+                                                            Label::new(
+                                                                RichText::new(location)
+                                                                    .size(9.5)
+                                                                    .color(theme::TEXT_DIM),
+                                                            )
+                                                            .truncate(),
+                                                        )
+                                                        .on_hover_text(location);
+                                                    }
+                                                });
+                                                if !event.stack.is_empty() {
+                                                    egui::CollapsingHeader::new(
+                                                        RichText::new("调用栈")
+                                                            .size(9.5)
+                                                            .color(theme::TEXT_FAINT),
+                                                    )
+                                                    .id_salt((
+                                                        "simple_watch_stack",
+                                                        index,
+                                                        event.id,
+                                                    ))
+                                                    .default_open(false)
+                                                    .show(ui, |ui| {
+                                                        for frame in &event.stack {
+                                                            ui.label(
+                                                                RichText::new(frame)
+                                                                    .monospace()
+                                                                    .size(9.0)
+                                                                    .color(theme::TEXT_FAINT),
+                                                            );
+                                                        }
+                                                    });
+                                                }
+                                                ui.add_space(1.0);
+                                            }
+                                        });
+                                    }
                                     ui.add_space(2.0);
                                 }
                             });
@@ -3676,6 +3790,14 @@ impl App {
         self.memory_check.open = open;
         if clear_watch {
             self.clear_hardware_watchpoints();
+        }
+        if clear_history {
+            for watchpoint in &mut self.memory_check.watchpoints {
+                watchpoint.history.clear();
+            }
+        }
+        if rearm_watch {
+            self.rearm_hardware_watchpoints();
         }
         if let Some(index) = remove_watch {
             self.remove_hardware_watchpoint(index);
@@ -5572,16 +5694,9 @@ impl App {
         let Some(mut draft) = self.build_options_draft.take() else {
             return;
         };
-        let has_makefile = self
-            .project
-            .as_ref()
-            .is_some_and(|project| makefile::find_makefile(&project.root).is_some());
         let toolchain = self.build_config.effective_toolchain(&self.project_meta);
-        let toolchain_mismatch = self.build_config.toolchain_mismatch();
         let gcc_like = toolchain.is_make_gcc_like();
         let arm_compiler = toolchain.is_arm_compiler();
-        let keil_build = toolchain.build_system() == BuildSystem::Keil;
-        let make_build = toolchain.build_system() == BuildSystem::Make;
         let mut close = false;
         let mut save = false;
         let mut tab = self.build_options_tab;
@@ -5604,71 +5719,13 @@ impl App {
                         .strong()
                         .color(theme::TEXT),
                 );
-                ui.label(
-                    RichText::new("保存在工程 .simple-embedded/settings.json")
-                        .size(10.5)
-                        .color(theme::TEXT_FAINT),
-                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
                         close = true;
                     }
                 });
             });
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("当前工具链")
-                        .size(10.5)
-                        .color(theme::TEXT_FAINT),
-                );
-                ui.label(
-                    RichText::new(toolchain.label())
-                        .size(11.5)
-                        .strong()
-                        .color(theme::ACCENT),
-                );
-                if toolchain_mismatch {
-                    ui.label(
-                        RichText::new("构建命令与工具链不一致")
-                            .size(9.5)
-                            .color(theme::WARNING),
-                    );
-                }
-            });
-            ui.label(
-                RichText::new(if make_build && gcc_like {
-                    "Make 工程保存时会按差异同步到 Makefile；修改前自动备份。"
-                } else if make_build && arm_compiler {
-                    "AC6/AC5 选项保存在工程配置，不自动修改 Makefile。"
-                } else if keil_build {
-                    "Keil 工程只写入工程 .simple-embedded/settings.json，不修改 .uvprojx。"
-                } else {
-                    "构建选项保存在工程 .simple-embedded/settings.json；自定义构建命令需自行使用这些参数。"
-                })
-                .size(10.5)
-                .color(theme::TEXT_FAINT),
-            );
-            if keil_build && arm_compiler {
-                ui.label(
-                    RichText::new("AC6/AC5 选项仅作为工程配置记录，实际编译由 Keil 工程完成。")
-                        .size(9.5)
-                        .color(theme::TEXT_FAINT),
-                );
-            } else if arm_compiler && make_build {
-                ui.label(
-                    RichText::new("AC6/AC5 选项保存在工程配置；不自动修改 Makefile。")
-                        .size(9.5)
-                        .color(theme::TEXT_FAINT),
-                );
-            } else if gcc_like {
-                ui.label(
-                    RichText::new("GCC/Clang 工具链会显示 newlib-nano 浮点、函数分段等选项。")
-                        .size(9.5)
-                        .color(theme::TEXT_FAINT),
-                );
-            }
-            ui.add_space(10.0);
+            ui.add_space(4.0);
 
             ui.horizontal(|ui| {
                 option_tab(ui, &mut tab, BuildOptionsTab::Global, "全局选项");
@@ -5680,7 +5737,7 @@ impl App {
 
             ScrollArea::vertical()
                 .id_salt("simple_embedded_build_options_scroll")
-                .max_height(430.0)
+                .max_height(320.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 8.0;
@@ -5696,29 +5753,56 @@ impl App {
                                 ui.add_space(2.0);
                             }
                             if gcc_like {
-                                ui.label(
-                                    RichText::new("newlib-nano 浮点支持")
-                                        .size(11.5)
-                                        .color(theme::TEXT_DIM),
-                                );
+                                if (draft.printf_float || draft.scanf_float)
+                                    && !draft.use_microlib
+                                {
+                                    draft.use_microlib = true;
+                                }
+                                let microlib_was = draft.use_microlib;
                                 ui.checkbox(
-                                    &mut draft.printf_float,
-                                    RichText::new("printf / sprintf 支持 %f（-u _printf_float）")
+                                    &mut draft.use_microlib,
+                                    RichText::new("Use MicroLIB")
                                         .size(11.5)
                                         .color(theme::TEXT_DIM),
                                 )
                                 .on_hover_text(
-                                    "newlib-nano 为了省体积默认裁掉浮点格式化，%f 会空白或打印 0。勾选后链接时加入 -u _printf_float，体积会增加几 KB",
+                                    "newlib-nano 浮点选项的总开关；勾选后才能启用下面的 printf/scanf 选项",
                                 );
-                                ui.checkbox(
-                                    &mut draft.scanf_float,
-                                    RichText::new("scanf / sscanf 支持 %f（-u _scanf_float）")
-                                        .size(11.5)
-                                        .color(theme::TEXT_DIM),
-                                )
-                                .on_hover_text(
-                                    "让 newlib-nano 的 scanf/sscanf 能读取浮点数；链接时加入 -u _scanf_float",
-                                );
+                                if microlib_was && !draft.use_microlib {
+                                    draft.printf_float = false;
+                                    draft.scanf_float = false;
+                                }
+                                ui.add_enabled_ui(draft.use_microlib, |ui| {
+                                    ui.indent("simple_embedded_microlib_options", |ui| {
+                                        ui.label(
+                                            RichText::new("newlib-nano 浮点支持")
+                                                .size(11.5)
+                                                .color(theme::TEXT_DIM),
+                                        );
+                                        ui.checkbox(
+                                            &mut draft.printf_float,
+                                            RichText::new(
+                                                "printf / sprintf 支持 %f（-u _printf_float）",
+                                            )
+                                            .size(11.5)
+                                            .color(theme::TEXT_DIM),
+                                        )
+                                        .on_hover_text(
+                                            "newlib-nano 为了省体积默认裁掉浮点格式化，%f 会空白或打印 0。勾选后链接时加入 -u _printf_float，体积会增加几 KB",
+                                        );
+                                        ui.checkbox(
+                                            &mut draft.scanf_float,
+                                            RichText::new(
+                                                "scanf / sscanf 支持 %f（-u _scanf_float）",
+                                            )
+                                            .size(11.5)
+                                            .color(theme::TEXT_DIM),
+                                        )
+                                        .on_hover_text(
+                                            "让 newlib-nano 的 scanf/sscanf 能读取浮点数；链接时加入 -u _scanf_float",
+                                        );
+                                    });
+                                });
                                 ui.add_space(2.0);
                             }
                             if !arm_compiler && !gcc_like {
@@ -5908,14 +5992,6 @@ impl App {
                 });
 
             ui.add_space(12.0);
-            if has_makefile && make_build && gcc_like {
-                ui.label(
-                    RichText::new("保存后会同步 GCC 支持的选项到 Makefile（修改前自动备份）")
-                        .size(10.5)
-                        .color(theme::TEXT_FAINT),
-                );
-                ui.add_space(4.0);
-            }
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.add(theme::primary_button("保存")).clicked() {
@@ -6322,10 +6398,6 @@ impl App {
         let Some(mut draft) = self.meta_draft.take() else {
             return;
         };
-        let has_makefile = self
-            .project
-            .as_ref()
-            .is_some_and(|project| makefile::find_makefile(&project.root).is_some());
         let mut close = false;
         let mut save = false;
         let mut reset = false;
@@ -6354,12 +6426,6 @@ impl App {
                     }
                 });
             });
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new("保存在工程 .simple-embedded/settings.json；Makefile 工程会按差异同步，Keil .uvprojx 不会被修改。")
-                    .size(10.5)
-                    .color(theme::TEXT_FAINT),
-            );
             ui.add_space(10.0);
 
             ui.label(
@@ -6436,16 +6502,6 @@ impl App {
             if let Some(note) = &draft.note {
                 ui.add_space(8.0);
                 ui.label(RichText::new(note).size(10.5).color(theme::WARNING));
-            }
-            if has_makefile {
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(
-                        "保存后会同步包含目录 / 库目录 / 宏定义到 Makefile（修改前自动备份）",
-                    )
-                    .size(10.5)
-                    .color(theme::TEXT_FAINT),
-                );
             }
 
             ui.add_space(12.0);
@@ -6587,7 +6643,7 @@ impl App {
             ui.set_width(650.0);
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("设置")
+                    RichText::new("配置")
                         .size(18.0)
                         .strong()
                         .color(theme::TEXT),
@@ -6616,60 +6672,14 @@ impl App {
 
             ScrollArea::vertical()
                 .id_salt("simple_embedded_settings_scroll")
-                .max_height(440.0)
+                .max_height(400.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if draft.tab == SettingsTab::Build {
                     ui.spacing_mut().item_spacing.y = 3.0;
                     if let Some(root) = &project_root {
                         ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            settings_section(ui, "构建");
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui
-                                    .add(theme::secondary_button("自动检测"))
-                                    .on_hover_text("先识别工程根目录的 Makefile / Cargo.toml / CMakeLists.txt / .uvprojx，再查询 PATH 和常见安装目录")
-                                    .clicked()
-                                {
-                                    let detected = autodetect(root);
-                                    let toolchain = detected.toolchain;
-                                    let command = detected.build_command.trim().to_owned();
-                                    let found = crate::config::command_available(&command);
-                                    draft.extra_paths_text =
-                                        detected.extra_paths.join("\n");
-                                    draft.config.toolchain = toolchain;
-                                    draft.config.build_command = detected.build_command;
-                                    draft.config.clean_command = detected.clean_command;
-                                    draft.config.rebuild_command = detected.rebuild_command;
-                                    draft.note = if toolchain == ToolchainKind::Auto {
-                                        Some("未识别到工程根目录的构建系统，也未在 PATH 找到 make / cargo / cmake；请手动选择工具链并填写命令。".to_owned())
-                                    } else if command.is_empty() {
-                                        Some(format!(
-                                            "工程根目录识别为 {}，但未找到对应构建工具；请在“构建工具链”页设置路径。",
-                                            toolchain.label()
-                                        ))
-                                    } else if !found {
-                                        Some(format!(
-                                            "工程根目录识别为 {}；未在 PATH / 常见目录找到 `{command}`，请在“构建工具链”页设置路径。",
-                                            toolchain.label()
-                                        ))
-                                    } else {
-                                        Some(format!(
-                                            "工程根目录识别为 {}；构建命令：{command}（已找到）。",
-                                            toolchain.label()
-                                        ))
-                                    };
-                                }
-                            });
-                        });
-                        ui.add(
-                            Label::new(
-                                RichText::new(util::display_path(root))
-                                    .size(9.5)
-                                    .color(theme::TEXT_FAINT),
-                            )
-                            .truncate(),
-                        );
+                        settings_section(ui, "构建");
                         ui.add_space(8.0);
 
                         ui.horizontal(|ui| {
@@ -6706,12 +6716,40 @@ impl App {
                                         );
                                     }
                                 });
+                            if ui
+                                .add(theme::secondary_button("自动检测"))
+                                .on_hover_text_at_pointer("自动检测先看工程根目录的 Makefile / Cargo.toml / CMakeLists.txt / .uvprojx，再查询 PATH。工具链保存在工程配置，工程信息只读显示。")
+                                .clicked()
+                            {
+                                let detected = autodetect(root);
+                                let toolchain = detected.toolchain;
+                                let command = detected.build_command.trim().to_owned();
+                                let found = crate::config::command_available(&command);
+                                draft.extra_paths_text = detected.extra_paths.join("\n");
+                                draft.config.toolchain = toolchain;
+                                draft.config.build_command = detected.build_command;
+                                draft.config.clean_command = detected.clean_command;
+                                draft.config.rebuild_command = detected.rebuild_command;
+                                draft.note = if toolchain == ToolchainKind::Auto {
+                                    Some("未识别到工程根目录的构建系统，也未在 PATH 找到 make / cargo / cmake；请手动选择工具链并填写命令。".to_owned())
+                                } else if command.is_empty() {
+                                    Some(format!(
+                                        "工程根目录识别为 {}，但未找到对应构建工具；请在“构建工具链”页设置路径。",
+                                        toolchain.label()
+                                    ))
+                                } else if !found {
+                                    Some(format!(
+                                        "工程根目录识别为 {}；未在 PATH / 常见目录找到 `{command}`，请在“构建工具链”页设置路径。",
+                                        toolchain.label()
+                                    ))
+                                } else {
+                                    Some(format!(
+                                        "工程根目录识别为 {}；构建命令：{command}（已找到）。",
+                                        toolchain.label()
+                                    ))
+                                };
+                            }
                         });
-                        ui.label(
-                            RichText::new("自动检测先看工程根目录的 Makefile / Cargo.toml / CMakeLists.txt / .uvprojx，再查询 PATH。工具链保存在工程配置，工程信息只读显示。")
-                                .size(9.0)
-                                .color(theme::TEXT_FAINT),
-                        );
                         ui.add_space(6.0);
 
                         ui.horizontal(|ui| {
@@ -6836,20 +6874,9 @@ impl App {
                                 .size(9.0)
                                 .color(theme::TEXT_FAINT),
                             );
-                        } else {
-                            ui.label(
-                                RichText::new(format!(
-                                    "当前烧录工具为 {}。参数请在左侧“工程信息 → 烧录配置”中编辑。",
-                                    draft.config.flash_tool.label()
-                                ))
-                                .size(9.5)
-                                .color(theme::TEXT_FAINT),
-                            );
                         }
 
-                        ui.add_space(12.0);
-                        settings_section(ui, "并行构建");
-                        ui.add_space(3.0);
+                        ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             ui.add_sized(
                                 [86.0, 22.0],
@@ -6875,15 +6902,6 @@ impl App {
                                     .min(128) as u16;
                             }
                         });
-                        ui.add_space(3.0);
-                        ui.label(
-                            RichText::new(
-                                "0 = 不启用。Make 使用 MAKEFLAGS=-jN，Cargo 使用 CARGO_BUILD_JOBS，CMake 使用 CMAKE_BUILD_PARALLEL_LEVEL；自定义脚本需要自行处理。",
-                            )
-                            .size(9.0)
-                            .color(theme::TEXT_FAINT),
-                        );
-
                         ui.add_space(12.0);
                         settings_section(ui, "工具链路径 / 额外 PATH");
                         ui.add_space(3.0);
@@ -6895,21 +6913,32 @@ impl App {
                             .color(theme::TEXT_FAINT),
                         );
                         ui.add_space(4.0);
+                        let input_height = 100.0;
                         Frame::new()
                             .fill(theme::BG)
                             .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
                             .corner_radius(5)
                             .inner_margin(Margin::symmetric(4, 3))
                             .show(ui, |ui| {
-                                ui.add(
-                                    TextEdit::multiline(&mut draft.extra_paths_text)
-                                        .font(FontId::monospace(10.5))
-                                        .text_color(theme::TEXT)
-                                        .background_color(theme::BG)
-                                        .hint_text("例如 C:\\toolchain\\bin")
-                                        .desired_rows(3)
-                                        .desired_width(f32::INFINITY),
-                                );
+                                ScrollArea::vertical()
+                                    .id_salt("simple_embedded_extra_paths_scroll")
+                                    .max_height(input_height - 6.0)
+                                    .auto_shrink([false, false])
+                                    .scroll_bar_visibility(
+                                        egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                    )
+                                    .show(ui, |ui| {
+                                        ui.add(
+                                            TextEdit::multiline(&mut draft.extra_paths_text)
+                                                .font(FontId::monospace(10.5))
+                                                .text_color(theme::TEXT)
+                                                .background_color(theme::BG)
+                                                .hint_text("例如 C:\\toolchain\\bin")
+                                                .desired_rows(7)
+                                                .desired_width(f32::INFINITY)
+                                                .frame(Frame::new()),
+                                        );
+                                    });
                             });
                     } else {
                         ui.add_space(10.0);
@@ -7148,20 +7177,13 @@ impl App {
             ui.add_space(10.0);
             ui.separator();
             ui.add_space(5.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("本地或 SSH 构建共用同一组命令")
-                        .size(9.0)
-                        .color(theme::TEXT_FAINT),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(theme::primary_button("保存")).clicked() {
-                        save = true;
-                    }
-                    if ui.add(theme::secondary_button("取消")).clicked() {
-                        close = true;
-                    }
-                });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.add(theme::primary_button("保存")).clicked() {
+                    save = true;
+                }
+                if ui.add(theme::secondary_button("取消")).clicked() {
+                    close = true;
+                }
             });
         });
 
@@ -7592,7 +7614,11 @@ fn meta_group_impl(
         ui.cursor().min,
         egui::vec2(ui.available_width(), row_height),
     );
-    let hovered = ui.rect_contains_pointer(row_rect);
+    let fill_rect = egui::Rect::from_min_max(
+        egui::pos2(row_rect.left() - ui.spacing().indent, row_rect.top()),
+        row_rect.max,
+    );
+    let hovered = ui.rect_contains_pointer(fill_rect);
     let fill = if selected {
         Color32::from_rgb(36, 84, 108)
     } else if hovered {
@@ -7602,7 +7628,7 @@ fn meta_group_impl(
     };
     if fill != Color32::TRANSPARENT {
         ui.painter()
-            .rect_filled(row_rect, CornerRadius::same(4), fill);
+            .rect_filled(fill_rect, CornerRadius::same(4), fill);
     }
 
     let row = ui.allocate_ui_with_layout(
@@ -7762,7 +7788,11 @@ fn meta_editable_list(
         ui.cursor().min,
         egui::vec2(ui.available_width(), row_height),
     );
-    let hovered = ui.rect_contains_pointer(row_rect);
+    let fill_rect = egui::Rect::from_min_max(
+        egui::pos2(row_rect.left() - ui.spacing().indent * 2.0, row_rect.top()),
+        row_rect.max,
+    );
+    let hovered = ui.rect_contains_pointer(fill_rect);
     let fill = if selected {
         Color32::from_rgb(36, 84, 108)
     } else if hovered {
@@ -7772,7 +7802,7 @@ fn meta_editable_list(
     };
     if fill != Color32::TRANSPARENT {
         ui.painter()
-            .rect_filled(row_rect, CornerRadius::same(4), fill);
+            .rect_filled(fill_rect, CornerRadius::same(4), fill);
     }
 
     let mut plus_clicked = false;

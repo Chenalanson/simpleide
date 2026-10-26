@@ -1271,9 +1271,11 @@ pub struct Settings {
     pub show_hover_info: bool,
     pub output_open: bool,
     pub output_height: f32,
+    pub left_panel_width: f32,
     pub left_split: f32,
     pub resource_open: bool,
     pub info_open: bool,
+    pub auto_start_watch: bool,
 }
 
 impl Default for Settings {
@@ -1309,9 +1311,11 @@ impl Default for Settings {
             show_hover_info: true,
             output_open: true,
             output_height: 214.0,
+            left_panel_width: 300.0,
             left_split: 0.5,
             resource_open: true,
             info_open: true,
+            auto_start_watch: false,
         }
     }
 }
@@ -1383,6 +1387,10 @@ impl Settings {
             self.output_height = 214.0;
         }
         self.output_height = self.output_height.clamp(40.0, 4000.0);
+        if !self.left_panel_width.is_finite() || self.left_panel_width <= 0.0 {
+            self.left_panel_width = 300.0;
+        }
+        self.left_panel_width = self.left_panel_width.clamp(300.0, 520.0);
         if !self.left_split.is_finite() || self.left_split <= 0.0 {
             self.left_split = 0.5;
         }
@@ -1476,6 +1484,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(settings.show_hover_info);
         assert!(!settings.check_duplicate_macro_values);
+        assert_eq!(settings.left_panel_width, 300.0);
     }
 
     #[test]

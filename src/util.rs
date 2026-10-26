@@ -346,6 +346,53 @@ pub fn strip_c_comments(text: &str) -> String {
     output
 }
 
+/// Local wall-clock time as `HH:MM:SS.mmm`, used by watchpoint history.
+pub fn local_timestamp() -> String {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct SystemTime {
+            year: u16,
+            month: u16,
+            day_of_week: u16,
+            day: u16,
+            hour: u16,
+            minute: u16,
+            second: u16,
+            milliseconds: u16,
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetLocalTime(time: *mut SystemTime);
+        }
+        let mut time = SystemTime {
+            year: 0,
+            month: 0,
+            day_of_week: 0,
+            day: 0,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            milliseconds: 0,
+        };
+        // SAFETY: GetLocalTime writes a SYSTEMTIME to the provided pointer.
+        unsafe { GetLocalTime(&mut time) };
+        format!(
+            "{:02}:{:02}:{:02}.{:03}",
+            time.hour, time.minute, time.second, time.milliseconds
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        format!("{millis}")
+    }
+}
+
 pub fn project_key(path: &Path) -> String {
     let value = path.to_string_lossy().replace('/', "\\");
     if cfg!(target_os = "windows") {

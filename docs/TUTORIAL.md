@@ -69,7 +69,7 @@ cargo run --release -- D:\firmware\my-board\my-board.se-workspace
 - 收起或展开工程信息时标题位置保持不变；文件树较短时标题紧跟最后一个文件，展开状态也会记住
 - 文件树下方是“工程信息”，点击分组或列表整行可选中并收起/展开，选中行显示淡蓝色背景
 - 工程信息中可查看构建配置、芯片支持包、输出目录、CPU、浮点、链接脚本、烧录配置、包含目录、库搜索目录和宏定义
-- 工程信息 → 构建配置里的 **工具链** 只读显示，不能直接改；修改入口是 **设置 → 构建 → 工具链**（自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake）。设置里的 **自动检测** 先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，确定期望的构建系统，再查 PATH 和常见安装目录中的 make / cargo / cmake / UV4。CubeMX 同时生成 MDK-ARM 和 Makefile 时，Make 构建显示 Makefile 的目标/芯片/链接脚本，Keil 工具链显示 `.uvprojx` 的值；构建命令与所选工具链不一致时会出现黄色提示
+- 工程信息 → 构建配置里的 **工具链** 只读显示，不能直接改；修改入口是 **配置 → 构建 → 工具链**（自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake）。配置里的 **自动检测** 先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，确定期望的构建系统，再查 PATH 和常见安装目录中的 make / cargo / cmake / UV4。CubeMX 同时生成 MDK-ARM 和 Makefile 时，Make 构建显示 Makefile 的目标/芯片/链接脚本，Keil 工具链显示 `.uvprojx` 的值；构建命令与所选工具链不一致时会出现黄色提示
 - 构建配置里的 **构建选项 → 编辑** 分为全局选项、C/C++ 编译器、汇编器和链接器四个页面，页面内容会随工具链变化：GCC/Clang 显示 newlib-nano 浮点、LTO、函数分段；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段
 - 只有 Make + GCC/Clang 工具链保存构建选项时才会按差异写回 Makefile；链接器输出格式选 `AXF` 后，重新构建会生成 `.axf` 副本。Keil 和 Make AC5/AC6 只写工程配置，不修改 `.uvprojx`
 - **全局选项** 在 GCC/Clang 工具链下提供 newlib-nano 浮点支持开关：`printf / sprintf 支持 %f` 和 `scanf / sscanf 支持 %f`。勾选后 Makefile 工程会写入 `LDFLAGS += -u _printf_float` / `-u _scanf_float`，解决 `%f` 空白或打印 0 的问题；会增加几 KB 体积
@@ -112,7 +112,7 @@ Simple embedded 会自动检查工程根目录：
 | `Makefile` / `makefile` / `GNUmakefile` | Make（`make`、`gmake` 或 Windows 的 `mingw32-make`） |
 | `CMakeLists.txt` | CMake |
 
-如果根目录没有这些文件，构建按钮会被禁用。点击左上角工程卡片里的 **配置**，手动填写命令即可；设置里也可以重新点击 **自动检测**。
+如果根目录没有这些文件，构建按钮会被禁用。点击左上角工程卡片里的 **配置**，手动填写命令即可；配置里也可以重新点击 **自动检测**。
 
 > Simple embedded 只在工程内创建 `.simple-embedded/settings.json`（构建/烧录配置）和用户主动生成的 `.se-workspace`；不会创建 `.eide` 等专有格式，也不会修改 Keil `.uvprojx`。工程文件夹仍然可以直接提交到 Git 或拷贝给同事。
 
@@ -170,8 +170,8 @@ Simple embedded 会自动检查工程根目录：
 - 标签页下面是文件路径面包屑（如 `Core > Src > main.c`），从工程根目录开始
 - 最底部状态栏显示当前行/列、缩进、编码、行尾和语言，并集中放置只读、寄存器、数组、符号、格式化、自动换行、保存按钮
 - 输入至少 2 个字符后会自动在光标旁弹出补全框；输入 `.` 或 `->` 时补全结构体成员。`↑` / `↓` 选择，`Enter` / `Tab` 插入，`Esc` 关闭；`Ctrl+Space` 可随时手动打开
-- 把鼠标停在函数名、变量名、结构体或宏上，会显示声明签名、上方注释以及返回值 / 类型；提示跟随鼠标显示，跨文件函数会使用轻量符号索引查找声明。设置 → 其他 的 **变量 / 函数悬停提示** 可以关闭该功能
-- 宏诊断：同一文件内同名 `#define` 重复会显示红色波浪线；设置 → 其他 打开 **宏重复值提示（黄色波浪线）** 后，`PWM1PIN` / `PWM2PIN` / `PWM3PIN` 这类宏族使用相同替换值时会显示黄色波浪线。C 语言本身允许不同宏名映射到相同值，所以它是可选的复制粘贴提示；供应商头文件不参与该检查
+- 把鼠标停在函数名、变量名、结构体或宏上，会显示声明签名、上方注释以及返回值 / 类型；提示跟随鼠标显示，跨文件函数会使用轻量符号索引查找声明。配置 → 其他 的 **变量 / 函数悬停提示** 可以关闭该功能
+- 宏诊断：同一文件内同名 `#define` 重复会显示红色波浪线；配置 → 其他 打开 **宏重复值提示（黄色波浪线）** 后，`PWM1PIN` / `PWM2PIN` / `PWM3PIN` 这类宏族使用相同替换值时会显示黄色波浪线。C 语言本身允许不同宏名映射到相同值，所以它是可选的复制粘贴提示；供应商头文件不参与该检查
 - 成员补全是轻量解析，不做完整 C/C++ 语义分析；刚修改的 struct 定义需要先保存，复杂宏展开、模板、继承或函数返回类型可能不会出现在候选里
 - 当前编辑器只支持单光标和单一矩形列选择，不支持多个独立光标
 - `F12` 跳到当前标识符的定义（在工程符号索引中查找）；`Shift+F12` 在工程中查找所有引用
@@ -239,7 +239,7 @@ Simple embedded 会自动检查工程根目录：
 
 ### 并行构建
 
-在 **配置 → 构建 → 并行构建** 中设置 **并行任务数**：
+在 **配置 → 构建** 中设置 **并行任务数**：
 
 - `0`：不启用，保持原命令行为
 - `N > 0`：Make 使用 `MAKEFLAGS=-jN`，Cargo 使用 `CARGO_BUILD_JOBS=N`，CMake 使用 `CMAKE_BUILD_PARALLEL_LEVEL=N`
@@ -250,7 +250,7 @@ Simple embedded 会自动检查工程根目录：
 
 ### 构建设置
 
-设置弹窗顶部有 **构建 / 编辑器 / 调试 / 其他** 四个页签，点击后下方只显示对应页面。
+配置窗口顶部有 **构建 / 编辑器 / 调试 / 其他** 四个页签，点击后下方只显示对应页面。
 
 在 **构建** 页可以：
 
@@ -349,7 +349,7 @@ ST-Link、STM32CubeProgrammer、pyOCD、J-Link、Keil、`.bin` 地址、PATH 配
 
 ### 在 Simple embedded 中配置
 
-打开 **设置 → 构建**：
+打开 **配置 → 构建**：
 
 1. 构建位置选择 **远程 SSH**
 2. 填写：
@@ -453,7 +453,7 @@ mingw32-make --version
 | `Ctrl+B` | Build |
 | `Ctrl+Shift+B` | Rebuild |
 | `Ctrl+W` | 关闭当前 Tab |
-| `Ctrl+,` | 打开设置 |
+| `Ctrl+,` | 打开配置 |
 | `Ctrl+=` / `Ctrl+-` | 放大/缩小代码字号 |
 
 ---
@@ -482,7 +482,7 @@ D:\Program Files\Git\usr\bin
 
 ### 自动检测不到构建系统
 
-确认工程根目录直接存在 `Makefile`、`Cargo.toml` 或 `CMakeLists.txt`。如果构建脚本在子目录，打开设置手动填写：
+确认工程根目录直接存在 `Makefile`、`Cargo.toml` 或 `CMakeLists.txt`。如果构建脚本在子目录，打开配置手动填写：
 
 ```text
 cd firmware && make
@@ -539,3 +539,20 @@ target\release\simple-embedded.exe
 ```
 
 项目结构与设计取舍见根目录的 `README.md` 和 `AGENTS.md`。
+
+---
+
+## 13. 动态监测（watchpoint）
+
+动态监测需要调试会话：在 **检测 → 动态监测** 输入变量名或地址表达式，选择写入 / 读取 / 读写，目标访问该位置时会暂停并记录：
+
+- 本地时间（精确到毫秒）
+- 旧值 → 新值
+- GDB 停止位置（谁改变了它）
+- 调用栈（谁调用了它）
+
+勾选 **调试时自动启动动态监测** 后，启动调试会自动打开面板并重新启用已保存的 watchpoint。Cortex-M 通常只有 2–4 个硬件比较器；数量不够时 GDB 可能退化为较慢的软件 watchpoint。优化后的变量、内联函数和高频写入会让记录不完整。
+
+完整操作、示例和常见问题见：
+
+**[docs/DYNAMIC.md](DYNAMIC.md)**

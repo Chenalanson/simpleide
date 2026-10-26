@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use eframe::egui::{self, Align2, Color32, FontId, Sense, Shape, Stroke};
+use eframe::egui::{self, Align2, Color32, FontId, Sense, Stroke};
 
 use crate::git::{status_badges, GitStatus};
 use crate::ignore::IgnoreRules;
@@ -209,6 +209,7 @@ impl FileTree {
         actions: &mut Vec<TreeAction>,
         can_paste: bool,
     ) {
+        ui.add_space(4.0);
         let entries = self.children_for(dir).to_vec();
         for entry in entries {
             let selected = active == Some(entry.path.as_path());
@@ -428,29 +429,24 @@ fn row(
             painter.rect_filled(rect, egui::CornerRadius::same(4), theme::HOVER);
         }
 
-        let indent = 7.0 + depth as f32 * 14.0;
+        // The tree is a child of the "资源管理器" section header, so the
+        // whole body starts one indent level in from the panel edge.
+        let base = ui.spacing().indent;
+        let indent = base + 7.0 + depth as f32 * 14.0;
         let arrow_center = egui::pos2(rect.left() + indent + 5.0, rect.center().y);
+        for level in 0..depth {
+            // Keep each guide directly under the chevron of its parent row.
+            let x = rect.left() + base + 12.0 + level as f32 * 14.0;
+            painter.line_segment(
+                [
+                    egui::pos2(x, rect.top()),
+                    egui::pos2(x, rect.bottom() + 1.0),
+                ],
+                Stroke::new(1.0_f32, theme::BORDER),
+            );
+        }
         if is_dir {
-            let angle = openness.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
-            let (sin, cos) = angle.sin_cos();
-            let rotate = |x: f32, y: f32| egui::vec2(x * cos - y * sin, x * sin + y * cos);
-            let points = [
-                egui::vec2(-1.5, -3.5),
-                egui::vec2(-1.5, 3.5),
-                egui::vec2(2.5, 0.0),
-            ]
-            .into_iter()
-            .map(|point| arrow_center + rotate(point.x, point.y))
-            .collect();
-            painter.add(Shape::convex_polygon(
-                points,
-                if selected {
-                    theme::TEXT
-                } else {
-                    theme::TEXT_FAINT
-                },
-                Stroke::NONE,
-            ));
+            paint_chevron(&painter, arrow_center, openness);
         }
 
         let icon_x = rect.left() + indent + 15.0;
@@ -487,6 +483,18 @@ fn row(
     }
 
     RowResponse { response }
+}
+
+fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, openness: f32) {
+    let stroke = Stroke::new(1.6_f32, theme::ACCENT);
+    let angle = openness.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
+    let (sin, cos) = angle.sin_cos();
+    let rotate = |x: f32, y: f32| egui::vec2(x * cos - y * sin, x * sin + y * cos);
+    let first = center + rotate(-2.0, -4.0);
+    let middle = center + rotate(2.0, 0.0);
+    let last = center + rotate(-2.0, 4.0);
+    painter.line_segment([first, middle], stroke);
+    painter.line_segment([middle, last], stroke);
 }
 
 fn paint_folder(painter: &egui::Painter, x: f32, center_y: f32) {

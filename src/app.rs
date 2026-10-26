@@ -355,6 +355,16 @@ impl WatchKind {
 }
 
 #[derive(Clone, Debug)]
+struct WatchEvent {
+    id: u64,
+    time: String,
+    old_value: Option<String>,
+    new_value: Option<String>,
+    location: Option<String>,
+    stack: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
 struct HwWatchpoint {
     number: Option<usize>,
     expression: String,
@@ -363,6 +373,15 @@ struct HwWatchpoint {
     hits: usize,
     old_value: Option<String>,
     new_value: Option<String>,
+    history: Vec<WatchEvent>,
+}
+
+#[derive(Debug)]
+struct PendingWatchBt {
+    event_id: u64,
+    expression: String,
+    collecting: bool,
+    lines: Vec<String>,
 }
 
 #[derive(Default)]
@@ -380,6 +399,8 @@ struct MemoryCheckState {
     watch_filter: String,
     watch_error: Option<String>,
     watch_log_scan: usize,
+    pending_bt: Option<PendingWatchBt>,
+    watch_seq: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1091,7 +1112,7 @@ impl App {
                 );
             } else {
                 self.set_toast(
-                    "工程已打开，但没有检测到构建系统，请打开设置填写命令",
+                    "工程已打开，但没有检测到构建系统，请打开配置填写命令",
                     Severity::Warning,
                 );
             }
@@ -1477,6 +1498,7 @@ impl App {
             hits: 0,
             old_value: None,
             new_value: None,
+            history: Vec::new(),
         });
         self.memory_check.watch_input.clear();
         self.memory_check.watch_error = None;
@@ -1514,6 +1536,50 @@ impl App {
         }
         self.memory_check.watchpoints.clear();
         self.memory_check.watch_error = None;
+        self.memory_check.pending_bt = None;
+    }
+
+    /// A debug session ended: keep the expressions and history for the next
+    /// session, but GDB's watchpoint numbers are no longer valid.
+    fn detach_hardware_watchpoints(&mut self) {
+        for watchpoint in &mut self.memory_check.watchpoints {
+            watchpoint.number = None;
+            watchpoint.hardware = None;
+            watchpoint.old_value = None;
+            watchpoint.new_value = None;
+        }
+        self.memory_check.pending_bt = None;
+        self.memory_check.watch_error = None;
+        self.memory_check.watch_log_scan = 0;
+    }
+
+    /// Re-send the saved watch expressions after a new debug session starts.
+    fn rearm_hardware_watchpoints(&mut self) {
+        if self.debug.session.is_none() || self.debug.running {
+            return;
+        }
+        let expressions = self
+            .memory_check
+            .watchpoints
+            .iter()
+            .map(|watchpoint| (watchpoint.expression.clone(), watchpoint.kind))
+            .collect::<Vec<_>>();
+        for watchpoint in &mut self.memory_check.watchpoints {
+            watchpoint.number = None;
+            watchpoint.hardware = None;
+            watchpoint.old_value = None;
+            watchpoint.new_value = None;
+        }
+        self.memory_check.watch_error = None;
+        if expressions.is_empty() {
+            return;
+        }
+        if let Some(session) = &mut self.debug.session {
+            session.send("set can-use-hw-watchpoints 1");
+            for (expression, kind) in expressions {
+                session.send(&format!("{} {expression}", kind.command()));
+            }
+        }
     }
 
     /// Follow new gdb console lines for watchpoint creation and hits. This is
@@ -1531,8 +1597,10 @@ impl App {
         }
         let fresh = session.log[self.memory_check.watch_log_scan..].to_vec();
         self.memory_check.watch_log_scan = session.log.len();
+        self.poll_watch_backtrace(&fresh);
 
         let mut hit = None;
+        let mut bt_hit = None;
         let mut created_watch = false;
         for (index, line) in fresh.iter().enumerate() {
             let trimmed = line.trim();
@@ -1560,7 +1628,8 @@ impl App {
             };
             let mut old_value = None;
             let mut new_value = None;
-            for value in fresh.iter().skip(index + 1).take(6) {
+            let mut location = None;
+            for value in fresh.iter().skip(index + 1).take(10) {
                 let value = value.trim();
                 if let Some(old) = value.strip_prefix("Old value = ") {
                     old_value = Some(old.to_owned());
@@ -1568,7 +1637,10 @@ impl App {
                 if let Some(new) = value.strip_prefix("New value = ") {
                     new_value = Some(new.to_owned());
                 }
-                if old_value.is_some() && new_value.is_some() {
+                if value.contains(" at ") && value.contains(':') {
+                    location = Some(value.to_owned());
+                }
+                if old_value.is_some() && new_value.is_some() && location.is_some() {
                     break;
                 }
             }
@@ -1597,11 +1669,14 @@ impl App {
                         hits: 0,
                         old_value: None,
                         new_value: None,
+                        history: Vec::new(),
                     });
                     self.memory_check.watchpoints.len() - 1
                 }
                 None => continue,
             };
+            let event_id = self.memory_check.watch_seq.wrapping_add(1).max(1);
+            self.memory_check.watch_seq = event_id;
             let watchpoint = &mut self.memory_check.watchpoints[position];
             watchpoint.number = Some(notice.number);
             watchpoint.hardware = Some(notice.hardware);
@@ -1609,18 +1684,39 @@ impl App {
                 watchpoint.hits = watchpoint.hits.saturating_add(1);
                 watchpoint.old_value = old_value.clone();
                 watchpoint.new_value = new_value.clone();
-                hit = Some((
-                    notice.number,
-                    watchpoint.expression.clone(),
-                    old_value,
-                    new_value,
-                ));
+                watchpoint.history.push(WatchEvent {
+                    id: event_id,
+                    time: crate::util::local_timestamp(),
+                    old_value: old_value.clone(),
+                    new_value: new_value.clone(),
+                    location: location.clone(),
+                    stack: Vec::new(),
+                });
+                if watchpoint.history.len() > 200 {
+                    watchpoint.history.remove(0);
+                }
+                let expression = watchpoint.expression.clone();
+                hit = Some((notice.number, expression.clone(), old_value, new_value));
+                bt_hit = Some((event_id, expression));
             } else {
                 created_watch = true;
             }
         }
         if created_watch {
             self.memory_check.watch_error = None;
+        }
+        if let Some((event_id, expression)) = bt_hit {
+            self.memory_check.pending_bt = Some(PendingWatchBt {
+                event_id,
+                expression,
+                collecting: false,
+                lines: Vec::new(),
+            });
+            if let Some(session) = &mut self.debug.session {
+                session.send(&format!("echo __SE_WP_BT_BEGIN_{event_id}__\\n"));
+                session.send("bt 6");
+                session.send(&format!("echo __SE_WP_BT_END_{event_id}__\\n"));
+            }
         }
 
         if let Some((number, expression, old_value, new_value)) = hit {
@@ -1636,6 +1732,56 @@ impl App {
             if self.memory_check.open {
                 self.memory_check.tab = MemoryCheckTab::Dynamic;
             }
+        }
+    }
+
+    /// Collect the `bt` output requested after a watchpoint hit. The markers
+    /// keep unrelated gdb output out of the stack.
+    fn poll_watch_backtrace(&mut self, fresh: &[String]) {
+        let Some(mut pending) = self.memory_check.pending_bt.take() else {
+            return;
+        };
+        let begin = format!("__SE_WP_BT_BEGIN_{}__", pending.event_id);
+        let end = format!("__SE_WP_BT_END_{}__", pending.event_id);
+        let mut finished = false;
+        for line in fresh {
+            let trimmed = line.trim();
+            if trimmed.contains(&begin) {
+                pending.collecting = true;
+                pending.lines.clear();
+                continue;
+            }
+            if trimmed.contains(&end) {
+                finished = true;
+                break;
+            }
+            if pending.collecting {
+                let value = trimmed.trim_start_matches("(gdb) ").trim();
+                if value.starts_with('#') || value.contains(" at ") {
+                    pending.lines.push(value.to_owned());
+                    if pending.lines.len() > 8 {
+                        pending.lines.remove(0);
+                    }
+                }
+            }
+        }
+        if finished {
+            if let Some(watchpoint) = self
+                .memory_check
+                .watchpoints
+                .iter_mut()
+                .find(|watchpoint| watchpoint.expression == pending.expression)
+            {
+                if let Some(event) = watchpoint
+                    .history
+                    .iter_mut()
+                    .find(|event| event.id == pending.event_id)
+                {
+                    event.stack = pending.lines;
+                }
+            }
+        } else {
+            self.memory_check.pending_bt = Some(pending);
         }
     }
 
@@ -2103,7 +2249,7 @@ impl App {
                 Some(gdb) => gdb,
                 None => {
                     return self.debug_start_error(
-                        "未找到 arm-none-eabi-gdb，请在“设置 → 调试”填写 ARM gdb 路径；MinGW 的 gdb 不能调试 ARM 目标",
+                        "未找到 arm-none-eabi-gdb，请在“配置 → 调试”填写 ARM gdb 路径；MinGW 的 gdb 不能调试 ARM 目标",
                     );
                 }
             }
@@ -2111,7 +2257,7 @@ impl App {
             match crate::debugger::detect_gdb(&configured_gdb) {
                 Some(gdb) => gdb,
                 None => {
-                    return self.debug_start_error("未找到 gdb，请在“设置 → 调试”填写 gdb 路径");
+                    return self.debug_start_error("未找到 gdb，请在“配置 → 调试”填写 gdb 路径");
                 }
             }
         };
@@ -2171,9 +2317,7 @@ impl App {
         self.debug.running = false;
         self.debug.open = true;
         self.debug.error = None;
-        self.memory_check.watchpoints.clear();
-        self.memory_check.watch_error = None;
-        self.memory_check.watch_log_scan = 0;
+        self.detach_hardware_watchpoints();
         self.debug.log.clear();
         self.debug.target = Some(target.clone());
         self.debug.watch_refresh = None;
@@ -2234,6 +2378,11 @@ impl App {
                 self.debug.current_source = None;
                 self.debug.running = false;
                 self.refresh_debug_watch();
+                if self.settings.auto_start_watch {
+                    self.memory_check.open = true;
+                    self.memory_check.tab = MemoryCheckTab::Dynamic;
+                    self.rearm_hardware_watchpoints();
+                }
                 let continue_now = self.debug.pending_continue;
                 self.debug.pending_continue = false;
                 if continue_now {
@@ -2369,9 +2518,7 @@ impl App {
             self.debug.running = false;
             self.debug.error = None;
             self.debug.log.push("[调试启动已取消]".to_owned());
-            self.memory_check.watchpoints.clear();
-            self.memory_check.watch_error = None;
-            self.memory_check.watch_log_scan = 0;
+            self.detach_hardware_watchpoints();
             return;
         }
         if let Some(mut session) = self.debug.session.take() {
@@ -2388,9 +2535,7 @@ impl App {
         self.debug.error = None;
         self.debug.current_source = None;
         self.debug.log_scan = 0;
-        self.memory_check.watchpoints.clear();
-        self.memory_check.watch_error = None;
-        self.memory_check.watch_log_scan = 0;
+        self.detach_hardware_watchpoints();
         self.debug.peripheral_values.clear();
         self.debug.peripheral_open.clear();
         self.debug.peripheral_initialized = false;
@@ -6020,10 +6165,16 @@ impl eframe::App for App {
         let mut actions = Vec::new();
 
         self.show_status_bar(ui, &mut actions);
+        let old_spacing = ui.spacing().item_spacing;
+        let old_resize = ui.style().interaction.resize_grab_radius_side;
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.style_mut().interaction.resize_grab_radius_side = 0.0;
         self.show_action_rail(ui, &mut actions);
         self.show_side_panel(ui, &mut actions);
         self.show_output_panel(ui, &mut actions);
         self.show_center(ui, &mut actions);
+        ui.spacing_mut().item_spacing = old_spacing;
+        ui.style_mut().interaction.resize_grab_radius_side = old_resize;
         self.update_completion(&ctx);
 
         if self.settings_draft.is_some() {
@@ -6230,6 +6381,7 @@ impl App {
                     .inner_margin(Margin::same(3)),
             )
             .show_inside(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
                 ui.painter().rect(
                     ui.max_rect(),
                     CornerRadius::same(8),
@@ -6469,6 +6621,7 @@ impl App {
                     .inner_margin(Margin::same(4)),
             )
             .show_inside(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
                 ui.painter().rect(
                     ui.max_rect(),
                     CornerRadius::same(8),

@@ -10,18 +10,18 @@
 
 ![导入工程](docs/welcome.png)
 
-从打开目录到构建、SSH、烧录和常见问题的完整中文教程：[docs/TUTORIAL.md](docs/TUTORIAL.md)。烧录工具（ST-Link、CubeProgrammer、OpenOCD、pyOCD、J-Link、Keil）的详细配置：[docs/FLASH.md](docs/FLASH.md)。
+从打开目录到构建、SSH、烧录和常见问题的完整中文教程：[docs/TUTORIAL.md](docs/TUTORIAL.md)。烧录工具（ST-Link、CubeProgrammer、OpenOCD、pyOCD、J-Link、Keil）的详细配置：[docs/FLASH.md](docs/FLASH.md)。动态监测（watchpoint）的时间戳、调用栈和自动启动：[docs/DYNAMIC.md](docs/DYNAMIC.md)。
 
 ## 功能
 
 - 打开任意文件夹作为工程；构建系统仍以 `Makefile` / `Cargo.toml` / `CMakeLists.txt` 为准，工程配置只存在于 `.simple-embedded/settings.json`
-- 深色标题栏与界面配色一致，构建 / 清理 / 重构建 / 烧录集中在右侧操作栏；设置从构建卡片的“配置”或 `Ctrl+,` 打开
+- 深色标题栏与界面配色一致，构建 / 清理 / 重构建 / 烧录集中在右侧操作栏；配置界面从构建卡片的“配置”或 `Ctrl+,` 打开
 - 左侧栏全高，资源管理器与工程信息默认各占一半高度；文件树较短时工程信息自动上移紧接文件列表；文件树较长时可拖动中间分割线调整比例；拖动左栏右边缘可调整宽度；分割比例和折叠状态会保存
 - 左侧构建卡片显示工程名（加粗）、完整路径、构建模式和命令；未导入时按钮为“导入 / 配置 / 工作区”，导入后为“更换 / 配置 / 工作区”
 - 资源管理器、工程信息、构建配置等可折叠区域带缓动动画和旋转箭头；状态提示 Toast 使用更大字号，便于阅读
-- 工程信息树：分组和列表标题左侧都有折叠箭头，整行可点击并显示淡蓝色选中背景；**工具链** 在这里只读显示，修改入口是 **设置 → 构建 → 工具链**（自动检测 / Make GCC / Clang / AC5 / AC6 / Keil MDK AC5 / AC6 / Cargo / CMake）。自动检测先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，再查 PATH 和常见安装目录。CubeMX 同时生成 MDK-ARM 和 Makefile 时，Make 构建读取 Makefile 元数据，Keil 工具链读取 `.uvprojx`，不再无条件显示 Keil；支持识别 armclang（AC6）和 armcc（AC5）。列表右侧 `+` 可添加；仅有效构建系统为 Make 时同步到 Makefile（自动备份），Keil `.uvprojx` 只读
+- 工程信息树：分组和列表标题左侧都有折叠箭头，整行可点击并显示淡蓝色选中背景；**工具链** 在这里只读显示，修改入口是 **配置 → 构建 → 工具链**（自动检测 / Make GCC / Clang / AC5 / AC6 / Keil MDK AC5 / AC6 / Cargo / CMake）。自动检测先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，再查 PATH 和常见安装目录。CubeMX 同时生成 MDK-ARM 和 Makefile 时，Make 构建读取 Makefile 元数据，Keil 工具链读取 `.uvprojx`，不再无条件显示 Keil；支持识别 armclang（AC6）和 armcc（AC5）。列表右侧 `+` 可添加；仅有效构建系统为 Make 时同步到 Makefile（自动备份），Keil `.uvprojx` 只读
 - 芯片支持包：在工程信息中点击 `+` 添加 Keil/CMSIS `.pack` / `.pdsc`，文件放在工程根目录；显示包名、版本、厂商、设备和 SVD 数量，寄存器浏览器可直接使用包内 SVD
-- 构建选项：包含全局选项、C/C++ 编译器、汇编器和链接器四个页面，并按当前工具链切换内容。GCC/Clang 显示 newlib-nano `printf` / `scanf` 浮点支持（`-u _printf_float` / `-u _scanf_float`）、LTO 和函数分段；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段。Make + GCC/Clang 工程打开时读取现有 `OPT` / `CFLAGS`，保存时按差异写回；选择 `AXF` 会生成 `.axf` 副本规则；Keil 和 Make AC5/AC6 只写入工程配置，不修改 `.uvprojx`
+- 构建选项：包含全局选项、C/C++ 编译器、汇编器和链接器四个页面，并按当前工具链切换内容。GCC/Clang 先用 Use MicroLIB 作为浮点选项总开关，勾选后才能启用 newlib-nano `printf` / `scanf` 浮点支持（`-u _printf_float` / `-u _scanf_float`），另有 LTO 和函数分段；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段。Make + GCC/Clang 工程打开时读取现有 `OPT` / `CFLAGS`，保存时按差异写回；选择 `AXF` 会生成 `.axf` 副本规则；Keil 和 Make AC5/AC6 只写入工程配置，不修改 `.uvprojx`
 - 左侧目录树：第一行显示工程根目录，可展开/折叠；支持隐藏文件、刷新、点击打开文件；右键可新建文件/文件夹、粘贴、剪切/复制、重命名、删除、复制路径、在资源管理器中显示或用 VS Code 打开
 - 多文件 Tab、脏标记、关闭前提示保存
 - 文本编辑：`Ctrl+S` 保存、Tab 缩进、撤销/重做、复制粘贴等由 egui 文本编辑控件提供
@@ -40,10 +40,10 @@
 - Tab / Shift+Tab 缩进、选中行整块缩进、回车自动缩进，可配置空格或 Tab 与缩进宽度
 - 右侧代码预览小地图，可点击或拖动跳转；缩进参考线会高亮当前缩进层级，二者均可在设置中关闭
 - 调试：ARM 目标自动复用烧录配置的 OpenOCD / pyOCD 参数启动 GDB server，再用 arm-none-eabi-gdb 连接并加载 ELF/AXF；主机 EXE 使用普通 gdb。启动后先停在 `main` 并自动定位入口文件；按钮显示运行状态，运行中主按钮变为暂停图案；点击行号左侧或 F9 设置断点，F5 继续/暂停、F10/F11 单步、Shift+F5 停止；暂停时自动打开并高亮当前执行行，浮层准心按钮可随时回到当前执行行；右侧提供变量 Live Watch、CPU 寄存器和按外设分组的外设寄存器实时值（需 SVD），可输入任意 gdb 命令
-- 内存检测：工程打开后即可点击右侧 **检测**。未启动调试时打开 **静态检测**，扫描工程内数组常量下标越界、`strcpy`/`memcpy` 等常量长度、`gets`/`sprintf`、重复 `free`、可疑 `malloc` 和返回数组名；调试会话存在时打开 **动态监测**，可添加 `watch` / `rwatch` / `awatch` 硬件 watchpoint，命中后目标暂停并记录新旧值（数量受目标硬件限制，GDB 可能退化为软件 watchpoint）。结果显示在窗口内并支持点击跳转。静态扫描不替代 ASAN/Valgrind
+- 内存检测：工程打开后即可点击右侧 **检测**。未启动调试时打开 **静态检测**，扫描工程内数组常量下标越界、`strcpy`/`memcpy` 等常量长度、`gets`/`sprintf`、重复 `free`、可疑 `malloc` 和返回数组名；调试会话存在时打开 **动态监测**，可添加 `watch` / `rwatch` / `awatch` 硬件 watchpoint，命中后目标暂停并记录时间、旧值 → 新值、源码位置和调用栈。勾选“调试时自动启动动态监测”后，启动调试会自动打开面板并重新启用已保存的 watchpoint。数量受目标硬件限制，GDB 可能退化为软件 watchpoint。结果显示在窗口内并支持点击跳转。静态扫描不替代 ASAN/Valgrind
 - 轻量导航/补全：F12 跳定义、Shift+F12 查引用；输入 2 个字符后自动在光标旁弹出补全，输入 `.` / `->` 时补全结构体成员；↑↓ 选择，Enter/Tab 插入，Esc 关闭，Ctrl+Space 手动打开
-- 编辑器内悬停函数名、变量名、结构体或宏时，显示声明签名、最近的注释以及返回值 / 类型；函数跨文件时会查轻量符号索引。提示跟随鼠标显示，可在设置 → 其他 关闭
-- 宏诊断：同一文件内同名 `#define` 重复显示红色波浪线；设置 → 其他 的“宏重复值提示（黄色波浪线）”开启后，`PWM1PIN` / `PWM2PIN` / `PWM3PIN` 这类宏族使用相同替换值时显示黄色波浪线（C 语言本身允许这种写法，默认关闭；供应商头文件不参与）
+- 编辑器内悬停函数名、变量名、结构体或宏时，显示声明签名、最近的注释以及返回值 / 类型；函数跨文件时会查轻量符号索引。提示跟随鼠标显示，可在配置 → 其他 关闭
+- 宏诊断：同一文件内同名 `#define` 重复显示红色波浪线；配置 → 其他 的“宏重复值提示（黄色波浪线）”开启后，`PWM1PIN` / `PWM2PIN` / `PWM3PIN` 这类宏族使用相同替换值时显示黄色波浪线（C 语言本身允许这种写法，默认关闭；供应商头文件不参与）
 - 多行粘贴自动对齐当前缩进；`Ctrl+Alt+左键拖动` 矩形列选择，可复制、删除或直接输入替换
 - 标签页右键菜单：关闭其他/右侧/已保存/全部；保存、另存为；复制完整路径、相对路径或面包屑路径；在文件资源管理器 / 资源管理器视图中显示；向右拆分、拆分和移动 → 向上拆分、取消拆分。两个拆分窗格都可编辑
 - 标签页下显示工程相对路径面包屑；最底部状态栏显示行列、缩进、编码、行尾、语言和保存/换行/格式化等操作
@@ -53,12 +53,12 @@
 - 构建前自动保存所有脏文件；可停止构建进程树
 - 构建输出面板顶部可拖动调高度，收起后也能向上拉出；高度会保存
 - 本地构建或远程 SSH 构建（复用系统 OpenSSH）
-- 并行构建：设置 → 构建 → 并行任务数；Make 注入 `MAKEFLAGS=-jN`，Cargo 注入 `CARGO_BUILD_JOBS`，CMake 注入 `CMAKE_BUILD_PARALLEL_LEVEL`，命令里已有 `-j` 时不重复添加
+- 并行构建：配置 → 构建 → 并行任务数；Make 注入 `MAKEFLAGS=-jN`，Cargo 注入 `CARGO_BUILD_JOBS`，CMake 注入 `CMAKE_BUILD_PARALLEL_LEVEL`，命令里已有 `-j` 时不重复添加
 - 烧录工具可选 **自定义命令** / **OpenOCD** / **pyOCD**：支持工具路径下拉/浏览、`${ExecutableName}.hex` 等程序文件变量、OpenOCD 芯片配置和接口配置。接口配置是预设下拉（ST-Link、CMSIS-DAP / DAPLink、J-Link、XDS110、ULINK 等）+ 自定义输入 + **自动检测**；默认不再自动填 `stlink.cfg`，自动检测通过 USB VID 识别已连接探针。pyOCD 目标芯片与可选 Pack、命令预览；Flash 始终在本地工程目录执行。工程信息 → 烧录配置 → **内存布局** 可设置 Flash/RAM 起始地址、大小和 .bin 下载起始地址
 - 构建输出标题栏显示 Flash / RAM 占用和芯片容量百分比；容量优先读取链接脚本，其次读取匹配的芯片支持包 `.pdsc`，没有 `size` 输出时直接解析 ELF 段大小
 - 每工程独立的构建、烧录、C/C++ 和调试配置保存在工程内 `.simple-embedded/settings.json`（包括 `debug.gdb_path`）；用户目录作为旧配置迁移和全局偏好存储
 - 工作区文件：构建卡片“工作区”可生成 `<工程名>.se-workspace` 并关联双击打开；也可从“工作区 → 打开工作区文件…”选择 `.se-workspace` / `.code-workspace`
-- 设置分为 构建 / 编辑器 / 调试 / 其他：构建页可设置工具链、命令、并行任务数和额外 PATH；旧版本的“构建工具链”页已移除，软件自带 `tools/` 存在时仍会自动优先使用
+- 配置界面分为 构建 / 编辑器 / 调试 / 其他：构建页可设置工具链、命令、并行任务数和额外 PATH；旧版本的“构建工具链”页已移除，软件自带 `tools/` 存在时仍会自动优先使用
 - 可追加工具链 PATH；本地 Make 构建会自动接入 Git for Windows / MSYS 的 `rm` 等 Unix 工具
 
 ## 运行
@@ -100,7 +100,7 @@ target\release\simple-embedded.exe
 | `Ctrl+B` | Build |
 | `Ctrl+Shift+B` | Rebuild |
 | `Ctrl+W` | 关闭当前标签页 |
-| `Ctrl+,` | 设置 |
+| `Ctrl+,` | 打开配置 |
 | `Ctrl+=` / `Ctrl+-` | 放大 / 缩小代码字号 |
 
 ## 构建命令如何工作
@@ -127,7 +127,7 @@ tools/
   compiler/bin/arm-none-eabi-gcc.exe
 ```
 
-默认优先使用 `tools/`；没有 `tools/` 时回退到用户目录工具链和系统 `PATH`。设置 → 构建 的 **工具链路径 / 额外 PATH** 可以按行补充编译器、make、UV4 等目录，不需要再安装或切换工具来源。
+默认优先使用 `tools/`；没有 `tools/` 时回退到用户目录工具链和系统 `PATH`。配置 → 构建 的 **工具链路径 / 额外 PATH** 可以按行补充编译器、make、UV4 等目录，不需要再安装或切换工具来源。
 
 本地打包当前工具链和 release exe：
 
@@ -140,11 +140,11 @@ powershell -ExecutionPolicy Bypass -File scripts\package-tools.ps1
 
 构建前会自动保存所有未保存文件，然后通过本机 shell（Windows 为 `cmd /S /C`）在工程根目录启动进程。日志从 stdout/stderr 双流读取；Windows 下停止会调用 `taskkill /T` 终止子进程树。
 
-POSIX 风格的 Makefile 常用 `rm`、`cp` 等命令；在 Windows 上运行本地 Make 构建时，程序会自动寻找 Git for Windows / MSYS / Cygwin 的 `usr\bin` 并前置到 PATH。也可以在设置中手动填写额外工具链路径。
+POSIX 风格的 Makefile 常用 `rm`、`cp` 等命令；在 Windows 上运行本地 Make 构建时，程序会自动寻找 Git for Windows / MSYS / Cygwin 的 `usr\bin` 并前置到 PATH。也可以在配置中手动填写额外工具链路径。
 
 ### 远程 SSH 构建
 
-设置 → 构建位置选择 **远程 SSH**，填写：
+配置 → 构建位置选择 **远程 SSH**，填写：
 
 - SSH 主机：`user@host`，或 `~/.ssh/config` 中的别名
 - SSH 端口（默认 22）

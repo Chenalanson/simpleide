@@ -95,8 +95,8 @@ docs/                  README 截图和使用教程
 - 事件采用 immediate mode：`App::ui` 收集 `Action`，再在帧末 `apply_actions`。部分明显的即时状态（滚动、输出开关）直接修改。
 - `src/app/ui.rs` 是 `app` 的子模块，可以访问父模块私有字段；跨模块公开方法用 `pub(super)`。
 - 自定义画线/图标优先用 `Painter`，不要依赖可能没有字形的 Unicode 图标。CJK 字体在 `main.rs` 运行时从系统字体加载。
-- 左侧构建卡片顶部显示工程名（粗体）和路径，路径使用 `util::display_path` 去掉 Windows `\\?\` 前缀；下方显示构建模式、命令和三个按钮。未导入时按钮为“导入 / 配置 / 工作区”，导入后为“更换 / 配置 / 工作区”。工作区按钮弹出菜单：生成并关联工作区文件、打开工作区文件、打开工程配置 `settings.json`。
-- 左侧栏全高；资源管理器（文件树）与工程信息的分界受 `left_split` 控制：文件树内容较短时区域自动收缩，工程信息标题紧跟最后一个可见文件；折叠资源管理器时工程信息标题紧贴资源管理器标题。文件树内容超出时按比例截断；展开时工程信息标题上下各留 6px，折叠且树超出时上下各留 8px，标题自身保留 6px 内边距和最小高度，避免贴住底部或上下间距不一致。中间分割线可拖动。折叠/展开工程信息只影响其内容，不改变标题位置。`left_split`、`resource_open`、`info_open` 都持久化在 `Settings`，下次启动保持位置。左栏宽度由可调整的 `Panel::left` 提供，并加大了拖拽命中半径。无工程时中间只显示一行提示“请在左上角选择工程并开始”。
+- 左侧构建卡片顶部显示工程名（粗体）和路径，路径使用 `util::display_path` 去掉 Windows `\\?\` 前缀；下方显示有效工具链 + 构建位置（例如 `Make · GCC · 本地`）和三个按钮，不再显示构建命令预览。未导入时按钮为“导入 / 配置 / 工作区”，导入后为“更换 / 配置 / 工作区”。工作区按钮弹出菜单：生成并关联工作区文件、打开工作区文件、打开工程配置 `settings.json`。
+- 左侧栏全高；资源管理器（文件树）与工程信息的分界受 `left_split` 控制：文件树内容较短时区域自动收缩，工程信息标题紧跟最后一个可见文件；折叠资源管理器时工程信息标题紧贴资源管理器标题。文件树内容超出时按比例截断；展开时工程信息标题上下各留 6px，折叠且树超出时上下各留 8px，标题自身保留 6px 内边距和最小高度，避免贴住底部或上下间距不一致。中间分割线可拖动。折叠/展开工程信息只影响其内容，不改变标题位置。`left_split`、`resource_open`、`info_open` 都持久化在 `Settings`，下次启动保持位置。左栏使用 `Settings.left_panel_width`（默认 300px）作为初始宽度，可拖动 300–520px，拖动结束后写回设置，下次启动保持用户选择的宽度；不再用补底色掩盖间隙。工程信息内容超高时可滚动，顶部/底部使用与资源管理器一致的渐变遮罩；横向内边距放在 `ScrollArea` 内容内侧，让遮罩横跨整个左栏宽度，而不是被外框内边距截窄。无工程时中间只显示一行提示“请在左上角选择工程并开始”。
 - Windows 标题栏通过 DWM 深色属性和 `ViewportCommand::SetTheme(Dark)` 与面板配色保持一致。
 - 应用图标是 `assets/icon-word.png`（黑色圆角底 + 白色斜体 `Simple` 字标）和 `assets/icon-mark.png`（同风格 `S` 标记）两张内嵌 PNG。`app_icon(size)` 在 32px 及以上用字标、16/24px 用 `S` 标记；`app_icon_ico()` 生成 16/24/32/48/64/128/256 多尺寸 ICO（16–128 用 32 位 BMP 条目，256 用 PNG）。`build.rs` 用同一套 `icon_codec` 从 assets 生成 ICO，并通过 `winres` + `windres` 把图标资源嵌进 exe，所以文件夹里看到的 `.exe` 图标也是 `Simple`，不再依赖 `.se-workspace` 关联。Windows 标题栏 16px 放不下六个字母，所以窗口初始化时先用 48px 字标让任务栏取到 `Simple`，再由 `apply_pending_icons` 在前几帧把 ICON_SMALL 换成 `S` 标记：标题栏显示 S，任务栏和 Explorer 大图标显示 Simple。
 
@@ -131,11 +131,11 @@ docs/                  README 截图和使用教程
 - 行号左侧的 gutter 点击范围覆盖整列（含断点红点），不要求先移动光标；断点按 `(路径, 行号)` 保存。gutter 行号使用与编辑器相同的 `galley.cursor_from_pos` 命中测试，避免滚动后行号偏移。`poll_debug_location` 只扫描新到达的 gdb 日志，用 `debugger::parse_stop_location` 解析 `... at file:line`，命中后自动打开对应文件、滚动到当前行并在 gutter 画黄色执行箭头和整行浅黄底；每次新停止都会重新跳转，即使上次已停在同一行。`next` / `step` / `finish` 后会额外发送 `frame`，因为 gdb 单步通常只回显源码行（`95  while (1)`）而不带 `at file:line`。gdb 报告 `No compiled code for line N in file ...` 时会移除对应断点并提示。日志扫描游标 `DebugState.log_scan` 在启动/停止时重置。
 - 调试侧栏有 变量 / 寄存器 / 外设 三个页签。“外设”页从工程内 `.svd`、`.pack` 内 SVD 或已安装 Keil DFP 的 `SVD/*.svd` 读取外设寄存器（支持 `derivedFrom` 继承），按外设名分组并可展开/折叠；按名称/地址/说明过滤时自动展开匹配分组。每次最多读取 160 个寄存器，用 `x/1xw` 读取实时值并以 `__SE_PREG_*` 标记路由到独立输出；目标停止且自动刷新开启时每 1.5 秒更新。OpenOCD 对未映射外设的 `Failed to read memory` 行会被过滤，读取失败的寄存器显示“无法读取”。
 - 调试按目标类型分流：PE `.exe` 使用普通 gdb；ELF/AXF 进入 ARM 远程流程。ARM 流程复用 `BuildConfig.flash_tool` 的 OpenOCD / pyOCD 参数，用 `flash::openocd_server_spec` / `flash::pyocd_server_spec` 在空闲本地端口启动 GDB server，再由 `arm-none-eabi-gdb` `target extended-remote` 连接，依次执行 `monitor reset halt` / `load` / 再次复位，最后应用断点。首次启动继续时会下发 `tbreak main`，让目标先停在 `main` 并自动打开入口文件，而不是直接运行到第一个用户断点。启动在后台线程完成，通过 `debug_start` 通道回到 UI；停止/切换工程时同时结束 gdb 和 server。`debug_target` 优先使用工程的 `debug.program`；路径失效或为空时按修改时间在 `build/`、`Debug/`、`Release/`、`out/` 和工程根目录查找最新 ELF/AXF/EXE/OUT。打开工程时若 `debug.program` 为空会自动回填检测结果并写入工程配置。
-- ARM gdb 由 `detect_arm_gdb` 自动检测：优先使用设置里的路径，其次搜索编译器目录、`extra_paths`、PATH 和常见 GNU Arm Toolchain 目录。设置 → 调试提供 gdb 路径浏览和自动检测按钮；`gdb_path` 既可填 exe，也可填 `bin` 目录。不要用 MinGW gdb 调 ARM 目标，否则会报 error 193。
+- ARM gdb 由 `detect_arm_gdb` 自动检测：优先使用设置里的路径，其次搜索编译器目录、`extra_paths`、PATH 和常见 GNU Arm Toolchain 目录。配置 → 调试提供 gdb 路径浏览和自动检测按钮；`gdb_path` 既可填 exe，也可填 `bin` 目录。不要用 MinGW gdb 调 ARM 目标，否则会报 error 193。
 - `navigation.rs` 提供标识符/前缀提取与字符区间替换；`F12` 在 `symbols.rs` 索引中找定义，`Shift+F12` 用全工程正则搜索列引用。
 - 补全在输入至少 2 个标识符字符后自动弹出，锚定在光标下方；输入 `.` / `->` 时切换为成员补全。`↑` / `↓` 选择，`Enter` / `Tab` 插入，`Esc` 关闭；`Ctrl+Space` 仍可手动打开。全局候选来自 `symbols.rs` 的宏/函数/类型索引；成员候选由 `completion.rs` 用轻量正则解析 struct/union 和变量声明得到，成员索引在保存、刷新文件树或刷新符号时失效重建。它不是 C/C++ 语义解析：复杂宏展开、模板、继承、跨文件作用域和函数返回类型可能漏检。
-- 编辑器内悬停标识符会弹出 `hover.rs` 构建的提示：先查当前文件声明，再查 `symbols.rs` 索引；显示声明签名、最近的 `/** */` 或 `//` 注释，以及“返回值 / 类型”。提示跟随鼠标显示（`on_hover_ui_at_pointer`）；`Settings.show_hover_info` 控制开关，设置 → 其他 的“变量 / 函数悬停提示”默认开启。类型提取按完整标识符边界匹配，避免把 `uint8_t i` 里的 `i` 误当成类型内部字符。符号索引在第一次渲染编辑器时确保扫描一次（`SymbolState.scanned`），项目切换时重置。复杂宏、跨文件局部变量和动态类型仍可能无法解析。
-- `macro_check.rs` 提供宏诊断：同一文件内同名 `#define` 重复始终标红并绘制红色波浪线；设置 → 其他 的“宏重复值提示（黄色波浪线）”（`Settings.check_duplicate_macro_values`，默认关闭）开启后，`PWM1PIN` / `PWM2PIN` / `PWM3PIN` 这类带数字的宏族使用相同替换值时绘制黄色波浪线。该启发式只针对项目代码，跳过 `Drivers` / `CMSIS` / `Middlewares` / `vendor` 等供应商头文件；C 语言本身允许不同宏名映射到相同值，所以它是可选提示而不是编译错误。宏结果缓存在 `Document.macro_issues`，按 revision 失效，设置保存和文件另存/重命名时强制重扫。
+- 编辑器内悬停标识符会弹出 `hover.rs` 构建的提示：先查当前文件声明，再查 `symbols.rs` 索引；显示声明签名、最近的 `/** */` 或 `//` 注释，以及“返回值 / 类型”。提示跟随鼠标显示（`on_hover_ui_at_pointer`）；`Settings.show_hover_info` 控制开关，配置 → 其他 的“变量 / 函数悬停提示”默认开启。类型提取按完整标识符边界匹配，避免把 `uint8_t i` 里的 `i` 误当成类型内部字符。符号索引在第一次渲染编辑器时确保扫描一次（`SymbolState.scanned`），项目切换时重置。复杂宏、跨文件局部变量和动态类型仍可能无法解析。
+- `macro_check.rs` 提供宏诊断：同一文件内同名 `#define` 重复始终标红并绘制红色波浪线；配置 → 其他 的“宏重复值提示（黄色波浪线）”（`Settings.check_duplicate_macro_values`，默认关闭）开启后，`PWM1PIN` / `PWM2PIN` / `PWM3PIN` 这类带数字的宏族使用相同替换值时绘制黄色波浪线。该启发式只针对项目代码，跳过 `Drivers` / `CMSIS` / `Middlewares` / `vendor` 等供应商头文件；C 语言本身允许不同宏名映射到相同值，所以它是可选提示而不是编译错误。宏结果缓存在 `Document.macro_issues`，按 revision 失效，设置保存和文件另存/重命名时强制重扫。
 - 粘贴由编辑器在 TextEdit 前拦截 `Event::Paste`：`indent::adjust_pasted` 统一换行并按当前行缩进对齐后续行，同时保留粘贴内容相对缩进；只读或编辑器未聚焦时不拦截。
 - 分屏只从标签页右键菜单进入：`向右拆分` / `拆分和移动 → 向上拆分` / `取消拆分`。`split_primary` + `split_path` + `split_direction` 决定两个窗格，两个窗格都调用 `show_code_editor`，都可编辑；`split_focus` 记录焦点窗格，点击窗格会切换 active。当前不支持同一个文件在两个窗格重复打开。
 - 标签页右键菜单还提供关闭其他、关闭右侧标签页、关闭已保存、全部关闭；保存、另存为；复制完整路径、相对路径和面包屑路径；在文件资源管理器中显示、在资源管理器视图中显示；以及拆分操作。批量关闭遇到未保存文件时走 `PendingAction::CloseTabs` 确认。另存为会写入新路径并把标签页、分屏引用和语法识别一并切换到新文件。快捷键：Ctrl+F4 关闭当前，Ctrl+\ 向右拆分，Ctrl+K U 关闭已保存，Ctrl+K W 全部关闭，Ctrl+K S 保存全部，Ctrl+K Ctrl+\ 向上拆分，Ctrl+Shift+S 另存为，Shift+Alt+C 复制路径，Ctrl+K Ctrl+Shift+C 复制相对路径，Shift+Alt+R 在资源管理器中显示。
@@ -143,7 +143,7 @@ docs/                  README 截图和使用教程
 - 查找是编辑器右上角的约 420px 紧凑浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / `Ctrl+H` 打开，不占用独立行；左侧下拉箭头展开替换行，宽度不变，`AB` 保留大小写在替换输入框内，替换/全部替换为图标按钮。`Ctrl+G` 打开同宽的跳行浮层，输入框复用查找输入框样式；提示文字为普通次要色，不使用色块。
 - 面包屑栏只显示从工程根目录开始的路径（`doc.rel_path` 的 `/` 替换为 ` > `）和未保存标记；编码、行尾、语言、只读、寄存器、数组、符号、格式化、自动换行、保存移到最底部状态栏。补全和列编辑不出现在可见工具栏。
 - 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::GUTTER` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。右侧操作栏宽约 58px（原 110px 的一半），按钮内边距同步收窄。编辑器卡底部两角由 `paint_bottom_corners` 补绘 `GUTTER` 圆角，输出面板标题栏紧贴面板顶部，拖动区域合并到标题栏顶部 4px，日志区使用 `EDITOR_BG` 并撑满剩余空间。输出面板标题提供“构建输出 / 调试输出”切换，`OutputView` 决定显示哪一份日志；构建开始时切回构建，启动调试时切到调试。
-- 设置弹窗第一行是 构建 / 编辑器 / 调试 / 其他 四个页签，下方只显示当前页；构建页包含工具链下拉、自动检测、Build/Clean/Rebuild/Flash 命令、“并行任务数”（0 = 不启用，可一键填入 CPU 核心数）和“工具路径 / 额外 PATH”。`form_line` 的单行输入框高 26px，构建页行距收紧到 3px，命令行之间只留 1px 额外间距，避免大片空白。自动检测先看工程根目录的构建文件，再查 PATH/常见安装目录。原来的“构建工具链”页已删除；软件自带 `tools/` 存在时自动优先使用，否则回退到旧配置路径、额外 PATH 和系统 PATH。调试页的调试程序和 gdb 路径在工程打开时读写工程的 `debug` 节点（无工程时才用全局设置），提供浏览和自动检测；调试程序为空时会自动回填 build 产物，gdb 路径既可填 exe，也可填 `bin` 目录。
+- “配置”弹窗第一行是 构建 / 编辑器 / 调试 / 其他 四个页签，下方只显示当前页；构建页包含工具链下拉、自动检测、Build/Clean/Rebuild/Flash 命令、“并行任务数”（0 = 不启用，可一键填入 CPU 核心数）和“工具路径 / 额外 PATH”。**自动检测** 按钮紧挨工具链下拉，完整说明作为鼠标下方的悬停提示；“并行任务数”直接跟在 Rebuild（或 Flash）后面，不再有“并行构建”小标题和解释段落。`form_line` 的单行输入框高 26px，构建页行距收紧到 3px，命令行之间只留 1px 额外间距；配置页内容区固定为 400px（以构建页高度为准），切换页签时弹窗高度不变。工具路径 / 额外 PATH 使用固定高度（约 100px）的多行输入，内容超出时在输入框内部滚动，不再随行数改变弹窗布局。构建页不再显示工程路径，底部的“本地或 SSH 构建共用同一组命令”说明也已删除，只保留右下角的保存 / 取消按钮。“当前烧录工具为…”和并行构建说明段落已删除。自动检测先看工程根目录的构建文件，再查 PATH/常见安装目录。原来的“构建工具链”页已删除；软件自带 `tools/` 存在时自动优先使用，否则回退到旧配置路径、额外 PATH 和系统 PATH。调试页的调试程序和 gdb 路径在工程打开时读写工程的 `debug` 节点（无工程时才用全局设置），提供浏览和自动检测；调试程序为空时会自动回填 build 产物，gdb 路径既可填 exe，也可填 `bin` 目录。
 - 最底部状态栏是贯穿整个窗口宽度的矩形条（无圆角、无外圈间隙），内容靠右排列：右侧操作按钮 + 行列/缩进/编码/行尾/语言信息。
 - 资源管理器、工程信息、构建配置、芯片支持包、烧录配置、C/C++ 列表等可折叠区域使用缓动动画，不直接瞬间显示/隐藏：侧栏高度动画 0.22s、`cubic_in_out`，其余折叠组使用 egui `CollapsingState` 和全局 0.20s 动画；箭头随 openness 旋转。动画期间主动 `request_repaint()`，避免掉帧式跳变。
 - Toast 使用 12.5px 正文、10.5px 状态文字、14×10 内边距，最大宽度 460px；不要再把提示字号设为 9–11px。
@@ -155,17 +155,17 @@ docs/                  README 截图和使用教程
 ### 工程信息
 
 - `project_meta.rs` 按 `BuildConfig.effective_build_system()` 读取 Makefile 或 Keil `.uvprojx`，提取目标名、芯片、CPU、浮点、链接脚本、内存布局、包含目录、宏定义等。CubeMX 同时生成 `MDK-ARM/*.uvprojx` 和根 Makefile 时，Make 构建优先 Makefile 元数据，Keil 工具链优先 `.uvprojx`，不会再无条件显示 Keil。Makefile 的 `CC` / `PREFIX` 识别 GCC、Clang、armclang（AC6）和 armcc（AC5）；芯片型号优先从具体链接脚本名（如 `STM32F407ZGTx_FLASH.ld`）提取，`XX` 通用名回退到 `C_DEFS`。
-- 工程信息 → 构建配置里的 **工具链** 只读显示当前有效工具链；鼠标悬停在工具链值上时，才在鼠标下方显示“在 设置 → 构建 中修改”，不再占用单独一行。不能在这里直接改。修改入口是设置 → 构建 → **工具链** 下拉（自动检测、Make · GCC/Clang/AC5/AC6、Keil MDK · AC5/AC6、Cargo、CMake、自定义）。保存设置后重新计算工程元数据、内存布局、芯片支持包和调试产物；构建命令与所选工具链不一致时显示黄色警告。`BuildConfig.toolchain` 保存在工程配置中。设置里的 **自动检测** 顺序是：先看工程根目录的 `Cargo.toml` / Makefile / `CMakeLists.txt` / `*.uvprojx`，确定期望的构建系统；再在 PATH 和常见安装目录中查找对应工具（Keil 会查 `UV4/UV5` 和常见 `Keil_v5\UV4` 目录）。根目录没有构建文件时才回退到 PATH 中的 cargo / cmake / make。
-- 左栏先显示资源管理器，再显示“工程信息”；分割线紧贴“工程信息”标题上下，包含“构建配置”“芯片支持包”“烧录配置”“C/C++ 属性”四个分组。分组标题以及三个 C/C++ 列表标题左侧各有折叠箭头，整行可点击并切换展开；点击行会记录选中状态并显示淡蓝色背景，加号只在鼠标悬停对应行时显示，点击只添加、不折叠。信息行固定 18px 高、行距 2px，`interact_size.y` 在工程信息内收紧到 20px，整体密度接近资源管理器。展开和选中状态存在 egui 内存中。数据按工程缓存，刷新文件树时重新读取。
+- 工程信息 → 构建配置里的 **工具链** 只读显示当前有效工具链；鼠标悬停在工具链值上时，才在鼠标下方显示“在 配置 → 构建 中修改”，不再占用单独一行。不能在这里直接改。修改入口是配置 → 构建 → **工具链** 下拉（自动检测、Make · GCC/Clang/AC5/AC6、Keil MDK · AC5/AC6、Cargo、CMake、自定义）。保存设置后重新计算工程元数据、内存布局、芯片支持包和调试产物；构建命令与所选工具链不一致时显示黄色警告。`BuildConfig.toolchain` 保存在工程配置中。配置里的 **自动检测** 顺序是：先看工程根目录的 `Cargo.toml` / Makefile / `CMakeLists.txt` / `*.uvprojx`，确定期望的构建系统；再在 PATH 和常见安装目录中查找对应工具（Keil 会查 `UV4/UV5` 和常见 `Keil_v5\UV4` 目录）。根目录没有构建文件时才回退到 PATH 中的 cargo / cmake / make。
+- 左栏先显示资源管理器，再显示“工程信息”；分割线紧贴“工程信息”标题上下，包含“构建配置”“芯片支持包”“烧录配置”“C/C++ 属性”四个分组。分组标题以及三个 C/C++ 列表标题左侧各有折叠箭头，整行可点击并切换展开；点击行会记录选中状态并显示淡蓝色背景，加号只在鼠标悬停对应行时显示，点击只添加、不折叠。信息行固定 18px 高、行距 2px，`interact_size.y` 在工程信息内收紧到 20px，整体密度接近资源管理器。构建配置的“编辑”、C/C++ 属性的“批量编辑”、烧录配置的“编辑”和“内存布局...”都使用内容宽度的按钮并左对齐。展开和选中状态存在 egui 内存中。数据按工程缓存，刷新文件树时重新读取。
 - “芯片支持包”分组右侧的绿色 `+` 打开文件选择器，只接受 Keil/CMSIS `.pack` / `.pdsc`，并把文件复制到工程根目录（同名文件不覆盖）。`support_pack.rs` 解析包名、厂商、版本、设备列表和 SVD 数量；`.pack` 通过 zip 读取包内 `.pdsc`，不整体解压。寄存器浏览器在工程内没有独立 `.svd` 时，会直接读取第一个 `.pack` 内的 SVD。支持包不会生成自定义工程文件，也不代表完整的 Keil 设备树/启动文件/烧录算法导入。
 - 包含目录、库搜索目录和预处理器定义支持在左栏编辑：每个列表右侧有绿色 `+`，批量编辑仍可用。覆盖值存 `BuildConfig.meta_includes` / `meta_library_dirs` / `meta_defines`（`None` 表示自动检测）。仅当有效构建系统是 Make 时保存会同步到 `C_INCLUDES` / `LIBDIR` / `C_DEFS`，修改前备份到 `%APPDATA%\SimpleEmbedded\backups`；选择 Keil AC5/AC6 时只写工程配置，`.uvprojx` 不会被修改。
-- “构建选项”编辑器存 `BuildConfig.build_options`，分为全局选项、C/C++ 编译器、汇编器、链接器四个页面；显示在构建配置中。打开 Make 工程时会从 `OPT` / `CFLAGS` / `AS_DEFS` 等解析当前值，保存时只回写发生变化的字段；链接器输出格式选 `AXF` 时会在 Makefile 末尾添加受管理的 `.axf` 复制规则。全局选项页按工具链切换：GCC/Clang 显示 newlib-nano `printf_float` / `scanf_float`（`-u _printf_float` / `-u _scanf_float`）和函数分段/LTO；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段，隐藏 newlib 开关。只有有效构建系统为 Make 且工具链为 GCC/Clang 时才同步构建选项到 Makefile；Keil 和 Make AC5/AC6 只写入工程的 `.simple-embedded/settings.json`，不修改 `.uvprojx`。
+- “构建选项”编辑器存 `BuildConfig.build_options`，分为全局选项、C/C++ 编译器、汇编器、链接器四个页面；显示在构建配置中。打开 Make 工程时会从 `OPT` / `CFLAGS` / `AS_DEFS` 等解析当前值，保存时只回写发生变化的字段；链接器输出格式选 `AXF` 时会在 Makefile 末尾添加受管理的 `.axf` 复制规则。全局选项页按工具链切换：GCC/Clang 显示 Use MicroLIB 作为总开关，勾选后才启用 newlib-nano `printf_float` / `scanf_float`（`-u _printf_float` / `-u _scanf_float`），并显示函数分段/LTO；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段，隐藏 newlib 开关。弹窗内容区固定为 320px（以 C/C++ 编译器页高度为准），切换页签时高度不变；工具链信息由左侧构建卡片显示，不再在弹窗内重复。只有有效构建系统为 Make 且工具链为 GCC/Clang 时才同步构建选项到 Makefile；Keil 和 Make AC5/AC6 只写入工程的 `.simple-embedded/settings.json`，不修改 `.uvprojx`。
 - 没有可解析的工程文件时只依赖 `BuildConfig`，不要为空字段编造值。
 
 ### 文件树
 
-- 工程根目录作为文件树第一行显示（默认展开），子项相对根缩进一级；根行同样可点击展开/收起，右键提供新建文件/文件夹、粘贴、在文件资源管理器中显示、复制路径/相对路径、用 VS Code 打开。
-- 目录展开/收起使用每个目录独立的 egui `CollapsingState`（0.20s 动画）和裁剪区域，行内容随 openness 高度渐显/收起，箭头三角形按 openness 旋转；`expanded` 集合同步保存逻辑展开状态，`reveal` 展开父目录时也走同一动画。
+- 工程根目录作为文件树第一行显示（默认展开），整棵树相对“资源管理器”标题再缩进一级，使根目录明确作为该分组的子级；子项相对根继续缩进。根行同样可点击展开/收起，右键提供新建文件/文件夹、粘贴、在文件资源管理器中显示、复制路径/相对路径、用 VS Code 打开。
+- 目录展开/收起使用每个目录独立的 egui `CollapsingState`（0.20s 动画）和裁剪区域，行内容随 openness 高度渐显/收起；箭头是和工程信息一致的蓝色双线 chevron，按 openness 旋转，并为每级深度绘制 `BORDER` 垂直缩进参考线，参考线位于父级 chevron 正下方，文件行也延续父级竖线。`expanded` 集合同步保存逻辑展开状态，`reveal` 展开父目录时也走同一动画。
 - 文件右键菜单：在侧边打开、剪切、复制、复制路径、复制相对路径、重命名...、删除，以及查看/十六进制/在资源管理器中显示；文件夹右键额外提供新建文件/文件夹和粘贴，也支持剪切、复制、重命名和删除。
 - 文件操作使用应用内 `FileClipboard`（复制/剪切），不读写系统剪贴板文件；粘贴到文件时使用其父目录。复制重名时生成 `名称 - 副本.ext`、`名称 - 副本 (2).ext`，剪切遇到同名目标会提示，跨卷移动失败时回退为递归复制再删除。重命名和删除使用独立确认弹窗；删除前若存在未保存 Tab 会拒绝执行。重命名/剪切会同步更新打开 Tab 的路径、分屏引用、断点、调试暂停位置和图像预览；删除会关闭相关 Tab 并清除这些引用。
 - 懒加载目录子项，目录优先、名称不区分大小写排序。
@@ -220,13 +220,13 @@ docs/                  README 截图和使用教程
 
 - 用户界面使用中文；保持现有深色配色和 `docs/` 截图风格。
 - 界面不显示 emoji/生僻符号；使用 `Painter` 画图形或已验证的字符。
-- 右侧操作栏：纵向排列 Build、Clean/重构、Flash、调试、检测；不再放设置按钮，设置从构建卡片“配置”或 `Ctrl+,` 打开。检测按钮在工程打开后即可用：无调试会话时运行静态扫描并打开“内存检测 → 静态检测”；有调试会话时打开“动态监测”，可添加硬件 watchpoint（写入 `watch`、读取 `rwatch`、读写 `awatch`，GDB 优先使用硬件比较器，Cortex-M 通常 2-4 个），命中后目标自动暂停并记录新旧值。静态检测扫描所有 `.c/.h`：数组常量下标越界、`strcpy`/`strcat`/`strncpy`/`memcpy`/`memset` 常量长度、`gets`/`sprintf`、重复 `free`、可疑 `malloc` 字节数、返回数组名；结果在窗口内按文件:行显示，可点击跳转。静态扫描是启发式检查，不替代 ASAN/Valgrind；动态 watchpoint 依赖 gdb / OpenOCD / pyOCD 会话。
+- 右侧操作栏：纵向排列 Build、Clean/重构、Flash、调试、检测；不再放设置按钮，设置从构建卡片“配置”或 `Ctrl+,` 打开。检测按钮在工程打开后即可用：无调试会话时运行静态扫描并打开“内存检测 → 静态检测”；有调试会话时打开“动态监测”，可添加硬件 watchpoint（写入 `watch`、读取 `rwatch`、读写 `awatch`，GDB 优先使用硬件比较器，Cortex-M 通常 2-4 个），命中后目标自动暂停并记录本机时间、旧值 → 新值、GDB 停止位置和调用栈（每个监测点最多 200 条记录）。动态监测页可勾选“调试时自动启动动态监测”，启动调试时自动打开面板并重新启用已保存的 watchpoint；停止调试后表达式和历史保留。静态检测扫描所有 `.c/.h`：数组常量下标越界、`strcpy`/`strcat`/`strncpy`/`memcpy`/`memset` 常量长度、`gets`/`sprintf`、重复 `free`、可疑 `malloc` 字节数、返回数组名；结果在窗口内按文件:行显示，可点击跳转。静态扫描是启发式检查，不替代 ASAN/Valgrind；动态 watchpoint 依赖 gdb / OpenOCD / pyOCD 会话。
 - 构建结果和内存占用显示在输出面板标题和日志中；构建视图标题显示 `Flash 已用 / 总量 (百分比) · RAM 已用 / 总量 (百分比)`，占用来自 `text/data/bss` 或 ELF 段，容量来自链接脚本 / PDSC / 工程信息。输出面板可切换“构建输出 / 调试输出”，底部不再保留重复的状态栏。
 - 构建输出面板顶部有 10px 拖动手柄，收起时也能向上拉出；高度存 `Settings.output_height`，最大到主区域顶部。
 - 调试控制是编辑器右上角的小浮层，位置参考查找浮层；停止、单步等使用 `Painter` 绘制的图案按钮。调试信息放在输出面板“调试输出”页，不在独立窗口里。
-- “工程信息 → 烧录配置”提供烧录工具下拉（自定义命令 / OpenOCD / pyOCD）。OpenOCD 模式显示工具路径、程序文件、芯片配置和接口配置；接口配置是预设下拉（ST-Link、CMSIS-DAP / DAPLink、J-Link、XDS110、ULINK 等）+ 自定义文本框 + **自动检测** 按钮。`OpenOcdConfig::default()` 的接口为空，不再自动填 `stlink.cfg`；自动检测通过 Windows PnP（或 `lsusb`）VID 识别已连接的 ST-Link / CMSIS-DAP / DAPLink / J-Link，失败时提示手动选择。pyOCD 模式显示工具路径、程序文件、目标芯片和可选 Pack；“编辑”打开独立烧录配置弹窗，含命令预览。分组还显示 Flash/RAM 容量和 **内存布局...** 按钮：弹窗采用 Cortex-Debug 风格两列网格，Read/Write 侧为 IRAM1/2 与 RAM1-3（Default、起始地址、大小、NoInit），Read/Only 侧为 IROM1/2 与 ROM1-3（Default、起始地址、大小、启动），底部显示 RAM Total / ROM Total；自动值优先来自链接脚本，其次来自匹配 PDSC 的 `<memory>`；保存到工程配置但不改写链接脚本。工具/路径下拉修改后立即写入工程 `.simple-embedded/settings.json`，弹窗中的字段点击保存后写入。
+- “工程信息 → 烧录配置”提供烧录工具下拉（自定义命令 / OpenOCD / pyOCD）。OpenOCD 模式显示工具路径、程序文件、芯片配置和接口配置；接口配置是预设下拉（ST-Link、CMSIS-DAP / DAPLink、J-Link、XDS110、ULINK 等）+ 自定义文本框 + **自动检测** 按钮。`OpenOcdConfig::default()` 的接口为空，不再自动填 `stlink.cfg`；自动检测通过 Windows PnP（或 `lsusb`）VID 识别已连接的 ST-Link / CMSIS-DAP / DAPLink / J-Link，失败时提示手动选择。pyOCD 模式显示工具路径、程序文件、目标芯片和可选 Pack；“编辑”打开独立烧录配置弹窗，含命令预览。分组还显示 Flash/RAM 容量和 **内存布局...** 按钮：弹窗采用 Cortex-Debug 风格两列网格，Read/Write 侧为 IRAM1/2 与 RAM1-3（Default、起始地址、大小、NoInit），Read/Only 侧为 IROM1/2 与 ROM1-3（Default、起始地址、大小、启动），底部显示 RAM Total / ROM Total；自动值优先来自链接脚本，其次来自匹配 PDSC 的 `<memory>`；保存到工程配置但不改写链接脚本。工具/路径下拉修改后立即写入工程 `.simple-embedded/settings.json`，弹窗中的字段点击保存后写入。**内存布局...** 按钮放在 Flash/RAM 行的上方，**编辑** 是居中显示在分组底部的按钮。
 - 关闭窗口、关闭 Tab、切换工程时都要处理未保存确认。
-- 不做弹窗堆叠；确认弹窗和设置弹窗互斥。
+- 不做弹窗堆叠；确认弹窗和配置弹窗互斥。
 - 无工程时左上角仍显示同一张构建卡片，使用“导入 / 配置 / 工作区”按钮；中间显示单行提示。第一次启动且未打开工程时不写入任何工程文件；打开工程会创建/更新 `.simple-embedded/settings.json`。测试后如果产生 `%APPDATA%\SimpleEmbedded\settings.json` 或临时工程配置，提交前应清理，避免把测试工程路径带入首启体验。
 
 ## 已知边界（当前版本）
@@ -237,7 +237,7 @@ docs/                  README 截图和使用教程
 - 没有 LSP/语义级跳转；符号搜索、TODO、寄存器浏览器都是轻量索引。补全/定义/引用是启发式功能；成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型。
 - 内存布局的起始地址/大小只写入工程 `.simple-embedded/settings.json`，不会自动改写链接脚本；Flash/RAM 总量优先来自链接脚本，其次来自芯片支持包。`.bin` 使用内存布局里的下载起始地址。
 - 不支持多光标；Ctrl+Alt+左键只提供单一矩形列选择。分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
-- 调试支持主机 gdb 和 ARM GDB server：ARM ELF/AXF 会复用 OpenOCD / pyOCD 配置启动 server，连接 arm-none-eabi-gdb 并 `load` 程序；调试侧栏提供变量 Live Watch 和只读寄存器表，通过 gdb `echo` 标记解析输出，但没有调用栈、内存或外设寄存器编辑面板。“动态监测”支持 `watch` / `rwatch` / `awatch` 硬件 watchpoint，命中时暂停并记录新旧值；数量受目标硬件限制，GDB 可能退化为软件 watchpoint（界面标记“软件”），OpenOCD/pyOCD 不支持时以 gdb 错误为准。调试控制浮层可关闭但不会自动停止会话。
+- 调试支持主机 gdb 和 ARM GDB server：ARM ELF/AXF 会复用 OpenOCD / pyOCD 配置启动 server，连接 arm-none-eabi-gdb 并 `load` 程序；调试侧栏提供变量 Live Watch 和只读寄存器表，通过 gdb `echo` 标记解析输出，但没有调用栈、内存或外设寄存器编辑面板。“动态监测”支持 `watch` / `rwatch` / `awatch` 硬件 watchpoint，命中时暂停并记录本机时间、新旧值、源码位置和 `bt 6` 调用栈；数量受目标硬件限制，GDB 可能退化为软件 watchpoint（界面标记“软件”），OpenOCD/pyOCD 不支持时以 gdb 错误为准。watchpoint 表达式和历史在停止调试后保留，下次会话可自动或手动重新启用；调试控制浮层可关闭但不会自动停止会话。
 - 工作区只使用第一个 folder，不实现 VS Code 的多根工作区、任务和扩展配置；双击关联写入 HKCU，移动程序后需要重新关联。
 - 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走本地自定义命令、内置 OpenOCD 或内置 pyOCD。内置烧录支持 `.hex` / `.elf` / `.axf`，以及按内存布局下载地址烧录的 `.bin`。
 - 源码支持 UTF-8（含 BOM）和 GBK；构建输出在 Windows 上会尝试按 GBK 解码。
@@ -268,7 +268,7 @@ UI 改动后建议：
 
 - 远端：`origin` = https://gitee.com/chen_alanson/embedd.git
 - 主分支：`master`（跟踪 `origin/master`）
-- 本仓库开发时不要提交 `target/`、`examples/blink/build/`、`*.log`、`.opencode/`、`.simple-embedded/` 或 `*.se-workspace`；这些已写入 `.gitignore`。普通用户工程是否提交 `.simple-embedded/settings.json` / `.se-workspace` 由用户决定。
+- 本仓库开发时不要提交 `target/`、`examples/blink/build/`、`*.log`、`.simple-embedded/` 或 `*.se-workspace`；这些已写入 `.gitignore`。`.opencode/skills/` 随工程跟踪，包含当前可用的技能说明和参考资料。普通用户工程是否提交 `.simple-embedded/settings.json` / `.se-workspace` 由用户决定。
 - `dist/` 只追踪 `*.exe`：`.gitignore` 使用 `/dist/**/*` + `!/dist/**/` + `!/dist/**/*.exe`，并显式忽略 `.compiler.tmp` / `.make.tmp`。不要用 `git add -f` 把 DLL、工具链数据或 `tools.zip` 加进仓库。
 - 除非用户明确要求，不要自动 commit 或 push。
 - 本机 Git 全局配置路径 `D:\Cadence\SPB_Data\.gitconfig` 不存在时，Git 会报 global config 错误；可用仓库本地配置，或在命令中临时指定有效的 `GIT_CONFIG_GLOBAL`。
@@ -278,6 +278,7 @@ UI 改动后建议：
 
 - `README.md`：项目定位、功能、依赖和设计取舍
 - `docs/TUTORIAL.md`：面向用户的中文操作教程
+- `docs/DYNAMIC.md`：动态监测（watchpoint）教程，含时间戳、调用栈和自动启动
 - `docs/FLASH.md`：烧录配置教程（ST-Link、CubeProgrammer、OpenOCD、pyOCD、J-Link、Keil）
 - `docs/editor.png` / `docs/welcome.png`：界面截图
 - 本文件：面向后续开发/代理的工程上下文
