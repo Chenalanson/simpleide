@@ -6682,15 +6682,7 @@ impl App {
                         ui.add_space(8.0);
 
                         ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [86.0, 22.0],
-                                Label::new(
-                                    RichText::new("工具链")
-                                        .size(10.5)
-                                        .color(theme::TEXT_DIM),
-                                )
-                                .halign(Align::LEFT),
-                            );
+                            settings_form_label(ui, "工具链", 22.0);
                             let effective = draft.config.effective_toolchain(&self.project_meta);
                             let selected = if draft.config.toolchain == ToolchainKind::Auto {
                                 format!("自动检测（{}）", effective.label())
@@ -6753,15 +6745,7 @@ impl App {
                         ui.add_space(6.0);
 
                         ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [86.0, 22.0],
-                                Label::new(
-                                    RichText::new("构建位置")
-                                        .size(10.5)
-                                        .color(theme::TEXT_DIM),
-                                )
-                                .halign(Align::LEFT),
-                            );
+                            settings_form_label(ui, "构建位置", 22.0);
                             if segment_button(
                                 ui,
                                 draft.config.target == BuildTarget::Local,
@@ -6794,15 +6778,7 @@ impl App {
                                     );
                                     ui.add_space(3.0);
                                     ui.horizontal(|ui| {
-                                        ui.add_sized(
-                                            [86.0, 22.0],
-                                            Label::new(
-                                                RichText::new("SSH 端口")
-                                                    .size(10.5)
-                                                    .color(theme::TEXT_DIM),
-                                            )
-                                            .halign(Align::LEFT),
-                                        );
+                                        settings_form_label(ui, "SSH 端口", 22.0);
                                         ui.add(
                                             egui::DragValue::new(&mut draft.config.ssh_port)
                                                 .range(1..=65535)
@@ -6872,15 +6848,7 @@ impl App {
 
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [86.0, 22.0],
-                                Label::new(
-                                    RichText::new("并行任务数")
-                                        .size(10.5)
-                                        .color(theme::TEXT_DIM),
-                                )
-                                .halign(Align::LEFT),
-                            );
+                            settings_form_label(ui, "并行任务数", 22.0);
                             ui.add(
                                 egui::DragValue::new(&mut draft.config.build_jobs)
                                     .range(0..=128)
@@ -7971,13 +7939,20 @@ fn segment_button(ui: &mut egui::Ui, selected: bool, text: &str) -> bool {
     .clicked()
 }
 
+fn settings_form_label(ui: &mut egui::Ui, label: &str, height: f32) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(86.0, height),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.label(RichText::new(label).size(10.5).color(theme::TEXT_DIM));
+        },
+    );
+}
+
 fn form_line(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
     let width = (ui.available_width() - 86.0 - ui.spacing().item_spacing.x).max(80.0);
     ui.horizontal(|ui| {
-        ui.add_sized(
-            [86.0, 26.0],
-            Label::new(RichText::new(label).size(10.5).color(theme::TEXT_DIM)).halign(Align::LEFT),
-        );
+        settings_form_label(ui, label, 26.0);
         ui.add_sized(
             [width, 26.0],
             TextEdit::singleline(value)

@@ -3959,9 +3959,20 @@ impl App {
                 self.settings.gdb_path.clone(),
             )
         };
+        let mut extra_paths = self.build_config.extra_paths.clone();
+        if let Some(project) = &self.project {
+            for path in crate::config::autodetect(&project.root).extra_paths {
+                if !extra_paths
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(&path))
+                {
+                    extra_paths.push(path);
+                }
+            }
+        }
         self.settings_draft = Some(SettingsDraft {
             tab: SettingsTab::Build,
-            extra_paths_text: self.build_config.extra_paths.join("\n"),
+            extra_paths_text: extra_paths.join("\n"),
             config: self.build_config.clone(),
             font_size: self.settings.font_size,
             word_wrap: self.settings.word_wrap,
