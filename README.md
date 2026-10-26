@@ -205,6 +205,7 @@ cargo run --release -- examples\blink examples\blink\src\main.c
 ```text
 src/
   main.rs        窗口、字体、图标生成
+  icon_codec.rs  图标缩放与 ICO 编码（build.rs 共用）
   app.rs         应用状态、快捷键、右侧操作栏、构建输出
   app/ui.rs      工程卡片、文件树、Tab、编辑器、空状态、设置/确认弹窗
   build.rs       子进程、stdout/stderr、停止、日志事件
@@ -221,6 +222,7 @@ src/
   util.rs        路径、换行、文件管理器集成
 examples/blink/  可直接打开的演示工程
 assets/         应用图标源图（Simple 字标 + S 标记）
+build.rs        生成并嵌入 exe 图标资源
 ```
 
 ## 设计取舍

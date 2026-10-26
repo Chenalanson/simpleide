@@ -17,6 +17,7 @@ mod git;
 mod hexview;
 mod highlight;
 mod hover;
+mod icon_codec;
 mod ignore;
 mod indent;
 mod log;
@@ -36,7 +37,6 @@ mod todo;
 mod toolchain;
 mod util;
 
-use std::io::Cursor;
 use std::path::PathBuf;
 #[cfg(windows)]
 use std::sync::atomic::{AtomicIsize, AtomicU8, Ordering};
@@ -251,9 +251,7 @@ fn embedded_icon(wordmark: bool) -> Option<&'static image::RgbaImage> {
         } else {
             include_bytes!("../assets/icon-mark.png").as_slice()
         };
-        image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-            .ok()
-            .map(|image| image.to_rgba8())
+        icon_codec::decode_png(bytes)
     })
     .as_ref()
 }
@@ -261,8 +259,7 @@ fn embedded_icon(wordmark: bool) -> Option<&'static image::RgbaImage> {
 fn icon_from_asset(size: u32, wordmark: bool) -> egui::IconData {
     let size = size.max(1);
     if let Some(source) = embedded_icon(wordmark) {
-        let resized =
-            image::imageops::resize(source, size, size, image::imageops::FilterType::Lanczos3);
+        let resized = icon_codec::resize(source, size);
         return egui::IconData {
             rgba: resized.into_raw(),
             width: size,
@@ -287,98 +284,21 @@ fn icon_from_asset(size: u32, wordmark: bool) -> egui::IconData {
 }
 
 pub(crate) fn app_icon(size: u32) -> egui::IconData {
-    icon_from_asset(size, size >= 32)
+    icon_from_asset(size, size >= icon_codec::WORDMARK_MIN_SIZE)
 }
 
 /// Initial window icon applied by winit/eframe. It is the 48 px wordmark; the
 /// taskbar keeps that artwork while `apply_pending_icons` gives the 16 px
 /// title-bar slot the monogram.
 pub(crate) fn window_icon() -> egui::IconData {
-    icon_from_asset(48, true)
+    app_icon(48)
 }
 
-/// Build a multi-size Windows ICO file: wordmark for the large entries and the
-/// monogram for 16/24 px. Sizes up to 128 px use 32-bit BMP entries because
-/// `LoadImageW` (used for the taskbar icon) does not reliably read
-/// PNG-compressed entries below 256 px; only 256 px stays PNG.
+/// Build the same multi-size ICO that `build.rs` embeds into the executable.
 pub(crate) fn app_icon_ico() -> Result<Vec<u8>, String> {
-    let sizes = [16u32, 24, 32, 48, 64, 128, 256];
-    let mut entries = Vec::new();
-    for size in sizes {
-        let icon = app_icon(size);
-        let data = if size >= 256 {
-            let image = image::RgbaImage::from_raw(size, size, icon.rgba)
-                .ok_or_else(|| "图标缓冲区大小不正确".to_owned())?;
-            let mut png = Vec::new();
-            image::DynamicImage::ImageRgba8(image)
-                .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
-                .map_err(|err| format!("无法编码图标：{err}"))?;
-            png
-        } else {
-            encode_icon_bmp(size, &icon.rgba)
-        };
-        entries.push((size, data));
-    }
-
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&0u16.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
-    let mut offset = 6 + 16 * entries.len();
-    for (size, data) in &entries {
-        let dimension = if *size >= 256 { 0 } else { *size as u8 };
-        bytes.push(dimension);
-        bytes.push(dimension);
-        bytes.push(0);
-        bytes.push(0);
-        bytes.extend_from_slice(&1u16.to_le_bytes());
-        bytes.extend_from_slice(&32u16.to_le_bytes());
-        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&(offset as u32).to_le_bytes());
-        offset += data.len();
-    }
-    for (_, data) in &entries {
-        bytes.extend_from_slice(data);
-    }
-    Ok(bytes)
-}
-
-/// Encode one 32-bit BMP icon image: BITMAPINFOHEADER, bottom-up BGRA pixels,
-/// then a 1-bit transparency mask. ICO directory entries expect the doubled
-/// height and no BMP file header.
-fn encode_icon_bmp(size: u32, rgba: &[u8]) -> Vec<u8> {
-    let mask_stride = size.div_ceil(32) * 4;
-    let xor_len = (size * size * 4) as usize;
-    let and_len = (mask_stride * size) as usize;
-    let mut out = Vec::with_capacity(40 + xor_len + and_len);
-    out.extend_from_slice(&40u32.to_le_bytes());
-    out.extend_from_slice(&(size as i32).to_le_bytes());
-    out.extend_from_slice(&(size as i32 * 2).to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&32u16.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&((xor_len + and_len) as u32).to_le_bytes());
-    out.extend_from_slice(&[0u8; 16]);
-    for y in (0..size).rev() {
-        for x in 0..size {
-            let index = ((y * size + x) * 4) as usize;
-            out.push(rgba[index + 2]);
-            out.push(rgba[index + 1]);
-            out.push(rgba[index]);
-            out.push(rgba[index + 3]);
-        }
-    }
-    for y in (0..size).rev() {
-        let mut row = vec![0u8; mask_stride as usize];
-        for x in 0..size {
-            let index = ((y * size + x) * 4) as usize;
-            if rgba[index + 3] == 0 {
-                row[(x / 8) as usize] |= 0x80 >> (x % 8);
-            }
-        }
-        out.extend_from_slice(&row);
-    }
-    out
+    let word = embedded_icon(true).ok_or_else(|| "无法读取图标字标".to_owned())?;
+    let mark = embedded_icon(false).ok_or_else(|| "无法读取图标标记".to_owned())?;
+    icon_codec::encode_ico(word, mark)
 }
 
 /// Write the application icon next to the user settings so Explorer can use it
@@ -449,5 +369,11 @@ mod tests {
             }
         }
         assert_eq!(dimensions, vec![16, 24, 32, 48, 64, 128, 0]);
+    }
+
+    #[test]
+    fn embedded_exe_icon_matches_runtime_ico() {
+        let embedded = include_bytes!(concat!(env!("OUT_DIR"), "/simple-embedded.ico"));
+        assert_eq!(embedded.as_slice(), app_icon_ico().unwrap());
     }
 }

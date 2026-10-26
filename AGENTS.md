@@ -43,6 +43,7 @@ examples\blink
 
 ```text
 src/main.rs            窗口、图标（字标 + 小尺寸标记）、CJK 字体、eframe 启动
+src/icon_codec.rs      字标/标记 PNG 解码、缩放和 ICO 编码（build.rs 也复用）
 src/app.rs             App 状态、快捷键、打开/保存、右侧操作栏、构建输出
 src/app/ui.rs          app 的子模块：文件树、Tab、编辑器、空工程/空标签占位、设置/确认弹窗
 src/build.rs           子进程、stdout/stderr、停止、构建事件与结果
@@ -80,6 +81,7 @@ src/column.rs          旧批量列编辑算法
 src/column_select.rs   矩形列选择文本操作
 examples/blink/        可编译的演示固件
 assets/                应用图标源图：icon-word.png（Simple 字标）、icon-mark.png（S 标记）
+build.rs               从 assets 生成 ICO，并用 winres 嵌入 exe 资源
 scripts/package-tools.ps1  打包 release exe 和软件自带工具链到 dist
 docs/                  README 截图和使用教程
 ```
@@ -96,7 +98,7 @@ docs/                  README 截图和使用教程
 - 左侧构建卡片顶部显示工程名（粗体）和路径，路径使用 `util::display_path` 去掉 Windows `\\?\` 前缀；下方显示构建模式、命令和三个按钮。未导入时按钮为“导入 / 配置 / 工作区”，导入后为“更换 / 配置 / 工作区”。工作区按钮弹出菜单：生成并关联工作区文件、打开工作区文件、打开工程配置 `settings.json`。
 - 左侧栏全高；资源管理器（文件树）与工程信息的分界受 `left_split` 控制：文件树内容较短时区域自动收缩，工程信息标题紧跟最后一个可见文件；折叠资源管理器时工程信息标题紧贴资源管理器标题。文件树内容超出时按比例截断；展开时工程信息标题上下各留 6px，折叠且树超出时上下各留 8px，标题自身保留 6px 内边距和最小高度，避免贴住底部或上下间距不一致。中间分割线可拖动。折叠/展开工程信息只影响其内容，不改变标题位置。`left_split`、`resource_open`、`info_open` 都持久化在 `Settings`，下次启动保持位置。左栏宽度由可调整的 `Panel::left` 提供，并加大了拖拽命中半径。无工程时中间只显示一行提示“请在左上角选择工程并开始”。
 - Windows 标题栏通过 DWM 深色属性和 `ViewportCommand::SetTheme(Dark)` 与面板配色保持一致。
-- 应用图标是 `assets/icon-word.png`（黑色圆角底 + 白色斜体 `Simple` 字标）和 `assets/icon-mark.png`（同风格 `S` 标记）两张内嵌 PNG。`app_icon(size)` 在 32px 及以上用字标、16/24px 用 `S` 标记；`app_icon_ico()` 生成 16/24/32/48/64/128/256 多尺寸 ICO（16–128 用 32 位 BMP 条目，256 用 PNG）。Windows 标题栏 16px 放不下六个字母，所以窗口初始化时先用 48px 字标让任务栏取到 `Simple`，再由 `apply_pending_icons` 在前几帧把 ICON_SMALL 换成 `S` 标记：标题栏显示 S，任务栏和 Explorer 大图标显示 Simple。
+- 应用图标是 `assets/icon-word.png`（黑色圆角底 + 白色斜体 `Simple` 字标）和 `assets/icon-mark.png`（同风格 `S` 标记）两张内嵌 PNG。`app_icon(size)` 在 32px 及以上用字标、16/24px 用 `S` 标记；`app_icon_ico()` 生成 16/24/32/48/64/128/256 多尺寸 ICO（16–128 用 32 位 BMP 条目，256 用 PNG）。`build.rs` 用同一套 `icon_codec` 从 assets 生成 ICO，并通过 `winres` + `windres` 把图标资源嵌进 exe，所以文件夹里看到的 `.exe` 图标也是 `Simple`，不再依赖 `.se-workspace` 关联。Windows 标题栏 16px 放不下六个字母，所以窗口初始化时先用 48px 字标让任务栏取到 `Simple`，再由 `apply_pending_icons` 在前几帧把 ICON_SMALL 换成 `S` 标记：标题栏显示 S，任务栏和 Explorer 大图标显示 Simple。
 
 ### 编辑器
 
@@ -252,7 +254,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件）、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil 工程、命令可用性检查。当前共 171 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件）、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil 工程、命令可用性检查、图标 ICO 条目与 exe 嵌入资源一致性。当前共 173 个测试。
 
 UI 改动后建议：
 
