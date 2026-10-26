@@ -62,7 +62,6 @@ impl Project {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsTab {
     Build,
-    Toolchain,
     Editor,
     Debug,
     Other,
@@ -79,10 +78,6 @@ struct SettingsDraft {
     tab: SettingsTab,
     config: BuildConfig,
     extra_paths_text: String,
-    compiler_path: String,
-    make_path: String,
-    use_bundled_toolchain: bool,
-    bundled_tools_dir: String,
     font_size: f32,
     word_wrap: bool,
     relative_line_numbers: bool,
@@ -769,8 +764,6 @@ pub struct App {
     build_config: BuildConfig,
     project_debug: crate::config::ProjectDebugSettings,
     settings_draft: Option<SettingsDraft>,
-    toolchain_install: Option<Receiver<crate::toolchain::InstallEvent>>,
-    toolchain_status: String,
     meta_draft: Option<MetaDraft>,
     meta_add: Option<MetaAddDraft>,
     flash_draft: Option<FlashDraft>,
@@ -850,8 +843,6 @@ impl App {
             build_config: BuildConfig::default(),
             project_debug: crate::config::ProjectDebugSettings::default(),
             settings_draft: None,
-            toolchain_install: None,
-            toolchain_status: String::new(),
             meta_draft: None,
             meta_add: None,
             flash_draft: None,
@@ -3289,54 +3280,6 @@ impl App {
         Ok(saved)
     }
 
-    fn poll_toolchain_install(&mut self, ctx: &egui::Context) {
-        let mut finished = None;
-        loop {
-            let event = self
-                .toolchain_install
-                .as_ref()
-                .map(|receiver| receiver.try_recv());
-            let Some(event) = event else {
-                break;
-            };
-            match event {
-                Ok(crate::toolchain::InstallEvent::Progress(message)) => {
-                    self.toolchain_status = message;
-                }
-                Ok(crate::toolchain::InstallEvent::Done(result)) => {
-                    finished = Some(result);
-                    break;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    finished = Some(Err("工具安装线程意外结束".to_owned()));
-                    break;
-                }
-            }
-        }
-        if let Some(result) = finished {
-            self.toolchain_install = None;
-            match result {
-                Ok(()) => {
-                    self.settings.use_bundled_toolchain = true;
-                    self.settings.save();
-                    if let Some(draft) = &mut self.settings_draft {
-                        draft.use_bundled_toolchain = true;
-                    }
-                    self.toolchain_status = "工具安装完成，已切换到软件自带工具".to_owned();
-                    self.set_toast("工具安装完成", Severity::Success);
-                }
-                Err(err) => {
-                    self.toolchain_status = format!("安装失败：{err}");
-                    self.set_toast(format!("工具安装失败：{err}"), Severity::Error);
-                }
-            }
-        }
-        if self.toolchain_install.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(120));
-        }
-    }
-
     fn tick_autosave(&mut self, ctx: &egui::Context) {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let mut dirty_count = 0usize;
@@ -3843,21 +3786,11 @@ impl App {
             }
         };
         if self.build_config.target == BuildTarget::Local || kind == TaskKind::Flash {
-            match crate::toolchain::build_env_dirs(&self.settings) {
-                Ok(dirs) => {
-                    for dir in dirs.into_iter().rev() {
-                        spec.env_paths.insert(0, dir);
-                    }
-                }
-                Err(err) => {
-                    // Flashing does not depend on the compiler or make. Keep
-                    // OpenOCD usable even when the bundled toolchain is not
-                    // installed (its own path is resolved separately).
-                    if kind != TaskKind::Flash {
-                        self.set_toast(err, Severity::Error);
-                        return;
-                    }
-                }
+            for dir in crate::toolchain::build_env_dirs(&self.settings)
+                .into_iter()
+                .rev()
+            {
+                spec.env_paths.insert(0, dir);
             }
         }
 
@@ -3885,10 +3818,6 @@ impl App {
             tab: SettingsTab::Build,
             extra_paths_text: self.build_config.extra_paths.join("\n"),
             config: self.build_config.clone(),
-            compiler_path: self.settings.compiler_path.clone(),
-            make_path: self.settings.make_path.clone(),
-            use_bundled_toolchain: self.settings.use_bundled_toolchain,
-            bundled_tools_dir: self.settings.bundled_tools_dir.clone(),
             font_size: self.settings.font_size,
             word_wrap: self.settings.word_wrap,
             relative_line_numbers: self.settings.relative_line_numbers,
@@ -6059,10 +5988,10 @@ fn same_path(a: &Path, b: &Path) -> bool {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        crate::apply_pending_icons();
         let ctx = ui.ctx().clone();
         self.build.poll();
         self.poll_debug_start();
-        self.poll_toolchain_install(&ctx);
         if let Some(session) = &mut self.debug.session {
             session.poll();
             let watch_visible = self.debug.auto_watch

@@ -222,10 +222,6 @@ impl ToolchainKind {
         }
     }
 
-    pub fn is_keil(self) -> bool {
-        self.build_system() == BuildSystem::Keil
-    }
-
     pub fn is_arm_compiler(self) -> bool {
         matches!(
             self,

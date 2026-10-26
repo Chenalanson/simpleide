@@ -35,6 +35,7 @@ struct Manifest {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum InstallEvent {
     Progress(String),
     Done(Result<(), String>),
@@ -144,42 +145,37 @@ fn find_in(dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-pub fn build_env_dirs(settings: &Settings) -> Result<Vec<PathBuf>, String> {
+pub fn build_env_dirs(settings: &Settings) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    let mut bundled_complete = false;
     if settings.use_bundled_toolchain {
         let root = resolve_tools_dir(&settings.bundled_tools_dir);
         let tools = detect(&root);
-        let make = tools.make.ok_or_else(|| {
-            format!(
-                "软件自带 make 未安装。请到设置 → 构建工具链，把工具安装到 {}",
-                root.display()
-            )
-        })?;
-        let compiler = tools.compiler.ok_or_else(|| {
-            format!(
-                "软件自带编译器未安装。请到设置 → 构建工具链，把工具安装到 {}",
-                root.display()
-            )
-        })?;
-        push_parent(&mut dirs, &make);
-        push_parent(&mut dirs, &compiler);
-    } else {
-        for (label, value) in [
-            ("编译器", settings.compiler_path.trim()),
-            ("make", settings.make_path.trim()),
-        ] {
+        if let Some(make) = tools.make {
+            push_parent(&mut dirs, &make);
+        }
+        if let Some(compiler) = tools.compiler {
+            push_parent(&mut dirs, &compiler);
+        }
+        bundled_complete = dirs.len() >= 2;
+    }
+
+    // The old "构建工具链" page is gone, so these fields are only a
+    // compatibility fallback. Missing paths are skipped instead of blocking
+    // the build; the project's extra PATH and the system PATH still apply.
+    if !bundled_complete {
+        for value in [settings.compiler_path.trim(), settings.make_path.trim()] {
             if value.is_empty() {
                 continue;
             }
             let path = Path::new(value);
-            if !path.is_file() {
-                return Err(format!("{label}路径不存在：{}", path.display()));
+            if path.is_file() {
+                push_parent(&mut dirs, path);
             }
-            push_parent(&mut dirs, path);
         }
     }
     dedup_dirs(&mut dirs);
-    Ok(dirs)
+    dirs
 }
 
 fn push_parent(dirs: &mut Vec<PathBuf>, file: &Path) {
@@ -193,6 +189,7 @@ fn dedup_dirs(dirs: &mut Vec<PathBuf>) {
     dirs.retain(|dir| seen.insert(dir.to_string_lossy().to_lowercase()));
 }
 
+#[allow(dead_code)]
 pub fn install_async(compiler: PathBuf, make: PathBuf, root: PathBuf) -> Receiver<InstallEvent> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {

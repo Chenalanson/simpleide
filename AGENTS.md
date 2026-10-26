@@ -42,7 +42,7 @@ examples\blink
 ## 目录
 
 ```text
-src/main.rs            窗口、图标、CJK 字体、eframe 启动
+src/main.rs            窗口、图标（字标 + 小尺寸标记）、CJK 字体、eframe 启动
 src/app.rs             App 状态、快捷键、打开/保存、右侧操作栏、构建输出
 src/app/ui.rs          app 的子模块：文件树、Tab、编辑器、空工程/空标签占位、设置/确认弹窗
 src/build.rs           子进程、stdout/stderr、停止、构建事件与结果
@@ -79,6 +79,7 @@ src/debugger.rs        gdb 会话、ARM GDB server 与目标识别
 src/column.rs          旧批量列编辑算法
 src/column_select.rs   矩形列选择文本操作
 examples/blink/        可编译的演示固件
+assets/                应用图标源图：icon-word.png（Simple 字标）、icon-mark.png（S 标记）
 scripts/package-tools.ps1  打包 release exe 和软件自带工具链到 dist
 docs/                  README 截图和使用教程
 ```
@@ -95,6 +96,7 @@ docs/                  README 截图和使用教程
 - 左侧构建卡片顶部显示工程名（粗体）和路径，路径使用 `util::display_path` 去掉 Windows `\\?\` 前缀；下方显示构建模式、命令和三个按钮。未导入时按钮为“导入 / 配置 / 工作区”，导入后为“更换 / 配置 / 工作区”。工作区按钮弹出菜单：生成并关联工作区文件、打开工作区文件、打开工程配置 `settings.json`。
 - 左侧栏全高；资源管理器（文件树）与工程信息的分界受 `left_split` 控制：文件树内容较短时区域自动收缩，工程信息标题紧跟最后一个可见文件；折叠资源管理器时工程信息标题紧贴资源管理器标题。文件树内容超出时按比例截断；展开时工程信息标题上下各留 6px，折叠且树超出时上下各留 8px，标题自身保留 6px 内边距和最小高度，避免贴住底部或上下间距不一致。中间分割线可拖动。折叠/展开工程信息只影响其内容，不改变标题位置。`left_split`、`resource_open`、`info_open` 都持久化在 `Settings`，下次启动保持位置。左栏宽度由可调整的 `Panel::left` 提供，并加大了拖拽命中半径。无工程时中间只显示一行提示“请在左上角选择工程并开始”。
 - Windows 标题栏通过 DWM 深色属性和 `ViewportCommand::SetTheme(Dark)` 与面板配色保持一致。
+- 应用图标是 `assets/icon-word.png`（黑色圆角底 + 白色斜体 `Simple` 字标）和 `assets/icon-mark.png`（同风格 `S` 标记）两张内嵌 PNG。`app_icon(size)` 在 32px 及以上用字标、16/24px 用 `S` 标记；`app_icon_ico()` 生成 16/24/32/48/64/128/256 多尺寸 ICO（16–128 用 32 位 BMP 条目，256 用 PNG）。Windows 标题栏 16px 放不下六个字母，所以窗口初始化时先用 48px 字标让任务栏取到 `Simple`，再由 `apply_pending_icons` 在前几帧把 ICON_SMALL 换成 `S` 标记：标题栏显示 S，任务栏和 Explorer 大图标显示 Simple。
 
 ### 编辑器
 
@@ -139,7 +141,7 @@ docs/                  README 截图和使用教程
 - 查找是编辑器右上角的约 420px 紧凑浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / `Ctrl+H` 打开，不占用独立行；左侧下拉箭头展开替换行，宽度不变，`AB` 保留大小写在替换输入框内，替换/全部替换为图标按钮。`Ctrl+G` 打开同宽的跳行浮层，输入框复用查找输入框样式；提示文字为普通次要色，不使用色块。
 - 面包屑栏只显示从工程根目录开始的路径（`doc.rel_path` 的 `/` 替换为 ` > `）和未保存标记；编码、行尾、语言、只读、寄存器、数组、符号、格式化、自动换行、保存移到最底部状态栏。补全和列编辑不出现在可见工具栏。
 - 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::GUTTER` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。右侧操作栏宽约 58px（原 110px 的一半），按钮内边距同步收窄。编辑器卡底部两角由 `paint_bottom_corners` 补绘 `GUTTER` 圆角，输出面板标题栏紧贴面板顶部，拖动区域合并到标题栏顶部 4px，日志区使用 `EDITOR_BG` 并撑满剩余空间。输出面板标题提供“构建输出 / 调试输出”切换，`OutputView` 决定显示哪一份日志；构建开始时切回构建，启动调试时切到调试。
-- 设置弹窗第一行是 构建 / 构建工具链 / 编辑器 / 调试 / 其他 五个页签，下方只显示当前页；构建页包含工具链下拉、自动检测、Build/Clean/Rebuild/Flash 命令和“并行任务数”（0 = 不启用，可一键填入 CPU 核心数）；自动检测先看工程根目录的构建文件，再查 PATH/常见安装目录。构建工具链页提供编译器、make 的输入框和浏览按钮，可从 PATH 自动检测（含 armclang/armcc），也提供“软件自带”目录、工具状态和一键安装。调试页的调试程序和 gdb 路径在工程打开时读写工程的 `debug` 节点（无工程时才用全局设置），提供浏览和自动检测；调试程序为空时会自动回填 build 产物，gdb 路径既可填 exe，也可填 `bin` 目录。
+- 设置弹窗第一行是 构建 / 编辑器 / 调试 / 其他 四个页签，下方只显示当前页；构建页包含工具链下拉、自动检测、Build/Clean/Rebuild/Flash 命令、“并行任务数”（0 = 不启用，可一键填入 CPU 核心数）和“工具路径 / 额外 PATH”。自动检测先看工程根目录的构建文件，再查 PATH/常见安装目录。原来的“构建工具链”页已删除；软件自带 `tools/` 存在时自动优先使用，否则回退到旧配置路径、额外 PATH 和系统 PATH。调试页的调试程序和 gdb 路径在工程打开时读写工程的 `debug` 节点（无工程时才用全局设置），提供浏览和自动检测；调试程序为空时会自动回填 build 产物，gdb 路径既可填 exe，也可填 `bin` 目录。
 - 最底部状态栏是贯穿整个窗口宽度的矩形条（无圆角、无外圈间隙），内容靠右排列：右侧操作按钮 + 行列/缩进/编码/行尾/语言信息。
 - 资源管理器、工程信息、构建配置、芯片支持包、烧录配置、C/C++ 列表等可折叠区域使用缓动动画，不直接瞬间显示/隐藏：侧栏高度动画 0.22s、`cubic_in_out`，其余折叠组使用 egui `CollapsingState` 和全局 0.20s 动画；箭头随 openness 旋转。动画期间主动 `request_repaint()`，避免掉帧式跳变。
 - Toast 使用 12.5px 正文、10.5px 状态文字、14×10 内边距，最大宽度 460px；不要再把提示字号设为 9–11px。
@@ -185,7 +187,7 @@ docs/                  README 截图和使用教程
 - Make 命令在启动时探测 PATH：`make` → `gmake` → `mingw32-make`。
 - 本地 Make 构建自动探测 Git for Windows / MSYS / Cygwin 的 `usr\bin` 并加入 PATH，保证 `rm` 等 POSIX 命令可执行。
 - `BuildConfig.extra_paths` 允许用户追加工具链目录，构建时统一前置到 PATH。
-- `Settings.compiler_path` / `make_path` / `use_bundled_toolchain` / `bundled_tools_dir` 是全局构建工具链配置，默认 `use_bundled_toolchain = true`。系统模式把所选编译器/make 的父目录前置到 PATH；软件自带模式使用 `bundled_tools_dir`（留空时优先 `<exe>/tools`，否则 `%APPDATA%\SimpleEmbedded\tools`；相对路径相对于 exe）中的工具。`toolchain.rs` 负责检测、PATH 目录和复制安装：安装时复制编译器根目录、make 及其 DLL，并写入 `toolchain.json`；安装完成后自动切换到软件自带模式。只影响本地构建和本地烧录，远程 SSH 不注入本地 PATH。
+- `Settings.compiler_path` / `make_path` / `use_bundled_toolchain` / `bundled_tools_dir` 是为旧版本保留的全局构建工具链字段，设置界面已不再暴露。`build_env_dirs` 优先使用软件自带 `tools/`（`bundled_tools_dir` 留空时 `<exe>/tools`，否则 `%APPDATA%\SimpleEmbedded\tools`）；自带 make/compiler 不完整时回退到旧 `compiler_path` / `make_path`、构建页的额外 PATH 和系统 PATH，不再因为缺少自带工具而阻止本地构建。`toolchain.rs` 仍保留检测和复制安装函数供兼容/测试使用。只影响本地构建和本地烧录，远程 SSH 不注入本地 PATH。
 - 软件自带工具的标准发布布局是 `simple-embedded.exe` + `tools/toolchain.json` + `tools/make/make.exe` + `tools/compiler/bin/arm-none-eabi-gcc.exe`。`scripts/package-tools.ps1` 会把 release exe、当前 ARM GCC 和 make 打包到 `dist/simple-embedded/`。仓库只追踪 `dist/` 下的所有 `*.exe`（应用 exe 和 `tools` 里的工具 exe）；编译器 DLL、库、头文件、`tools.zip`、`.compiler.tmp`、`.make.tmp` 仍被 `.gitignore` 忽略。仅 exe 不能构成完整可运行工具链，完整发布包仍需本地 `tools/` 目录。
 - 远程停止只保证结束本地 ssh 进程；远端进程是否退出取决于远端 shell。
 

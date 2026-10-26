@@ -58,7 +58,7 @@
 - 构建输出标题栏显示 Flash / RAM 占用和芯片容量百分比；容量优先读取链接脚本，其次读取匹配的芯片支持包 `.pdsc`，没有 `size` 输出时直接解析 ELF 段大小
 - 每工程独立的构建、烧录、C/C++ 和调试配置保存在工程内 `.simple-embedded/settings.json`（包括 `debug.gdb_path`）；用户目录作为旧配置迁移和全局偏好存储
 - 工作区文件：构建卡片“工作区”可生成 `<工程名>.se-workspace` 并关联双击打开；也可从“工作区 → 打开工作区文件…”选择 `.se-workspace` / `.code-workspace`
-- 设置分为 构建 / 构建工具链 / 编辑器 / 调试 / 其他：构建页可设置命令和并行任务数；构建工具链可浏览编译器和 make，或一键把当前工具复制到软件自带目录，之后不依赖系统 PATH
+- 设置分为 构建 / 编辑器 / 调试 / 其他：构建页可设置工具链、命令、并行任务数和额外 PATH；旧版本的“构建工具链”页已移除，软件自带 `tools/` 存在时仍会自动优先使用
 - 可追加工具链 PATH；本地 Make 构建会自动接入 Git for Windows / MSYS 的 `rm` 等 Unix 工具
 
 ## 运行
@@ -127,7 +127,7 @@ tools/
   compiler/bin/arm-none-eabi-gcc.exe
 ```
 
-默认优先使用 `tools/`；没有 `tools/` 时回退到用户目录工具链。设置 → **构建工具链** 可以在“系统已安装 / 软件自带”之间切换，也可以浏览编译器和 make、从 PATH 自动检测，或把当前工具一键复制到软件目录。
+默认优先使用 `tools/`；没有 `tools/` 时回退到用户目录工具链和系统 `PATH`。设置 → 构建 的 **工具链路径 / 额外 PATH** 可以按行补充编译器、make、UV4 等目录，不需要再安装或切换工具来源。
 
 本地打包当前工具链和 release exe：
 
@@ -204,7 +204,7 @@ cargo run --release -- examples\blink examples\blink\src\main.c
 
 ```text
 src/
-  main.rs        窗口、字体、图标
+  main.rs        窗口、字体、图标生成
   app.rs         应用状态、快捷键、右侧操作栏、构建输出
   app/ui.rs      工程卡片、文件树、Tab、编辑器、空状态、设置/确认弹窗
   build.rs       子进程、stdout/stderr、停止、日志事件
@@ -220,6 +220,7 @@ src/
   theme.rs       配色
   util.rs        路径、换行、文件管理器集成
 examples/blink/  可直接打开的演示工程
+assets/         应用图标源图（Simple 字标 + S 标记）
 ```
 
 ## 设计取舍

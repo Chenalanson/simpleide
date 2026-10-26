@@ -38,9 +38,21 @@ mod util;
 
 use std::io::Cursor;
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::sync::atomic::{AtomicIsize, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use eframe::egui;
+
+/// Window handle captured at startup; the icon override runs from the first UI
+/// frames, after eframe has applied its own icon.
+#[cfg(windows)]
+static PENDING_HWND: AtomicIsize = AtomicIsize::new(0);
+#[cfg(windows)]
+static ICON_FRAMES: AtomicU8 = AtomicU8::new(0);
+#[cfg(windows)]
+static ICON_FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 fn main() -> eframe::Result<()> {
     let mut args = std::env::args_os().skip(1);
@@ -58,7 +70,7 @@ fn main() -> eframe::Result<()> {
         .with_inner_size([1360.0, 850.0])
         .with_min_inner_size([1000.0, 640.0])
         .with_title("Simple embedded · 作者 smallYYY")
-        .with_icon(Arc::new(app_icon(128)));
+        .with_icon(Arc::new(window_icon()));
 
     let native_options = eframe::NativeOptions {
         viewport,
@@ -72,6 +84,7 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             configure_fonts(&cc.egui_ctx);
             theme::install(&cc.egui_ctx);
+            install_native_icons(cc);
             Ok(Box::new(app::App::new(
                 cc,
                 initial_project.clone(),
@@ -113,62 +126,159 @@ fn configure_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-pub(crate) fn app_icon(size: u32) -> egui::IconData {
-    let mut rgba = vec![0u8; (size * size * 4) as usize];
-    let s = size as f32;
-    let radius = s * 0.22;
-    let chevron = egui::Stroke::new(s * 0.055, egui::Color32::from_rgb(88, 196, 221));
-    let left = s * 0.34;
-    let right = s * 0.62;
-    let top = s * 0.35;
-    let bottom = s * 0.65;
-    let center = s * 0.5;
+/// Captures the native window handle at startup. `apply_pending_icons` uses it
+/// to install separate title-bar and taskbar artwork after eframe applies its
+/// own single-size icon.
+fn install_native_icons(cc: &eframe::CreationContext<'_>) {
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let Ok(handle) = cc.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(win) = handle.as_raw() else {
+            return;
+        };
+        // eframe applies its own icon in `pre_update` of the first frames, so
+        // wait until the UI runs and then keep overriding for a few frames in
+        // case eframe had to retry.
+        PENDING_HWND.store(win.hwnd.get(), Ordering::Relaxed);
+        ICON_FRAMES.store(8, Ordering::Relaxed);
+    }
+    #[cfg(not(windows))]
+    let _ = cc;
+}
 
-    for y in 0..size {
-        for x in 0..size {
-            let px = x as f32 + 0.5;
-            let py = y as f32 + 0.5;
-            if !inside_rounded_rect(px, py, s, radius) {
-                continue;
-            }
-
-            let edge = distance_to_rounded_rect_edge(px, py, s, radius);
-            let mut color = if edge < s * 0.018 {
-                egui::Color32::from_rgb(42, 53, 67)
-            } else {
-                egui::Color32::from_rgb(18, 22, 29)
-            };
-
-            let lines = [
-                (egui::pos2(left + s * 0.13, top), egui::pos2(left, center)),
-                (
-                    egui::pos2(left, center),
-                    egui::pos2(left + s * 0.13, bottom),
-                ),
-                (egui::pos2(right - s * 0.13, top), egui::pos2(right, center)),
-                (
-                    egui::pos2(right, center),
-                    egui::pos2(right - s * 0.13, bottom),
-                ),
-            ];
-            if lines
-                .iter()
-                .any(|(a, b)| distance_to_segment(px, py, *a, *b) < chevron.width)
-            {
-                color = chevron.color;
-            }
-            if (px - center).hypot(py - center) < s * 0.035 {
-                color = egui::Color32::from_rgb(114, 203, 139);
-            }
-
-            let index = ((y * size + x) * 4) as usize;
-            rgba[index] = color.r();
-            rgba[index + 1] = color.g();
-            rgba[index + 2] = color.b();
-            rgba[index + 3] = 255;
+/// Called from the first few UI frames. eframe sets both native icons from the
+/// single 48 px wordmark before `App::ui`; this swaps the small title-bar slot
+/// for the 16 px monogram while leaving the taskbar on the wordmark.
+pub(crate) fn apply_pending_icons() {
+    #[cfg(windows)]
+    {
+        let hwnd = PENDING_HWND.load(Ordering::Relaxed);
+        if hwnd == 0 {
+            return;
+        }
+        let frames = ICON_FRAMES.load(Ordering::Relaxed);
+        if frames == 0 {
+            PENDING_HWND.store(0, Ordering::Relaxed);
+            return;
+        }
+        ICON_FRAMES.store(frames - 1, Ordering::Relaxed);
+        let path = ICON_FILE.get_or_init(|| write_app_icon_ico().ok());
+        if let Some(path) = path {
+            native_icon::install(hwnd, path);
         }
     }
+}
 
+#[cfg(windows)]
+mod native_icon {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn LoadImageW(
+            instance: *mut c_void,
+            name: *const u16,
+            kind: u32,
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> isize;
+        fn SendMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn GetSystemMetrics(index: i32) -> i32;
+    }
+
+    const IMAGE_ICON: u32 = 1;
+    const LR_LOADFROMFILE: u32 = 0x0010;
+    const WM_SETICON: u32 = 0x0080;
+    const ICON_SMALL: usize = 0;
+    const ICON_BIG: usize = 1;
+    const SM_CXICON: i32 = 11;
+    const SM_CYICON: i32 = 12;
+    const SM_CXSMICON: i32 = 49;
+    const SM_CYSMICON: i32 = 50;
+
+    pub(super) fn install(hwnd: isize, ico: &std::path::Path) {
+        let wide: Vec<u16> = ico
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        // The ICO contains 16/24 px monograms and 32 px+ wordmarks, so loading
+        // the DPI-appropriate system sizes picks the right artwork for each
+        // slot. The startup frames replace these handles a few times; Windows
+        // releases the old ones when the process exits.
+        unsafe {
+            let small = LoadImageW(
+                std::ptr::null_mut(),
+                wide.as_ptr(),
+                IMAGE_ICON,
+                GetSystemMetrics(SM_CXSMICON),
+                GetSystemMetrics(SM_CYSMICON),
+                LR_LOADFROMFILE,
+            );
+            if small != 0 {
+                SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small);
+            }
+            let big = LoadImageW(
+                std::ptr::null_mut(),
+                wide.as_ptr(),
+                IMAGE_ICON,
+                GetSystemMetrics(SM_CXICON),
+                GetSystemMetrics(SM_CYICON),
+                LR_LOADFROMFILE,
+            );
+            if big != 0 {
+                SendMessageW(hwnd, WM_SETICON, ICON_BIG, big);
+            }
+        }
+    }
+}
+
+/// Embedded artwork. Large sizes use the `Simple` wordmark; 16/24 px get a
+/// condensed `S` monogram so the icon stays recognizable instead of turning
+/// the six letters into a white smear.
+fn embedded_icon(wordmark: bool) -> Option<&'static image::RgbaImage> {
+    static WORD: OnceLock<Option<image::RgbaImage>> = OnceLock::new();
+    static MARK: OnceLock<Option<image::RgbaImage>> = OnceLock::new();
+    let cell = if wordmark { &WORD } else { &MARK };
+    cell.get_or_init(|| {
+        let bytes = if wordmark {
+            include_bytes!("../assets/icon-word.png").as_slice()
+        } else {
+            include_bytes!("../assets/icon-mark.png").as_slice()
+        };
+        image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+            .ok()
+            .map(|image| image.to_rgba8())
+    })
+    .as_ref()
+}
+
+fn icon_from_asset(size: u32, wordmark: bool) -> egui::IconData {
+    let size = size.max(1);
+    if let Some(source) = embedded_icon(wordmark) {
+        let resized =
+            image::imageops::resize(source, size, size, image::imageops::FilterType::Lanczos3);
+        return egui::IconData {
+            rgba: resized.into_raw(),
+            width: size,
+            height: size,
+        };
+    }
+
+    // Embedded assets are compiled in; this fallback only guards against a
+    // malformed PNG in a future change.
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        pixel[0] = 4;
+        pixel[1] = 5;
+        pixel[2] = 7;
+        pixel[3] = 255;
+    }
     egui::IconData {
         rgba,
         width: size,
@@ -176,20 +286,38 @@ pub(crate) fn app_icon(size: u32) -> egui::IconData {
     }
 }
 
-/// Build a multi-size Windows ICO file from the same drawing used by the window
-/// icon. PNG-compressed entries keep the file small and work on Vista+.
+pub(crate) fn app_icon(size: u32) -> egui::IconData {
+    icon_from_asset(size, size >= 32)
+}
+
+/// Initial window icon applied by winit/eframe. It is the 48 px wordmark; the
+/// taskbar keeps that artwork while `apply_pending_icons` gives the 16 px
+/// title-bar slot the monogram.
+pub(crate) fn window_icon() -> egui::IconData {
+    icon_from_asset(48, true)
+}
+
+/// Build a multi-size Windows ICO file: wordmark for the large entries and the
+/// monogram for 16/24 px. Sizes up to 128 px use 32-bit BMP entries because
+/// `LoadImageW` (used for the taskbar icon) does not reliably read
+/// PNG-compressed entries below 256 px; only 256 px stays PNG.
 pub(crate) fn app_icon_ico() -> Result<Vec<u8>, String> {
     let sizes = [16u32, 24, 32, 48, 64, 128, 256];
     let mut entries = Vec::new();
     for size in sizes {
         let icon = app_icon(size);
-        let image = image::RgbaImage::from_raw(size, size, icon.rgba)
-            .ok_or_else(|| "图标缓冲区大小不正确".to_owned())?;
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgba8(image)
-            .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
-            .map_err(|err| format!("无法编码图标：{err}"))?;
-        entries.push((size, png));
+        let data = if size >= 256 {
+            let image = image::RgbaImage::from_raw(size, size, icon.rgba)
+                .ok_or_else(|| "图标缓冲区大小不正确".to_owned())?;
+            let mut png = Vec::new();
+            image::DynamicImage::ImageRgba8(image)
+                .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+                .map_err(|err| format!("无法编码图标：{err}"))?;
+            png
+        } else {
+            encode_icon_bmp(size, &icon.rgba)
+        };
+        entries.push((size, data));
     }
 
     let mut bytes = Vec::new();
@@ -197,7 +325,7 @@ pub(crate) fn app_icon_ico() -> Result<Vec<u8>, String> {
     bytes.extend_from_slice(&1u16.to_le_bytes());
     bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
     let mut offset = 6 + 16 * entries.len();
-    for (size, png) in &entries {
+    for (size, data) in &entries {
         let dimension = if *size >= 256 { 0 } else { *size as u8 };
         bytes.push(dimension);
         bytes.push(dimension);
@@ -205,14 +333,52 @@ pub(crate) fn app_icon_ico() -> Result<Vec<u8>, String> {
         bytes.push(0);
         bytes.extend_from_slice(&1u16.to_le_bytes());
         bytes.extend_from_slice(&32u16.to_le_bytes());
-        bytes.extend_from_slice(&(png.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&(offset as u32).to_le_bytes());
-        offset += png.len();
+        offset += data.len();
     }
-    for (_, png) in &entries {
-        bytes.extend_from_slice(png);
+    for (_, data) in &entries {
+        bytes.extend_from_slice(data);
     }
     Ok(bytes)
+}
+
+/// Encode one 32-bit BMP icon image: BITMAPINFOHEADER, bottom-up BGRA pixels,
+/// then a 1-bit transparency mask. ICO directory entries expect the doubled
+/// height and no BMP file header.
+fn encode_icon_bmp(size: u32, rgba: &[u8]) -> Vec<u8> {
+    let mask_stride = size.div_ceil(32) * 4;
+    let xor_len = (size * size * 4) as usize;
+    let and_len = (mask_stride * size) as usize;
+    let mut out = Vec::with_capacity(40 + xor_len + and_len);
+    out.extend_from_slice(&40u32.to_le_bytes());
+    out.extend_from_slice(&(size as i32).to_le_bytes());
+    out.extend_from_slice(&(size as i32 * 2).to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&32u16.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&((xor_len + and_len) as u32).to_le_bytes());
+    out.extend_from_slice(&[0u8; 16]);
+    for y in (0..size).rev() {
+        for x in 0..size {
+            let index = ((y * size + x) * 4) as usize;
+            out.push(rgba[index + 2]);
+            out.push(rgba[index + 1]);
+            out.push(rgba[index]);
+            out.push(rgba[index + 3]);
+        }
+    }
+    for y in (0..size).rev() {
+        let mut row = vec![0u8; mask_stride as usize];
+        for x in 0..size {
+            let index = ((y * size + x) * 4) as usize;
+            if rgba[index + 3] == 0 {
+                row[(x / 8) as usize] |= 0x80 >> (x % 8);
+            }
+        }
+        out.extend_from_slice(&row);
+    }
+    out
 }
 
 /// Write the application icon next to the user settings so Explorer can use it
@@ -229,54 +395,59 @@ pub(crate) fn write_app_icon_ico() -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn inside_rounded_rect(x: f32, y: f32, size: f32, radius: f32) -> bool {
-    let min = radius;
-    let max = size - radius;
-    if x >= min && x <= max || y >= min && y <= max {
-        return true;
-    }
-    let cx = if x < min { min } else { max };
-    let cy = if y < min { min } else { max };
-    (x - cx).hypot(y - cy) <= radius
-}
-
-fn distance_to_rounded_rect_edge(x: f32, y: f32, size: f32, radius: f32) -> f32 {
-    let center = size * 0.5;
-    let dx = (x - center).abs();
-    let dy = (y - center).abs();
-    let qx = dx - (center - radius);
-    let qy = dy - (center - radius);
-    let outside = qx.max(0.0).hypot(qy.max(0.0));
-    let inside = qx.max(qy).min(0.0);
-    (outside + inside - radius).abs()
-}
-
-fn distance_to_segment(px: f32, py: f32, a: egui::Pos2, b: egui::Pos2) -> f32 {
-    let abx = b.x - a.x;
-    let aby = b.y - a.y;
-    let apx = px - a.x;
-    let apy = py - a.y;
-    let length_sq = abx * abx + aby * aby;
-    let t = if length_sq > 0.0 {
-        ((apx * abx + apy * aby) / length_sq).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let dx = apx - abx * t;
-    let dy = apy - aby * t;
-    (dx * dx + dy * dy).sqrt()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn generated_ico_contains_png_entries() {
+    fn generated_icon_uses_embedded_wordmark() {
+        let icon = app_icon(32);
+        assert_eq!(icon.width, 32);
+        assert_eq!(icon.rgba.len(), 32 * 32 * 4);
+        assert!(icon
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200));
+        let mark = app_icon(16);
+        assert!(mark
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200));
+        let window = window_icon();
+        assert_eq!(window.width, 48);
+        assert!(window
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200));
+    }
+
+    #[test]
+    fn generated_ico_has_adaptive_entries() {
         let bytes = app_icon_ico().unwrap();
         assert_eq!(&bytes[..4], &[0, 0, 1, 0]);
-        assert!(bytes
-            .windows(8)
-            .any(|window| window == b"\x89PNG\r\n\x1a\n"));
+        let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+        assert_eq!(count, 7);
+        let mut dimensions = Vec::new();
+        for index in 0..count {
+            let entry = &bytes[6 + index * 16..6 + (index + 1) * 16];
+            dimensions.push(entry[0]);
+            let len = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+            let offset = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
+            let data = &bytes[offset..offset + len];
+            if index == count - 1 {
+                assert_eq!(&data[..8], b"\x89PNG\r\n\x1a\n");
+            } else {
+                // 32-bit BMP entries are required for LoadImageW below 256 px.
+                assert_eq!(&data[..4], &40u32.to_le_bytes());
+                assert_eq!(u16::from_le_bytes([data[14], data[15]]), 32);
+            }
+        }
+        assert_eq!(dimensions, vec![16, 24, 32, 48, 64, 128, 0]);
     }
 }

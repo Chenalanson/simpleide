@@ -248,24 +248,16 @@ Simple embedded 会自动检查工程根目录：
 - 只影响 Build / Clean / Rebuild，不影响 Flash
 - 远程 SSH 构建会在远端 shell 中设置同样的环境变量；自定义脚本需要自己处理并行参数
 
-### 构建工具链
+### 构建设置
 
-设置弹窗顶部有 **构建 / 构建工具链 / 编辑器 / 调试 / 其他** 五个页签，点击后下方只显示对应页面。
+设置弹窗顶部有 **构建 / 编辑器 / 调试 / 其他** 四个页签，点击后下方只显示对应页面。
 
 在 **构建** 页可以：
 
 - 在 **工具链** 下拉里选择自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake 或自定义。工程信息里的工具链是只读显示，只能在保存这里的设置后改变。
 - 点 **自动检测**：先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，确定期望的构建系统；再查 PATH 和常见安装目录中的 make / cargo / cmake / UV4。识别结果会填入工具链、Build/Clean/Rebuild 命令和附加 PATH。
 - 配置本地或远程 SSH 构建、Build/Clean/Rebuild/Flash 命令和并行任务数。
-
-在 **构建工具链** 页可以：
-
-- 用 **编译器** 和 **make 工具** 的 **浏览** 按钮选择可执行文件，或直接输入完整路径；留空时使用系统 `PATH`
-- 点击 **从 PATH 自动检测** 自动填入 `arm-none-eabi-gcc` / `gcc` / `clang` / `armclang` / `armcc` 和 `make` / `mingw32-make`
-- 选择 **软件自带**，将当前选择的编译器和 make 复制到软件工具目录；以后构建不再依赖系统 `PATH`
-  - 工具目录留空时使用 `%APPDATA%\SimpleEmbedded\tools`；相对路径相对于程序目录
-  - 安装会复制整个编译器目录和 make 所需的 DLL，可能需要一些时间
-- 构建时，本地构建会把工具目录前置到 `PATH`；远程 SSH 构建仍使用远端工具
+- 在 **工具链路径 / 额外 PATH** 里每行填一个目录，构建时会加到 `PATH` 前面，适合编译器、make、Keil UV4 不在系统 `PATH` 的情况。旧版本的“构建工具链”页已移除；发布版自带的 `tools/` 目录仍会自动优先使用。
 
 在 **其他** 页可以：
 
