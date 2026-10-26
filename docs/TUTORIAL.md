@@ -255,9 +255,9 @@ Simple embedded 会自动检查工程根目录：
 在 **构建** 页可以：
 
 - 在 **工具链** 下拉里选择自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake 或自定义。工程信息里的工具链是只读显示，只能在保存这里的设置后改变。
-- 点 **自动检测**：先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，确定期望的构建系统；再查 PATH 和常见安装目录中的 make / cargo / cmake / UV4。识别结果会填入工具链、Build/Clean/Rebuild 命令和附加 PATH。
+- 点 **自动检测**：先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，确定期望的构建系统；再查 PATH 和常见安装目录中的 make / cargo / cmake / UV4。识别结果会填入工具链、Build/Clean/Rebuild 命令和工具链路径。
 - 配置本地或远程 SSH 构建、Build/Clean/Rebuild/Flash 命令和并行任务数。
-- 在 **工具链路径 / 额外 PATH** 里每行填一个目录，构建时会加到 `PATH` 前面，适合编译器、make、Keil UV4 不在系统 `PATH` 的情况。旧版本的“构建工具链”页已移除；发布版自带的 `tools/` 目录仍会自动优先使用。
+- 在 **工具链路径** 里每行填一个目录，构建时会加到 `PATH` 前面，适合编译器、make、Keil UV4 不在系统 `PATH` 的情况。旧版本的“构建工具链”页已移除；发布版自带的 `tools/` 目录仍会自动优先使用。
 
 在 **其他** 页可以：
 
@@ -474,7 +474,7 @@ where.exe mingw32-make
 
 这是 POSIX 风格 Makefile 在 Windows 上缺少 Unix 工具导致的。新版本运行本地 Make 构建时会自动寻找 Git for Windows、MSYS2 或 Cygwin 的 `usr\bin` 并加入 PATH。
 
-如果仍然失败，可以在设置里把对应的 `usr\bin` 加到 **工具链路径 / 额外 PATH**，例如：
+如果仍然失败，可以在 **配置 → 构建 → 工具链路径** 里填入对应的 `usr\bin` 目录，或在工程 `.simple-embedded/settings.json` 的 `build.extra_paths` 中手动添加，例如：
 
 ```text
 D:\Program Files\Git\usr\bin

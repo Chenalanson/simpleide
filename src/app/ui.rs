@@ -6775,14 +6775,6 @@ impl App {
                             ) {
                                 draft.config.target = BuildTarget::Ssh;
                             }
-                            ui.label(
-                                RichText::new(match draft.config.target {
-                                    BuildTarget::Local => "在工程目录直接执行命令",
-                                    BuildTarget::Ssh => "通过系统 OpenSSH 在虚拟机中执行",
-                                })
-                                .size(9.5)
-                                .color(theme::TEXT_FAINT),
-                            );
                         });
 
                         if draft.config.target == BuildTarget::Ssh {
@@ -6903,7 +6895,7 @@ impl App {
                             }
                         });
                         ui.add_space(12.0);
-                        settings_section(ui, "工具链路径 / 额外 PATH");
+                        settings_section(ui, "工具链路径");
                         ui.add_space(3.0);
                         ui.label(
                             RichText::new(
