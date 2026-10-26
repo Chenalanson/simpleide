@@ -46,11 +46,11 @@ src/main.rs            窗口、图标、CJK 字体、eframe 启动
 src/app.rs             App 状态、快捷键、打开/保存、右侧操作栏、构建输出
 src/app/ui.rs          app 的子模块：文件树、Tab、编辑器、空工程/空标签占位、设置/确认弹窗
 src/build.rs           子进程、stdout/stderr、停止、构建事件与结果
-src/config.rs          全局/工程设置、自动检测、SSH 命令构造、工作区文件与关联
-src/project_meta.rs    Makefile / Keil .uvprojx 工程元数据提取
+src/config.rs          全局/工程设置、ToolchainKind 选择、自动检测、SSH 命令构造、工作区文件
+src/project_meta.rs    按所选构建系统提取 Makefile / Keil .uvprojx 元数据和 AC5/AC6/GCC 编译器
 src/editor.rs          EditorBuffer（String + revision）和 Document
 src/file_tree.rs       惰性目录树
-src/flash.rs           烧录工具配置、OpenOCD / pyOCD 检测与命令构造
+src/flash.rs           烧录配置、OpenOCD 接口预设/USB 探针检测、pyOCD 命令构造
 src/memory.rs          ELF / 链接脚本 / PDSC 内存区域与固件占用统计
 src/memory_check.rs    数组越界、危险字符串函数、重复释放等 C 内存安全静态扫描
 src/macro_check.rs     同名宏重复、宏族相同替换值（可选黄色波浪线）诊断
@@ -150,11 +150,12 @@ docs/                  README 截图和使用教程
 
 ### 工程信息
 
-- `project_meta.rs` 在打开工程时读取 Makefile 或 Keil `.uvprojx`，提取目标名、芯片、CPU、浮点、链接脚本、内存布局、包含目录、宏定义等。
+- `project_meta.rs` 按 `BuildConfig.effective_build_system()` 读取 Makefile 或 Keil `.uvprojx`，提取目标名、芯片、CPU、浮点、链接脚本、内存布局、包含目录、宏定义等。CubeMX 同时生成 `MDK-ARM/*.uvprojx` 和根 Makefile 时，Make 构建优先 Makefile 元数据，Keil 工具链优先 `.uvprojx`，不会再无条件显示 Keil。Makefile 的 `CC` / `PREFIX` 识别 GCC、Clang、armclang（AC6）和 armcc（AC5）；芯片型号优先从具体链接脚本名（如 `STM32F407ZGTx_FLASH.ld`）提取，`XX` 通用名回退到 `C_DEFS`。
+- “构建配置”第一行是 **工具链** 下拉：自动检测、Make · GCC/Clang/AC5/AC6、Keil MDK · AC5/AC6、Cargo、CMake、自定义。自动检测跟随构建命令和对应元数据；手动选择后重新计算工程元数据、内存布局、芯片支持包和调试产物，并在构建命令与所选工具链不一致时显示黄色警告。`BuildConfig.toolchain` 保存在工程配置中。
 - 左栏先显示资源管理器，再显示“工程信息”；分割线紧贴“工程信息”标题上下，包含“构建配置”“芯片支持包”“烧录配置”“C/C++ 属性”四个分组。分组标题以及三个 C/C++ 列表标题左侧各有折叠箭头，整行可点击并切换展开；点击行会记录选中状态并显示淡蓝色背景，加号点击只添加、不折叠。展开和选中状态存在 egui 内存中。数据按工程缓存，刷新文件树时重新读取。
 - “芯片支持包”分组右侧的绿色 `+` 打开文件选择器，只接受 Keil/CMSIS `.pack` / `.pdsc`，并把文件复制到工程根目录（同名文件不覆盖）。`support_pack.rs` 解析包名、厂商、版本、设备列表和 SVD 数量；`.pack` 通过 zip 读取包内 `.pdsc`，不整体解压。寄存器浏览器在工程内没有独立 `.svd` 时，会直接读取第一个 `.pack` 内的 SVD。支持包不会生成自定义工程文件，也不代表完整的 Keil 设备树/启动文件/烧录算法导入。
-- 包含目录、库搜索目录和预处理器定义支持在左栏编辑：每个列表右侧有绿色 `+`，批量编辑仍可用。覆盖值存 `BuildConfig.meta_includes` / `meta_library_dirs` / `meta_defines`（`None` 表示自动检测）。Makefile 工程保存时会同步到 `C_INCLUDES` / `LIBDIR` / `C_DEFS`，修改前备份到 `%APPDATA%\SimpleEmbedded\backups`；Keil `.uvprojx` 不会被修改。
-- “构建选项”编辑器存 `BuildConfig.build_options`，分为全局选项、C/C++ 编译器、汇编器、链接器四个页面；显示在构建配置中。打开 Make 工程时会从 `OPT` / `CFLAGS` / `AS_DEFS` 等解析当前值，保存时只回写发生变化的字段；链接器输出格式选 `AXF` 时会在 Makefile 末尾添加受管理的 `.axf` 复制规则。全局选项页提供 newlib-nano 浮点开关 `printf_float` / `scanf_float`（`-u _printf_float` / `-u _scanf_float`），保存时同步为 Makefile 的 `LDFLAGS += ...`；默认关闭，解决 `%f` 空白/为 0 的问题，但会增加几 KB 体积。Keil 工程只写入工程的 `.simple-embedded/settings.json`，不修改 `.uvprojx`。
+- 包含目录、库搜索目录和预处理器定义支持在左栏编辑：每个列表右侧有绿色 `+`，批量编辑仍可用。覆盖值存 `BuildConfig.meta_includes` / `meta_library_dirs` / `meta_defines`（`None` 表示自动检测）。仅当有效构建系统是 Make 时保存会同步到 `C_INCLUDES` / `LIBDIR` / `C_DEFS`，修改前备份到 `%APPDATA%\SimpleEmbedded\backups`；选择 Keil AC5/AC6 时只写工程配置，`.uvprojx` 不会被修改。
+- “构建选项”编辑器存 `BuildConfig.build_options`，分为全局选项、C/C++ 编译器、汇编器、链接器四个页面；显示在构建配置中。打开 Make 工程时会从 `OPT` / `CFLAGS` / `AS_DEFS` 等解析当前值，保存时只回写发生变化的字段；链接器输出格式选 `AXF` 时会在 Makefile 末尾添加受管理的 `.axf` 复制规则。全局选项页按工具链切换：GCC/Clang 显示 newlib-nano `printf_float` / `scanf_float`（`-u _printf_float` / `-u _scanf_float`）和函数分段/LTO；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段，隐藏 newlib 开关。只有有效构建系统为 Make 且工具链为 GCC/Clang 时才同步构建选项到 Makefile；Keil 和 Make AC5/AC6 只写入工程的 `.simple-embedded/settings.json`，不修改 `.uvprojx`。
 - 没有可解析的工程文件时只依赖 `BuildConfig`，不要为空字段编造值。
 
 ### 文件树
@@ -218,7 +219,7 @@ docs/                  README 截图和使用教程
 - 构建结果和内存占用显示在输出面板标题和日志中；构建视图标题显示 `Flash 已用 / 总量 (百分比) · RAM 已用 / 总量 (百分比)`，占用来自 `text/data/bss` 或 ELF 段，容量来自链接脚本 / PDSC / 工程信息。输出面板可切换“构建输出 / 调试输出”，底部不再保留重复的状态栏。
 - 构建输出面板顶部有 10px 拖动手柄，收起时也能向上拉出；高度存 `Settings.output_height`，最大到主区域顶部。
 - 调试控制是编辑器右上角的小浮层，位置参考查找浮层；停止、单步等使用 `Painter` 绘制的图案按钮。调试信息放在输出面板“调试输出”页，不在独立窗口里。
-- “工程信息 → 烧录配置”提供烧录工具下拉（自定义命令 / OpenOCD / pyOCD）。OpenOCD 模式显示工具路径、程序文件、芯片配置和接口配置；pyOCD 模式显示工具路径、程序文件、目标芯片和可选 Pack；“编辑”打开独立烧录配置弹窗，含命令预览。分组还显示 Flash/RAM 容量和 **内存布局...** 按钮：弹窗采用 Cortex-Debug 风格两列网格，Read/Write 侧为 IRAM1/2 与 RAM1-3（Default、起始地址、大小、NoInit），Read/Only 侧为 IROM1/2 与 ROM1-3（Default、起始地址、大小、启动），底部显示 RAM Total / ROM Total；自动值优先来自链接脚本，其次来自匹配 PDSC 的 `<memory>`；保存到工程配置但不改写链接脚本。工具/路径下拉修改后立即写入工程 `.simple-embedded/settings.json`，弹窗中的字段点击保存后写入。
+- “工程信息 → 烧录配置”提供烧录工具下拉（自定义命令 / OpenOCD / pyOCD）。OpenOCD 模式显示工具路径、程序文件、芯片配置和接口配置；接口配置是预设下拉（ST-Link、CMSIS-DAP / DAPLink、J-Link、XDS110、ULINK 等）+ 自定义文本框 + **自动检测** 按钮。`OpenOcdConfig::default()` 的接口为空，不再自动填 `stlink.cfg`；自动检测通过 Windows PnP（或 `lsusb`）VID 识别已连接的 ST-Link / CMSIS-DAP / DAPLink / J-Link，失败时提示手动选择。pyOCD 模式显示工具路径、程序文件、目标芯片和可选 Pack；“编辑”打开独立烧录配置弹窗，含命令预览。分组还显示 Flash/RAM 容量和 **内存布局...** 按钮：弹窗采用 Cortex-Debug 风格两列网格，Read/Write 侧为 IRAM1/2 与 RAM1-3（Default、起始地址、大小、NoInit），Read/Only 侧为 IROM1/2 与 ROM1-3（Default、起始地址、大小、启动），底部显示 RAM Total / ROM Total；自动值优先来自链接脚本，其次来自匹配 PDSC 的 `<memory>`；保存到工程配置但不改写链接脚本。工具/路径下拉修改后立即写入工程 `.simple-embedded/settings.json`，弹窗中的字段点击保存后写入。
 - 关闭窗口、关闭 Tab、切换工程时都要处理未保存确认。
 - 不做弹窗堆叠；确认弹窗和设置弹窗互斥。
 - 无工程时左上角仍显示同一张构建卡片，使用“导入 / 配置 / 工作区”按钮；中间显示单行提示。第一次启动且未打开工程时不写入任何工程文件；打开工程会创建/更新 `.simple-embedded/settings.json`。测试后如果产生 `%APPDATA%\SimpleEmbedded\settings.json` 或临时工程配置，提交前应清理，避免把测试工程路径带入首启体验。
@@ -226,6 +227,8 @@ docs/                  README 截图和使用教程
 ## 已知边界（当前版本）
 
 - 没有 `.eide`/`.mini-ide` 等专有工程格式、Keil 自动导入或链接脚本生成器；`.simple-embedded/settings.json` 和 `.se-workspace` 都是普通 JSON。芯片支持包只读取元数据、SVD 和器件内存区域，不导入 Keil 设备树、启动文件、链接脚本或烧录算法。Keil 工程可以通过手动命令或外部包装脚本接入。
+- 工具链下拉只改变元数据、内存布局和构建选项展示，不会自动改写 Build/Clean/Rebuild 命令；选择 Keil AC5/AC6 后仍需把构建命令配置为 UV4/UV5 或自定义包装脚本，界面会对“构建命令与工具链不一致”给出黄色提示。Keil 构建选项只写入工程配置，不修改 `.uvprojx`。
+- OpenOCD 自动检测是 USB VID/PID 启发式：Windows 使用 PnP，Linux 使用 `lsusb`；同时连接多个探针时按 ST-Link、CMSIS-DAP/DAPLink、J-Link 的优先级取第一个，用户可在接口下拉中改选。它不是对 OpenOCD 支持的全部适配器做穷举。
 - 没有 LSP/语义级跳转；符号搜索、TODO、寄存器浏览器都是轻量索引。补全/定义/引用是启发式功能；成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型。
 - 内存布局的起始地址/大小只写入工程 `.simple-embedded/settings.json`，不会自动改写链接脚本；Flash/RAM 总量优先来自链接脚本，其次来自芯片支持包。`.bin` 使用内存布局里的下载起始地址。
 - 不支持多光标；Ctrl+Alt+左键只提供单一矩形列选择。分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
@@ -247,7 +250,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件）、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步。当前共 161 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件）、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析。当前共 168 个测试。
 
 UI 改动后建议：
 

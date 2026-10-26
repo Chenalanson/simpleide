@@ -662,15 +662,50 @@ impl App {
 
     fn show_project_meta(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let meta = &self.project_meta;
-        let toolchain = meta
-            .toolchain
-            .clone()
-            .unwrap_or_else(|| self.build_config.tool_name().to_owned());
+        let effective_toolchain = self.build_config.effective_toolchain(meta);
+        let toolchain_mismatch = self.build_config.toolchain_mismatch();
 
         ui.spacing_mut().item_spacing.y = 2.0;
 
         meta_group(ui, "构建配置", true, |ui| {
-            meta_row(ui, "工具链", &toolchain);
+            let mut chosen = self.build_config.toolchain;
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [70.0, 18.0],
+                    Label::new(RichText::new("工具链").size(11.0).color(theme::TEXT_FAINT)),
+                );
+                let selected = if chosen == ToolchainKind::Auto {
+                    format!("自动检测（{}）", effective_toolchain.label())
+                } else {
+                    chosen.label().to_owned()
+                };
+                egui::ComboBox::from_id_salt("simple_embedded_project_toolchain")
+                    .selected_text(RichText::new(selected).size(11.5).color(theme::TEXT_DIM))
+                    .width(198.0)
+                    .show_ui(ui, |ui| {
+                        for tool in ToolchainKind::ALL {
+                            let label = if tool == ToolchainKind::Auto {
+                                "自动检测".to_owned()
+                            } else {
+                                tool.label().to_owned()
+                            };
+                            ui.selectable_value(&mut chosen, tool, label);
+                        }
+                    });
+            });
+            if chosen != self.build_config.toolchain {
+                actions.push(Action::SetToolchain(chosen));
+            }
+            if toolchain_mismatch {
+                ui.horizontal(|ui| {
+                    ui.add_space(78.0);
+                    ui.label(
+                        RichText::new("构建命令与所选工具链不一致")
+                            .size(9.0)
+                            .color(theme::WARNING),
+                    );
+                });
+            }
             if let Some(target) = &meta.target {
                 meta_row(ui, "工程目标", target);
             }
@@ -5553,6 +5588,12 @@ impl App {
             .project
             .as_ref()
             .is_some_and(|project| makefile::find_makefile(&project.root).is_some());
+        let toolchain = self.build_config.effective_toolchain(&self.project_meta);
+        let toolchain_mismatch = self.build_config.toolchain_mismatch();
+        let gcc_like = toolchain.is_make_gcc_like();
+        let arm_compiler = toolchain.is_arm_compiler();
+        let keil_build = toolchain.build_system() == BuildSystem::Keil;
+        let make_build = toolchain.build_system() == BuildSystem::Make;
         let mut close = false;
         let mut save = false;
         let mut tab = self.build_options_tab;
@@ -5587,13 +5628,58 @@ impl App {
                 });
             });
             ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("当前工具链")
+                        .size(10.5)
+                        .color(theme::TEXT_FAINT),
+                );
+                ui.label(
+                    RichText::new(toolchain.label())
+                        .size(11.5)
+                        .strong()
+                        .color(theme::ACCENT),
+                );
+                if toolchain_mismatch {
+                    ui.label(
+                        RichText::new("构建命令与工具链不一致")
+                            .size(9.5)
+                            .color(theme::WARNING),
+                    );
+                }
+            });
             ui.label(
-                RichText::new(
-                    "Make 工程保存时会按差异同步到 Makefile；Keil 工程写入工程配置，不修改 .uvprojx。",
-                )
+                RichText::new(if make_build && gcc_like {
+                    "Make 工程保存时会按差异同步到 Makefile；修改前自动备份。"
+                } else if make_build && arm_compiler {
+                    "AC6/AC5 选项保存在工程配置，不自动修改 Makefile。"
+                } else if keil_build {
+                    "Keil 工程只写入工程 .simple-embedded/settings.json，不修改 .uvprojx。"
+                } else {
+                    "构建选项保存在工程 .simple-embedded/settings.json；自定义构建命令需自行使用这些参数。"
+                })
                 .size(10.5)
                 .color(theme::TEXT_FAINT),
             );
+            if keil_build && arm_compiler {
+                ui.label(
+                    RichText::new("AC6/AC5 选项仅作为工程配置记录，实际编译由 Keil 工程完成。")
+                        .size(9.5)
+                        .color(theme::TEXT_FAINT),
+                );
+            } else if arm_compiler && make_build {
+                ui.label(
+                    RichText::new("AC6/AC5 选项保存在工程配置；不自动修改 Makefile。")
+                        .size(9.5)
+                        .color(theme::TEXT_FAINT),
+                );
+            } else if gcc_like {
+                ui.label(
+                    RichText::new("GCC/Clang 工具链会显示 newlib-nano 浮点、函数分段等选项。")
+                        .size(9.5)
+                        .color(theme::TEXT_FAINT),
+                );
+            }
             ui.add_space(10.0);
 
             ui.horizontal(|ui| {
@@ -5612,36 +5698,48 @@ impl App {
                     ui.spacing_mut().item_spacing.y = 8.0;
                     match tab {
                         BuildOptionsTab::Global => {
-                            ui.checkbox(
-                                &mut draft.use_microlib,
-                                RichText::new("Use MicroLIB")
-                                    .size(11.5)
-                                    .color(theme::TEXT_DIM),
-                            );
-                            ui.add_space(2.0);
-                            ui.label(
-                                RichText::new("newlib-nano 浮点支持")
-                                    .size(11.5)
-                                    .color(theme::TEXT_DIM),
-                            );
-                            ui.checkbox(
-                                &mut draft.printf_float,
-                                RichText::new("printf / sprintf 支持 %f（-u _printf_float）")
-                                    .size(11.5)
-                                    .color(theme::TEXT_DIM),
-                            )
-                            .on_hover_text(
-                                "newlib-nano 为了省体积默认裁掉浮点格式化，%f 会空白或打印 0。勾选后链接时加入 -u _printf_float，体积会增加几 KB",
-                            );
-                            ui.checkbox(
-                                &mut draft.scanf_float,
-                                RichText::new("scanf / sscanf 支持 %f（-u _scanf_float）")
-                                    .size(11.5)
-                                    .color(theme::TEXT_DIM),
-                            )
-                            .on_hover_text(
-                                "让 newlib-nano 的 scanf/sscanf 能读取浮点数；链接时加入 -u _scanf_float",
-                            );
+                            if arm_compiler {
+                                ui.checkbox(
+                                    &mut draft.use_microlib,
+                                    RichText::new("Use MicroLIB")
+                                        .size(11.5)
+                                        .color(theme::TEXT_DIM),
+                                );
+                                ui.add_space(2.0);
+                            }
+                            if gcc_like {
+                                ui.label(
+                                    RichText::new("newlib-nano 浮点支持")
+                                        .size(11.5)
+                                        .color(theme::TEXT_DIM),
+                                );
+                                ui.checkbox(
+                                    &mut draft.printf_float,
+                                    RichText::new("printf / sprintf 支持 %f（-u _printf_float）")
+                                        .size(11.5)
+                                        .color(theme::TEXT_DIM),
+                                )
+                                .on_hover_text(
+                                    "newlib-nano 为了省体积默认裁掉浮点格式化，%f 会空白或打印 0。勾选后链接时加入 -u _printf_float，体积会增加几 KB",
+                                );
+                                ui.checkbox(
+                                    &mut draft.scanf_float,
+                                    RichText::new("scanf / sscanf 支持 %f（-u _scanf_float）")
+                                        .size(11.5)
+                                        .color(theme::TEXT_DIM),
+                                )
+                                .on_hover_text(
+                                    "让 newlib-nano 的 scanf/sscanf 能读取浮点数；链接时加入 -u _scanf_float",
+                                );
+                                ui.add_space(2.0);
+                            }
+                            if !arm_compiler && !gcc_like {
+                                ui.label(
+                                    RichText::new("当前工具链没有专用的 newlib-nano / MicroLIB 开关；通用选项仍会保存。")
+                                        .size(9.5)
+                                        .color(theme::TEXT_FAINT),
+                                );
+                            }
                             ui.checkbox(
                                 &mut draft.big_endian,
                                 RichText::new("Big Endian")
@@ -5686,24 +5784,28 @@ impl App {
                                 &["-Wall -Wextra", "-Wall", "-Wextra", "-w", "ac5-like"],
                             );
                             ui.add_space(2.0);
-                            ui.checkbox(
-                                &mut draft.lto,
-                                RichText::new("Link Time Optimization (LTO)")
-                                    .size(11.5)
-                                    .color(theme::TEXT_DIM),
-                            );
+                            if !toolchain.is_arm_ac5() {
+                                ui.checkbox(
+                                    &mut draft.lto,
+                                    RichText::new("Link Time Optimization (LTO)")
+                                        .size(11.5)
+                                        .color(theme::TEXT_DIM),
+                                );
+                            }
                             ui.checkbox(
                                 &mut draft.function_sections,
                                 RichText::new("One ELF Section per Function")
                                     .size(11.5)
                                     .color(theme::TEXT_DIM),
                             );
-                            ui.checkbox(
-                                &mut draft.split_load_store,
-                                RichText::new("Split Load and Store Multiple")
-                                    .size(11.5)
-                                    .color(theme::TEXT_DIM),
-                            );
+                            if arm_compiler {
+                                ui.checkbox(
+                                    &mut draft.split_load_store,
+                                    RichText::new("Split Load and Store Multiple")
+                                        .size(11.5)
+                                        .color(theme::TEXT_DIM),
+                                );
+                            }
                             ui.checkbox(
                                 &mut draft.plain_char_signed,
                                 RichText::new("Plain Char is Signed")
@@ -5723,13 +5825,21 @@ impl App {
                         }
                         BuildOptionsTab::Assembler => {
                             option_list_editor(ui, "预处理器定义", &mut draft.assembler_defines);
-                            combo_row(
-                                ui,
-                                "汇编器类型",
-                                "simple_embedded_assembler_type",
-                                &mut draft.assembler_type,
-                                &["arm-auto (auto detect)", "armasm", "gas", "auto"],
-                            );
+                            if arm_compiler {
+                                combo_row(
+                                    ui,
+                                    "汇编器类型",
+                                    "simple_embedded_assembler_type",
+                                    &mut draft.assembler_type,
+                                    &["arm-auto (auto detect)", "armasm", "gas", "auto"],
+                                );
+                            } else {
+                                ui.label(
+                                    RichText::new("汇编器：GAS（GCC 工具链）")
+                                        .size(11.5)
+                                        .color(theme::TEXT_DIM),
+                                );
+                            }
                             ui.label(
                                 RichText::new("汇编器附加选项")
                                     .size(11.5)
@@ -5746,7 +5856,11 @@ impl App {
                                             .font(FontId::monospace(12.0))
                                             .text_color(theme::TEXT)
                                             .background_color(theme::BG)
-                                            .hint_text("汇编器附加选项")
+                                            .hint_text(if arm_compiler {
+                                                "例如 --diag_suppress=L6329"
+                                            } else {
+                                                "例如 -Wa,--no-warn"
+                                            })
                                             .desired_rows(3)
                                             .desired_width(f32::INFINITY),
                                     );
@@ -5760,20 +5874,22 @@ impl App {
                                 &mut draft.linker_output_format,
                                 &["AXF", "ELF", "Intel HEX", "BIN"],
                             );
-                            ui.checkbox(
-                                &mut draft.linker_no_binary,
-                                RichText::new("不生成 Hex/Bin/S19 等二进制文件")
-                                    .size(11.5)
-                                    .color(theme::TEXT_DIM),
-                            );
-                            option_list_editor(
-                                ui,
-                                "不生成指定的二进制文件",
-                                &mut draft.linker_binary_excludes,
-                            );
-                            option_text_row(ui, "X/O Base", &mut draft.linker_xo_base);
-                            option_text_row(ui, "R/O Base", &mut draft.linker_ro_base);
-                            option_text_row(ui, "R/W Base", &mut draft.linker_rw_base);
+                            if arm_compiler {
+                                ui.checkbox(
+                                    &mut draft.linker_no_binary,
+                                    RichText::new("不生成 Hex/Bin/S19 等二进制文件")
+                                        .size(11.5)
+                                        .color(theme::TEXT_DIM),
+                                );
+                                option_list_editor(
+                                    ui,
+                                    "不生成指定的二进制文件",
+                                    &mut draft.linker_binary_excludes,
+                                );
+                                option_text_row(ui, "X/O Base", &mut draft.linker_xo_base);
+                                option_text_row(ui, "R/O Base", &mut draft.linker_ro_base);
+                                option_text_row(ui, "R/W Base", &mut draft.linker_rw_base);
+                            }
                             ui.label(
                                 RichText::new("链接器附加选项")
                                     .size(11.5)
@@ -5790,7 +5906,11 @@ impl App {
                                             .font(FontId::monospace(12.0))
                                             .text_color(theme::TEXT)
                                             .background_color(theme::BG)
-                                            .hint_text("例如 --diag_suppress=L6329")
+                                            .hint_text(if arm_compiler {
+                                                "例如 --diag_suppress=L6329"
+                                            } else {
+                                                "例如 -Wl,--print-memory-usage"
+                                            })
                                             .desired_rows(3)
                                             .desired_width(f32::INFINITY),
                                     );
@@ -5800,7 +5920,7 @@ impl App {
                 });
 
             ui.add_space(12.0);
-            if has_makefile {
+            if has_makefile && make_build && gcc_like {
                 ui.label(
                     RichText::new("保存后会同步 GCC 支持的选项到 Makefile（修改前自动备份）")
                         .size(10.5)
@@ -5836,6 +5956,7 @@ impl App {
         let download_address = self.build_config.download_address();
         let mut close = false;
         let mut save = false;
+        let mut detect_message: Option<(String, bool)> = None;
 
         let modal = egui::Modal::new(Id::new("simple_embedded_flash_modal"))
             .frame(
@@ -5927,12 +6048,86 @@ impl App {
                         "例如 stm32f1x.cfg",
                     );
                     ui.add_space(4.0);
-                    form_line(
-                        ui,
-                        "接口配置",
-                        &mut draft.openocd.interface_config,
-                        "例如 stlink.cfg",
-                    );
+                    ui.horizontal(|ui| {
+                        ui.add_sized(
+                            [90.0, 22.0],
+                            Label::new(
+                                RichText::new("接口配置")
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
+                            ),
+                        );
+                        let current = draft.openocd.interface_config.trim().to_owned();
+                        let selected = if current.is_empty() {
+                            "未选择".to_owned()
+                        } else if let Some(label) = flash::interface_label(&current) {
+                            format!("{label}（{current}）")
+                        } else {
+                            current.clone()
+                        };
+                        let mut chosen = current.clone();
+                        egui::ComboBox::from_id_salt("simple_embedded_openocd_interface")
+                            .selected_text(
+                                RichText::new(selected).size(11.0).color(theme::TEXT_DIM),
+                            )
+                            .width(220.0)
+                            .show_ui(ui, |ui| {
+                                for (value, label) in flash::OPENOCD_INTERFACES {
+                                    ui.selectable_value(
+                                        &mut chosen,
+                                        (*value).to_owned(),
+                                        format!("{label}（{value}）"),
+                                    );
+                                }
+                            });
+                        if chosen != current {
+                            draft.openocd.interface_config = chosen;
+                        }
+                        if ui
+                            .add(small_flat_button("自动检测", theme::ACCENT))
+                            .on_hover_text("检测已连接的 ST-Link / DAPLink / J-Link")
+                            .clicked()
+                        {
+                            match flash::detect_interface_config() {
+                                Ok(Some(found)) => {
+                                    draft.openocd.interface_config = found.config.clone();
+                                    detect_message = Some((
+                                        format!(
+                                            "已检测到 {}，已选择 {}",
+                                            found.label, found.config
+                                        ),
+                                        true,
+                                    ));
+                                }
+                                Ok(None) => {
+                                    detect_message = Some((
+                                        "未检测到常见调试器，请手动选择接口".to_owned(),
+                                        false,
+                                    ));
+                                }
+                                Err(err) => detect_message = Some((err, false)),
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add_space(90.0);
+                        ui.add(
+                            TextEdit::singleline(&mut draft.openocd.interface_config)
+                                .id(Id::new("simple_embedded_openocd_interface_custom"))
+                                .desired_width(350.0)
+                                .hint_text("或输入自定义 interface 配置，例如 ftdi/..."),
+                        );
+                    });
+                    if let Some((message, ok)) = &detect_message {
+                        ui.horizontal(|ui| {
+                            ui.add_space(90.0);
+                            ui.label(
+                                RichText::new(message)
+                                    .size(9.5)
+                                    .color(if *ok { theme::SUCCESS } else { theme::WARNING }),
+                            );
+                        });
+                    }
                     ui.add_space(5.0);
                     ui.label(
                         RichText::new(
@@ -6452,6 +6647,7 @@ impl App {
                                     let tool = detected.tool_name();
                                     draft.extra_paths_text =
                                         detected.extra_paths.join("\n");
+                                    draft.config.toolchain = ToolchainKind::Auto;
                                     draft.config.build_command = detected.build_command;
                                     draft.config.clean_command = detected.clean_command;
                                     draft.config.rebuild_command = detected.rebuild_command;
@@ -7025,7 +7221,9 @@ impl App {
 
             if project_root.is_some() {
                 self.build_config = draft.config.clone();
+                self.refresh_project_meta();
                 self.persist_build_config();
+                self.refresh_support_packs();
                 self.debug.target = self.debug_target();
             }
             if let Some(tree) = &mut self.tree {
@@ -7069,7 +7267,7 @@ impl App {
             "编译器",
             &mut draft.compiler_path,
             "选择编译器",
-            "例如 arm-none-eabi-gcc.exe；留空使用 PATH",
+            "例如 arm-none-eabi-gcc.exe / armclang.exe / armcc.exe；留空使用 PATH",
         );
         ui.add_space(3.0);
         settings_path_row(
@@ -7079,10 +7277,23 @@ impl App {
             "选择 make",
             "例如 make.exe / mingw32-make.exe；留空使用 PATH",
         );
+        let toolchain = self.build_config.effective_toolchain(&self.project_meta);
+        if toolchain.is_keil() {
+            ui.add_space(3.0);
+            ui.label(
+                RichText::new(
+                    "当前工程是 Keil 工具链；软件自带工具链只适用于 ARM GCC + make，AC6/AC5 请使用 Keil 安装目录或自定义构建命令。",
+                )
+                .size(9.0)
+                .color(theme::WARNING),
+            );
+        }
         ui.add_space(5.0);
         if ui
             .add(theme::secondary_button("从 PATH 自动检测"))
-            .on_hover_text("查找 arm-none-eabi-gcc / gcc / clang 以及 make / mingw32-make")
+            .on_hover_text(
+                "查找 arm-none-eabi-gcc / gcc / clang / armclang / armcc 以及 make / mingw32-make",
+            )
             .clicked()
         {
             let (compiler, make) = crate::toolchain::detect_installed();

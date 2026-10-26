@@ -69,9 +69,10 @@ cargo run --release -- D:\firmware\my-board\my-board.se-workspace
 - 收起或展开工程信息时标题位置保持不变；文件树较短时标题紧跟最后一个文件，展开状态也会记住
 - 文件树下方是“工程信息”，点击分组或列表整行可选中并收起/展开，选中行显示淡蓝色背景
 - 工程信息中可查看构建配置、芯片支持包、输出目录、CPU、浮点、链接脚本、烧录配置、包含目录、库搜索目录和宏定义
-- 构建配置里的 **构建选项 → 编辑** 分为全局选项、C/C++ 编译器、汇编器和链接器四个页面
-- Make 工程保存构建选项时会按差异写回 Makefile；链接器输出格式选 `AXF` 后，重新构建会生成 `.axf` 副本
-- **全局选项** 中有 newlib-nano 浮点支持开关：`printf / sprintf 支持 %f` 和 `scanf / sscanf 支持 %f`。勾选后 Makefile 工程会写入 `LDFLAGS += -u _printf_float` / `-u _scanf_float`，解决 `%f` 空白或打印 0 的问题；会增加几 KB 体积
+- 构建配置第一行是 **工具链** 下拉：自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake。CubeMX 同时生成 MDK-ARM 和 Makefile 时，Make 构建显示 Makefile 的目标/芯片/链接脚本，Keil 工具链显示 `.uvprojx` 的值；构建命令与所选工具链不一致时会出现黄色提示
+- 构建配置里的 **构建选项 → 编辑** 分为全局选项、C/C++ 编译器、汇编器和链接器四个页面，页面内容会随工具链变化：GCC/Clang 显示 newlib-nano 浮点、LTO、函数分段；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段
+- 只有 Make + GCC/Clang 工具链保存构建选项时才会按差异写回 Makefile；链接器输出格式选 `AXF` 后，重新构建会生成 `.axf` 副本。Keil 和 Make AC5/AC6 只写工程配置，不修改 `.uvprojx`
+- **全局选项** 在 GCC/Clang 工具链下提供 newlib-nano 浮点支持开关：`printf / sprintf 支持 %f` 和 `scanf / sscanf 支持 %f`。勾选后 Makefile 工程会写入 `LDFLAGS += -u _printf_float` / `-u _scanf_float`，解决 `%f` 空白或打印 0 的问题；会增加几 KB 体积
 - “芯片支持包”分组右侧的 **+** 可选择 Keil/CMSIS 的 `.pack` 或 `.pdsc`，文件会被复制到工程根目录；分组中显示包名、版本、厂商、设备和 SVD 数量
 - 工程内没有单独 `.svd` 时，寄存器浏览器会直接读取支持包里的 SVD；支持包不会自动生成启动文件、链接脚本或烧录算法
 - 需要移除支持包时，在系统文件管理器中删除工程根目录下对应的 `.pack` / `.pdsc` 文件，再点资源管理器右上角的 **刷新**
@@ -298,7 +299,7 @@ powershell -ExecutionPolicy Bypass -File scripts\package-tools.ps1
   - **工具路径**：下拉会列出 PATH、Program Files、PlatformIO 等位置的 OpenOCD；也可以点 **浏览** 选择 `openocd.exe`。
   - **程序文件**：默认 `${ExecutableName}.hex`，会自动解析到当前工程最新的构建产物；也支持 `${ProjectName}`、`${workspaceFolder}`、`${workspaceRoot}`。
   - **芯片配置**：例如 `stm32f1x.cfg`。只写文件名时会自动补成 `target/stm32f1x.cfg`。
-  - **接口配置**：例如 `stlink.cfg`。只写文件名时会自动补成 `interface/stlink.cfg`。
+  - **接口配置**：预设下拉包含 ST-Link、CMSIS-DAP / DAPLink、J-Link、XDS110、ULINK 等；也可以直接输入自定义配置（只写文件名时会自动补成 `interface/...`）。旁边的 **自动检测** 会通过 USB VID 识别已连接的探针并填入配置。默认不再自动选择 `stlink.cfg`，使用 DAPLink 时请在下拉中选择或点自动检测。
 - **pyOCD**：
   - **工具路径**：下拉会检测 PATH 和 Python Scripts 目录；也可以点 **浏览** 选择 `pyocd.exe`。
   - **目标芯片**：例如 `stm32f103xb`。从工程芯片名推断时会自动转小写。

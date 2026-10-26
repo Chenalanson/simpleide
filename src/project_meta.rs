@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::config::BuildSystem;
+
 #[derive(Clone, Debug, Default)]
 pub struct ProjectMeta {
     pub toolchain: Option<String>,
@@ -23,13 +25,26 @@ pub struct ProjectMeta {
 
 impl ProjectMeta {
     pub fn detect(root: &Path) -> Self {
-        if let Some(path) = find_uvprojx(root) {
-            return Self::from_keil(&path);
+        Self::detect_for(root, BuildSystem::Other)
+    }
+
+    /// Detect metadata for the build system the user actually selected. Mixed
+    /// CubeMX projects contain both `MDK-ARM/*.uvprojx` and a root Makefile;
+    /// picking Keil unconditionally made the project info disagree with a Make
+    /// build.
+    pub fn detect_for(root: &Path, system: BuildSystem) -> Self {
+        match system {
+            BuildSystem::Keil => find_uvprojx(root)
+                .map(|path| Self::from_keil(&path))
+                .or_else(|| find_makefile(root).map(|path| Self::from_makefile(&path)))
+                .unwrap_or_default(),
+            BuildSystem::Make | BuildSystem::Cargo | BuildSystem::CMake | BuildSystem::Other => {
+                find_makefile(root)
+                    .map(|path| Self::from_makefile(&path))
+                    .or_else(|| find_uvprojx(root).map(|path| Self::from_keil(&path)))
+                    .unwrap_or_default()
+            }
         }
-        if let Some(path) = find_makefile(root) {
-            return Self::from_makefile(&path);
-        }
-        Self::default()
     }
 
     fn from_makefile(path: &Path) -> Self {
@@ -70,10 +85,15 @@ impl ProjectMeta {
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
 
-        let device = defines
-            .iter()
-            .find(|define| define.starts_with("STM32"))
-            .cloned();
+        let device = linker_script
+            .as_deref()
+            .and_then(device_from_linker_script)
+            .or_else(|| {
+                defines
+                    .iter()
+                    .find(|define| define.starts_with("STM32"))
+                    .cloned()
+            });
         let cpu = cpu_raw
             .split_whitespace()
             .find_map(|token| token.strip_prefix("-mcpu="))
@@ -84,16 +104,22 @@ impl ProjectMeta {
         } else {
             Some(display_fpu(&fpu_raw))
         };
-        let toolchain =
-            if cc.as_deref().is_some_and(|value| value.contains("gcc")) || prefix.is_some() {
-                Some("Make · GCC".to_owned())
-            } else {
-                Some("Make".to_owned())
-            };
         let compiler = cc.map(|value| {
             let value = value.replace("$(PREFIX)", prefix.as_deref().unwrap_or(""));
             value.replace("$(GCC_PATH)", "GCC_PATH")
         });
+        let compiler_name = compiler.as_deref().unwrap_or_default().to_ascii_lowercase();
+        let toolchain = if compiler_name.contains("armclang") {
+            Some("Make · AC6".to_owned())
+        } else if compiler_name.contains("armcc") {
+            Some("Make · AC5".to_owned())
+        } else if compiler_name.contains("clang") {
+            Some("Make · Clang".to_owned())
+        } else if compiler_name.contains("gcc") || prefix.is_some() {
+            Some("Make · GCC".to_owned())
+        } else {
+            Some("Make".to_owned())
+        };
 
         Self {
             toolchain,
@@ -205,6 +231,15 @@ impl ProjectMeta {
             optimization,
         }
     }
+}
+
+fn device_from_linker_script(script: &str) -> Option<String> {
+    let name = Path::new(script).file_stem()?.to_string_lossy();
+    let name = name.split("_FLASH").next()?.trim();
+    if !name.starts_with("STM32") || name.contains("XX") || name.contains("xx") {
+        return None;
+    }
+    Some(name.to_owned())
 }
 
 pub(crate) fn find_makefile(root: &Path) -> Option<PathBuf> {
@@ -431,6 +466,56 @@ mod tests {
         assert_eq!(meta.output_dir.as_deref(), Some("build"));
         assert!(meta.include_dirs.iter().any(|value| value == "Core/Inc"));
         assert!(meta.defines.iter().any(|value| value == "USE_HAL_DRIVER"));
+    }
+
+    #[test]
+    fn detects_mixed_cube_project_per_build_system() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Makefile"),
+            "TARGET = make_demo\nBUILD_DIR = build\nPREFIX = arm-none-eabi-\nCC = $(PREFIX)gcc\n",
+        )
+        .unwrap();
+        let mdk = dir.path().join("MDK-ARM");
+        std::fs::create_dir_all(&mdk).unwrap();
+        std::fs::write(
+            mdk.join("demo.uvprojx"),
+            "<Project><Targets><Target><TargetName>keil_demo</TargetName><uAC6>1</uAC6></Target></Targets></Project>",
+        )
+        .unwrap();
+
+        let make = ProjectMeta::detect_for(dir.path(), BuildSystem::Make);
+        assert_eq!(make.toolchain.as_deref(), Some("Make · GCC"));
+        assert_eq!(make.target.as_deref(), Some("make_demo"));
+
+        let keil = ProjectMeta::detect_for(dir.path(), BuildSystem::Keil);
+        assert_eq!(keil.toolchain.as_deref(), Some("Keil MDK · AC6"));
+        assert_eq!(keil.target.as_deref(), Some("keil_demo"));
+    }
+
+    #[test]
+    fn uses_specific_linker_script_device_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Makefile"),
+            "TARGET = demo\nLDSCRIPT = STM32F407ZGTx_FLASH.ld\nC_DEFS = -DSTM32F407xx\n",
+        )
+        .unwrap();
+        let meta = ProjectMeta::detect_for(dir.path(), BuildSystem::Make);
+        assert_eq!(meta.device.as_deref(), Some("STM32F407ZGTx"));
+    }
+
+    #[test]
+    fn detects_armclang_makefile_as_ac6() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Makefile"),
+            "TARGET = demo\nBUILD_DIR = build\nCC = armclang\n",
+        )
+        .unwrap();
+        let meta = ProjectMeta::detect_for(dir.path(), BuildSystem::Make);
+        assert_eq!(meta.toolchain.as_deref(), Some("Make · AC6"));
+        assert_eq!(meta.compiler.as_deref(), Some("armclang"));
     }
 
     #[test]

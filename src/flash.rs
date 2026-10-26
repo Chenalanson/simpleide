@@ -55,9 +55,92 @@ impl Default for OpenOcdConfig {
             executable: "openocd".to_owned(),
             program_file: "${ExecutableName}.hex".to_owned(),
             target_config: String::new(),
-            interface_config: "stlink.cfg".to_owned(),
+            // Do not silently assume ST-Link. DAPLink/J-Link users must pick
+            // (or auto-detect) their probe; the flash dialog warns when empty.
+            interface_config: String::new(),
         }
     }
+}
+
+/// Common OpenOCD interface scripts shown in the flash configuration dialog.
+pub const OPENOCD_INTERFACES: &[(&str, &str)] = &[
+    ("stlink.cfg", "ST-Link"),
+    ("cmsis-dap.cfg", "CMSIS-DAP / DAPLink"),
+    ("jlink.cfg", "J-Link"),
+    ("xds110.cfg", "XDS110"),
+    ("ulink.cfg", "ULINK"),
+    ("stlink-dap.cfg", "ST-Link DAP"),
+    ("ftdi/olimex-arm-usb-ocd-h.cfg", "FTDI Olimex"),
+    ("raspberrypi-swd.cfg", "Raspberry Pi SWD"),
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DetectedInterface {
+    pub config: String,
+    pub label: String,
+}
+
+pub fn interface_label(config: &str) -> Option<&'static str> {
+    let normalized = config
+        .trim()
+        .trim_start_matches("interface/")
+        .replace('\\', "/");
+    OPENOCD_INTERFACES
+        .iter()
+        .find(|(value, _)| *value == normalized.as_str())
+        .map(|(_, label)| *label)
+}
+
+/// Best-effort detection of a connected debug probe. It looks at USB VID/PID
+/// data exposed by Windows PnP (or `lsusb` elsewhere); OpenOCD itself does not
+/// provide a portable "which probe is plugged in" query.
+pub fn detect_interface_config() -> Result<Option<DetectedInterface>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = std::process::Command::new("powershell");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' } | Select-Object -ExpandProperty InstanceId",
+        ]);
+        util::hide_console(&mut command);
+        let output = command
+            .output()
+            .map_err(|err| format!("无法运行 USB 设备检测：{err}"))?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        Ok(detected_from_usb_text(&text))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let output = std::process::Command::new("lsusb").output();
+        let Ok(output) = output else {
+            return Ok(None);
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        Ok(detected_from_usb_text(&text))
+    }
+}
+
+fn detected_from_usb_text(text: &str) -> Option<DetectedInterface> {
+    let upper = text.to_ascii_uppercase();
+    let has_vid =
+        |vid: &str| upper.contains(&format!("VID_{vid}")) || upper.contains(&format!("ID {vid}:"));
+    let probe = if has_vid("0483") {
+        Some(("stlink.cfg", "ST-Link"))
+    } else if has_vid("0D28") || has_vid("1209") || has_vid("C251") {
+        Some(("cmsis-dap.cfg", "CMSIS-DAP / DAPLink"))
+    } else if has_vid("1366") {
+        Some(("jlink.cfg", "J-Link"))
+    } else {
+        None
+    }?;
+    Some(DetectedInterface {
+        config: probe.0.to_owned(),
+        label: probe.1.to_owned(),
+    })
 }
 
 impl OpenOcdConfig {
@@ -148,13 +231,18 @@ pub fn infer_target_config(device: Option<&str>) -> Option<String> {
     Some(format!("{family}.cfg"))
 }
 
+#[cfg(test)]
 pub fn infer_interface_config(driver: Option<&str>) -> Option<String> {
     let driver = driver?.to_ascii_uppercase();
     if driver.contains("JLINK") || driver.contains("J-LINK") {
         Some("jlink.cfg".to_owned())
     } else if driver.contains("STLINK") || driver.contains("ST-LINK") {
         Some("stlink.cfg".to_owned())
-    } else if driver.contains("CMSIS-DAP") || driver.contains("CMSIS_DAP") {
+    } else if driver.contains("CMSIS-DAP")
+        || driver.contains("CMSIS_DAP")
+        || driver.contains("CMSIS_AGDI")
+        || driver.contains("DAPLINK")
+    {
         Some("cmsis-dap.cfg".to_owned())
     } else {
         None
@@ -851,6 +939,42 @@ mod tests {
             infer_interface_config(Some("J-Link")).as_deref(),
             Some("jlink.cfg")
         );
+        assert_eq!(
+            infer_interface_config(Some("CMSIS-DAP")).as_deref(),
+            Some("cmsis-dap.cfg")
+        );
+    }
+
+    #[test]
+    fn openocd_default_does_not_assume_stlink() {
+        assert!(OpenOcdConfig::default().interface_config.is_empty());
+    }
+
+    #[test]
+    fn detects_common_probe_usb_ids() {
+        let stlink = detected_from_usb_text("USB\\VID_0483&PID_3748\\ST-Link").unwrap();
+        assert_eq!(stlink.config, "stlink.cfg");
+        assert_eq!(stlink.label, "ST-Link");
+
+        let dap = detected_from_usb_text("USB\\VID_0D28&PID_0204\\DAPLink").unwrap();
+        assert_eq!(dap.config, "cmsis-dap.cfg");
+        assert_eq!(dap.label, "CMSIS-DAP / DAPLink");
+
+        let jlink = detected_from_usb_text("USB\\VID_1366&PID_0101\\J-Link").unwrap();
+        assert_eq!(jlink.config, "jlink.cfg");
+        assert_eq!(jlink.label, "J-Link");
+
+        assert!(detected_from_usb_text("USB\\VID_1234&PID_0001").is_none());
+    }
+
+    #[test]
+    fn recognizes_interface_presets() {
+        assert_eq!(interface_label("stlink.cfg"), Some("ST-Link"));
+        assert_eq!(
+            interface_label("interface/cmsis-dap.cfg"),
+            Some("CMSIS-DAP / DAPLink")
+        );
+        assert_eq!(interface_label("custom.cfg"), None);
     }
 
     #[test]

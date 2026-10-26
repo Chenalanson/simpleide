@@ -9,13 +9,17 @@ use crate::config::{settings_path, Settings};
 
 const MANIFEST: &str = "toolchain.json";
 const MAKE_NAMES: [&str; 4] = ["make.exe", "mingw32-make.exe", "gmake.exe", "make"];
-const COMPILER_NAMES: [&str; 6] = [
+const COMPILER_NAMES: &[&str] = &[
     "arm-none-eabi-gcc.exe",
     "gcc.exe",
     "clang.exe",
+    "armclang.exe",
+    "armcc.exe",
     "cl.exe",
     "arm-none-eabi-gcc",
     "gcc",
+    "armclang",
+    "armcc",
 ];
 
 #[derive(Clone, Debug, Default)]
@@ -98,7 +102,7 @@ pub fn detect(root: &Path) -> BundledTools {
         tools.make = first_existing(root, &MAKE_NAMES, &["make", "bin"], true);
     }
     if tools.compiler.is_none() {
-        tools.compiler = first_existing(root, &COMPILER_NAMES, &["compiler/bin", "bin"], false);
+        tools.compiler = first_existing(root, COMPILER_NAMES, &["compiler/bin", "bin"], false);
     }
     tools
 }

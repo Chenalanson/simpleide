@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::{RunSpec, TaskKind};
 use crate::flash::{FlashTool, OpenOcdConfig, PyOcdConfig};
+use crate::project_meta::ProjectMeta;
 use crate::util::{display_path, file_name, project_key, shell_quote_posix};
 
 pub const APP_NAME: &str = "Simple embedded";
@@ -156,11 +157,98 @@ impl BuildOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BuildSystem {
+    Make,
+    Keil,
+    Cargo,
+    CMake,
+    #[default]
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolchainKind {
+    #[default]
+    Auto,
+    MakeGcc,
+    MakeClang,
+    MakeAc5,
+    MakeAc6,
+    KeilAc5,
+    KeilAc6,
+    Cargo,
+    CMake,
+    Custom,
+}
+
+impl ToolchainKind {
+    pub const ALL: [Self; 10] = [
+        Self::Auto,
+        Self::MakeGcc,
+        Self::MakeClang,
+        Self::MakeAc5,
+        Self::MakeAc6,
+        Self::KeilAc6,
+        Self::KeilAc5,
+        Self::Cargo,
+        Self::CMake,
+        Self::Custom,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "自动检测",
+            Self::MakeGcc => "Make · GCC",
+            Self::MakeClang => "Make · Clang",
+            Self::MakeAc5 => "Make · AC5",
+            Self::MakeAc6 => "Make · AC6",
+            Self::KeilAc5 => "Keil MDK · AC5",
+            Self::KeilAc6 => "Keil MDK · AC6",
+            Self::Cargo => "Cargo",
+            Self::CMake => "CMake",
+            Self::Custom => "自定义",
+        }
+    }
+
+    pub fn build_system(self) -> BuildSystem {
+        match self {
+            Self::MakeGcc | Self::MakeClang | Self::MakeAc5 | Self::MakeAc6 => BuildSystem::Make,
+            Self::KeilAc5 | Self::KeilAc6 => BuildSystem::Keil,
+            Self::Cargo => BuildSystem::Cargo,
+            Self::CMake => BuildSystem::CMake,
+            Self::Auto | Self::Custom => BuildSystem::Other,
+        }
+    }
+
+    pub fn is_keil(self) -> bool {
+        self.build_system() == BuildSystem::Keil
+    }
+
+    pub fn is_arm_compiler(self) -> bool {
+        matches!(
+            self,
+            Self::MakeAc5 | Self::MakeAc6 | Self::KeilAc5 | Self::KeilAc6
+        )
+    }
+
+    pub fn is_arm_ac5(self) -> bool {
+        matches!(self, Self::MakeAc5 | Self::KeilAc5)
+    }
+
+    pub fn is_make_gcc_like(self) -> bool {
+        matches!(self, Self::MakeGcc | Self::MakeClang)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BuildConfig {
     pub target: BuildTarget,
     pub build_command: String,
+    /// Explicit compiler/build-system choice. `Auto` follows the build command.
+    pub toolchain: ToolchainKind,
     pub clean_command: String,
     pub rebuild_command: String,
     /// Custom flash command. Used when `flash_tool` is `Custom`.
@@ -239,6 +327,7 @@ impl Default for BuildConfig {
         Self {
             target: BuildTarget::Local,
             build_command: String::new(),
+            toolchain: ToolchainKind::Auto,
             clean_command: String::new(),
             rebuild_command: String::new(),
             flash_command: String::new(),
@@ -320,6 +409,89 @@ impl BuildConfig {
         } else {
             "自定义"
         }
+    }
+
+    pub fn build_system(&self) -> BuildSystem {
+        match self.tool_name() {
+            "Make" => BuildSystem::Make,
+            "Keil" => BuildSystem::Keil,
+            "Cargo" => BuildSystem::Cargo,
+            "CMake" => BuildSystem::CMake,
+            _ => BuildSystem::Other,
+        }
+    }
+
+    pub fn effective_build_system(&self) -> BuildSystem {
+        if self.toolchain == ToolchainKind::Auto {
+            self.build_system()
+        } else {
+            self.toolchain.build_system()
+        }
+    }
+
+    /// Resolve `Auto` against the metadata for the selected build system. The
+    /// caller must refresh `ProjectMeta` with [`BuildConfig::effective_build_system`]
+    /// before calling this.
+    pub fn effective_toolchain(&self, meta: &ProjectMeta) -> ToolchainKind {
+        if self.toolchain != ToolchainKind::Auto {
+            return self.toolchain;
+        }
+        match self.effective_build_system() {
+            BuildSystem::Make => {
+                let compiler = meta
+                    .compiler
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if compiler.contains("armclang") {
+                    ToolchainKind::MakeAc6
+                } else if compiler.contains("armcc") {
+                    ToolchainKind::MakeAc5
+                } else if compiler.contains("clang") {
+                    ToolchainKind::MakeClang
+                } else {
+                    ToolchainKind::MakeGcc
+                }
+            }
+            BuildSystem::Keil => {
+                if meta
+                    .toolchain
+                    .as_deref()
+                    .is_some_and(|value| value.contains("AC5"))
+                {
+                    ToolchainKind::KeilAc5
+                } else {
+                    ToolchainKind::KeilAc6
+                }
+            }
+            BuildSystem::Cargo => ToolchainKind::Cargo,
+            BuildSystem::CMake => ToolchainKind::CMake,
+            BuildSystem::Other => {
+                let Some(toolchain) = meta.toolchain.as_deref() else {
+                    return ToolchainKind::Custom;
+                };
+                if toolchain.contains("Keil") && toolchain.contains("AC5") {
+                    ToolchainKind::KeilAc5
+                } else if toolchain.contains("Keil") && toolchain.contains("AC6") {
+                    ToolchainKind::KeilAc6
+                } else if toolchain.contains("AC5") {
+                    ToolchainKind::MakeAc5
+                } else if toolchain.contains("AC6") {
+                    ToolchainKind::MakeAc6
+                } else if toolchain.contains("Clang") {
+                    ToolchainKind::MakeClang
+                } else if toolchain.contains("GCC") {
+                    ToolchainKind::MakeGcc
+                } else {
+                    ToolchainKind::Custom
+                }
+            }
+        }
+    }
+
+    pub fn toolchain_mismatch(&self) -> bool {
+        !matches!(self.toolchain, ToolchainKind::Auto | ToolchainKind::Custom)
+            && self.build_system() != self.toolchain.build_system()
     }
 
     pub fn mode_summary(&self) -> String {
@@ -876,7 +1048,7 @@ pub fn autodetect(project_root: &Path) -> BuildConfig {
         add_tool_dir(&mut extra_paths, make_path);
         add_tool_dir(
             &mut extra_paths,
-            find_one_of(&["arm-none-eabi-gcc", "gcc", "clang"]),
+            find_one_of(&["arm-none-eabi-gcc", "gcc", "clang", "armclang", "armcc"]),
         );
         return BuildConfig {
             build_command: make.clone(),
@@ -1219,6 +1391,34 @@ mod tests {
         std::fs::write(dir.path().join("CMakeLists.txt"), "").unwrap();
         let cfg = autodetect(dir.path());
         assert_eq!(cfg.tool_name(), "Make");
+    }
+
+    #[test]
+    fn resolves_effective_toolchain_from_build_system() {
+        let mut cfg = BuildConfig {
+            build_command: "make".into(),
+            ..BuildConfig::default()
+        };
+        let mut meta = ProjectMeta {
+            compiler: Some("arm-none-eabi-gcc".into()),
+            toolchain: Some("Make · GCC".into()),
+            ..ProjectMeta::default()
+        };
+        assert_eq!(cfg.effective_toolchain(&meta), ToolchainKind::MakeGcc);
+        assert!(!cfg.toolchain_mismatch());
+
+        meta.compiler = Some("armclang".into());
+        assert_eq!(cfg.effective_toolchain(&meta), ToolchainKind::MakeAc6);
+
+        cfg.toolchain = ToolchainKind::KeilAc6;
+        assert!(cfg.toolchain_mismatch());
+        meta.toolchain = Some("Keil MDK · AC6".into());
+        assert_eq!(cfg.effective_toolchain(&meta), ToolchainKind::KeilAc6);
+
+        cfg.toolchain = ToolchainKind::Auto;
+        cfg.build_command = "UV4 -b demo.uvprojx".into();
+        meta.toolchain = Some("Keil MDK · AC5".into());
+        assert_eq!(cfg.effective_toolchain(&meta), ToolchainKind::KeilAc5);
     }
 
     #[test]

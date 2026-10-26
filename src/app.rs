@@ -18,8 +18,8 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::build::{BuildController, BuildOutcome, LastBuild, TaskKind};
 use crate::config::{
-    detected_tool, settings_path, BuildConfig, BuildOptions, BuildTarget, Settings, APP_AUTHOR,
-    APP_NAME,
+    detected_tool, settings_path, BuildConfig, BuildOptions, BuildSystem, BuildTarget, Settings,
+    ToolchainKind, APP_AUTHOR, APP_NAME,
 };
 use crate::editor::Document;
 use crate::file_tree::{FileTree, TreeAction};
@@ -725,6 +725,7 @@ enum Action {
     OpenSettings,
     EditMeta,
     AddMetaItem(MetaListField),
+    SetToolchain(ToolchainKind),
     EditBuildOptions,
     AddSupportPack,
     ImportSupportPack(PathBuf),
@@ -1052,7 +1053,7 @@ impl App {
         let tool_known = detected_tool(&root).is_some();
 
         let project_name = Project::new(root.clone()).name;
-        self.project_meta = ProjectMeta::detect(&root);
+        self.project_meta = ProjectMeta::detect_for(&root, config.effective_build_system());
         self.support_packs = crate::support_pack::scan(&root);
         if self.support_packs.is_empty() {
             self.support_packs =
@@ -4022,6 +4023,9 @@ impl App {
         let defines = self.effective_defines().to_vec();
 
         self.persist_build_config();
+        if self.build_config.effective_build_system() != BuildSystem::Make {
+            return Ok(false);
+        }
 
         let Some(makefile_path) = makefile::find_makefile(&root) else {
             return Ok(false);
@@ -4035,9 +4039,37 @@ impl App {
         }
         let synced = makefile::sync_lists(&root, &includes, &library_dirs, &defines)?.is_some();
         if synced {
-            self.project_meta = ProjectMeta::detect(&root);
+            self.refresh_project_meta();
         }
         Ok(synced)
+    }
+
+    fn effective_toolchain(&self) -> ToolchainKind {
+        self.build_config.effective_toolchain(&self.project_meta)
+    }
+
+    fn refresh_project_meta(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        let system = self.build_config.effective_build_system();
+        self.project_meta = ProjectMeta::detect_for(&root, system);
+    }
+
+    fn set_toolchain(&mut self, toolchain: ToolchainKind) {
+        if self.build_config.toolchain == toolchain {
+            return;
+        }
+        self.build_config.toolchain = toolchain;
+        self.refresh_project_meta();
+        self.persist_build_config();
+        self.refresh_support_packs();
+        self.debug.target = self.debug_target();
+        self.build_options_draft = None;
+        self.set_toast(
+            format!("工具链已切换为 {}", self.effective_toolchain().label()),
+            Severity::Info,
+        );
     }
 
     fn persist_build_config(&mut self) {
@@ -4071,11 +4103,9 @@ impl App {
                 openocd.target_config = target;
             }
         }
-        if openocd.interface_config.trim().is_empty() {
-            openocd.interface_config =
-                flash::infer_interface_config(self.project_meta.flash_driver.as_deref())
-                    .unwrap_or_else(|| "stlink.cfg".to_owned());
-        }
+        // Keep the interface empty unless the project already saved one. The
+        // flash dialog offers a probe dropdown and an auto-detect button;
+        // silently defaulting to ST-Link breaks DAPLink/J-Link users.
     }
 
     fn apply_pyocd_defaults(&self, pyocd: &mut PyOcdConfig) {
@@ -4433,15 +4463,25 @@ impl App {
             return;
         };
         let fallback = self.build_config.build_options.clone();
-        let before = makefile::find_makefile(&root)
-            .and_then(|path| makefile::read_options(&path, &fallback))
-            .unwrap_or_else(|| fallback.clone());
+        let make_project = self.build_config.effective_build_system() == BuildSystem::Make
+            && self.effective_toolchain().is_make_gcc_like();
+        let before = if make_project {
+            makefile::find_makefile(&root)
+                .and_then(|path| makefile::read_options(&path, &fallback))
+                .unwrap_or_else(|| fallback.clone())
+        } else {
+            fallback.clone()
+        };
         self.build_config.build_options = options.clone();
         self.persist_build_config();
 
-        let result = self.sync_makefile_options(&root, &before, &options);
+        let result = if make_project {
+            self.sync_makefile_options(&root, &before, &options)
+        } else {
+            Ok(false)
+        };
         self.notify_sync("已保存构建选项", result, Severity::Success);
-        self.project_meta = ProjectMeta::detect(&root);
+        self.refresh_project_meta();
     }
 
     fn sync_makefile_options(
@@ -5546,9 +5586,7 @@ impl App {
                         tree.refresh();
                         self.set_toast("文件树已刷新", Severity::Info);
                     }
-                    if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
-                        self.project_meta = ProjectMeta::detect(&root);
-                    }
+                    self.refresh_project_meta();
                     self.member_index = None;
                     self.refresh_support_packs();
                     self.refresh_git_status();
@@ -5563,6 +5601,7 @@ impl App {
                 Action::OpenSettings => self.open_settings(),
                 Action::EditMeta => self.open_meta_editor(),
                 Action::AddMetaItem(field) => self.open_meta_add(field),
+                Action::SetToolchain(toolchain) => self.set_toolchain(toolchain),
                 Action::EditBuildOptions => self.open_build_options(),
                 Action::AddSupportPack => self.add_support_pack(),
                 Action::ImportSupportPack(path) => self.import_support_pack_files(vec![path]),

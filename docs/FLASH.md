@@ -34,7 +34,7 @@ Simple embedded 不自带芯片烧录算法，也不接管 J-Link / ST-Link 的�
 
 1. 在左侧 **工程信息 → 烧录配置** 中，把 **烧录工具** 切换为 **OpenOCD**。
 2. **工具路径** 下拉会列出 PATH、`Program Files`、PlatformIO 等常见位置；没有找到时点 **浏览** 选择 `openocd.exe`。
-3. 填写 **程序文件**、**芯片配置** 和 **接口配置**；默认值分别是 `${ExecutableName}.hex`、空的芯片配置和 `stlink.cfg`。选择 OpenOCD 时会根据工程芯片自动补一个 STM32 目标（例如 `stm32f1x.cfg`）。
+3. 填写 **程序文件**、**芯片配置** 和 **接口配置**；程序文件默认 `${ExecutableName}.hex`，芯片配置会根据工程芯片自动补一个 STM32 目标（例如 `stm32f1x.cfg`）。**接口配置默认留空**，请在下拉里选择 ST-Link、CMSIS-DAP / DAPLink、J-Link 等，或点旁边的 **自动检测**；不再自动假设 ST-Link。
 4. 点分组里的 **编辑**，在弹窗中检查全部字段和命令预览，然后 **保存**。
 5. 右侧操作栏的 **烧录** 按钮会变为可用。
 
@@ -149,7 +149,7 @@ Simple embedded 已内置 OpenOCD 配置，不需要自己拼完整命令。适�
 - **工具路径**：`openocd` 表示从 PATH 查找；也可以下拉选择检测到的 `openocd.exe`，或点 **浏览**。
 - **程序文件**：默认 `${ExecutableName}.hex`。会从工程输出目录和常见 `build/Debug/Release` 目录里选择最新产物；也可以写成 `build/test32.elf` 或 `${workspaceFolder}/build/test32.hex`。
 - **芯片配置**：只写 `stm32f1x.cfg` 会自动变成 `target/stm32f1x.cfg`；STM32G4 用 `stm32g4x.cfg`。
-- **接口配置**：只写 `stlink.cfg` 会自动变成 `interface/stlink.cfg`；J-Link 用 `jlink.cfg`，CMSIS-DAP 用 `cmsis-dap.cfg`。
+- **接口配置**：预设下拉包含 ST-Link（`stlink.cfg`）、CMSIS-DAP / DAPLink（`cmsis-dap.cfg`）、J-Link（`jlink.cfg`）、XDS110、ULINK 等，也可以输入自定义配置；只写文件名会自动补 `interface/`。旁边的 **自动检测** 会根据已连接探针的 USB VID/PID 自动选择，默认不再自动填 ST-Link。
 - **编辑** 弹窗底部会显示最终命令预览，例如：
 
   ```text
@@ -328,6 +328,7 @@ C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin
 ### 提示找不到 ST-Link / J-Link
 
 - 检查 USB 线是不是只能充电的线；
+- 确认 **接口配置** 和实际探针一致：ST-Link 用 `stlink.cfg`，DAPLink/CMSIS-DAP 用 `cmsis-dap.cfg`，J-Link 用 `jlink.cfg`；不确定时点 **自动检测** 或手动切换下拉；
 - 关闭 STM32CubeProgrammer、Keil、STM32CubeIDE 等可能占用探针的软件；
 - 运行 `STM32_Programmer_CLI -l`、`pyocd list` 或 J-Link 自带的工具确认探针能被识别；
 - 检查驱动是否安装。

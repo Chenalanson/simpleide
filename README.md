@@ -19,9 +19,9 @@
 - 左侧栏全高，资源管理器与工程信息默认各占一半高度；文件树较短时工程信息自动上移紧接文件列表；文件树较长时可拖动中间分割线调整比例；拖动左栏右边缘可调整宽度；分割比例和折叠状态会保存
 - 左侧构建卡片显示工程名（加粗）、完整路径、构建模式和命令；未导入时按钮为“导入 / 配置 / 工作区”，导入后为“更换 / 配置 / 工作区”
 - 资源管理器、工程信息、构建配置等可折叠区域带缓动动画和旋转箭头；状态提示 Toast 使用更大字号，便于阅读
-- 工程信息树：分组和列表标题左侧都有折叠箭头，整行可点击并显示淡蓝色选中背景；从 Makefile 或 Keil `.uvprojx` 读取 CPU、浮点、链接脚本、内存布局、包含目录、库搜索目录、宏定义和烧录配置；列表右侧 `+` 可添加；Makefile 工程保存时同步到 Makefile（自动备份），Keil `.uvprojx` 只读
+- 工程信息树：分组和列表标题左侧都有折叠箭头，整行可点击并显示淡蓝色选中背景；**工具链** 下拉可选自动检测 / Make GCC / Clang / AC5 / AC6 / Keil MDK AC5 / AC6 / Cargo / CMake。CubeMX 同时生成 MDK-ARM 和 Makefile 时，Make 构建读取 Makefile 元数据，Keil 工具链读取 `.uvprojx`，不再无条件显示 Keil；支持识别 armclang（AC6）和 armcc（AC5）。列表右侧 `+` 可添加；仅有效构建系统为 Make 时同步到 Makefile（自动备份），Keil `.uvprojx` 只读
 - 芯片支持包：在工程信息中点击 `+` 添加 Keil/CMSIS `.pack` / `.pdsc`，文件放在工程根目录；显示包名、版本、厂商、设备和 SVD 数量，寄存器浏览器可直接使用包内 SVD
-- 构建选项：包含全局选项、C/C++ 编译器、汇编器和链接器四个页面；Make 工程打开时读取现有 `OPT` / `CFLAGS`，保存时按差异写回；选择 `AXF` 会生成 `.axf` 副本规则；全局选项可开启 newlib-nano 的 `printf` / `scanf` 浮点支持（`-u _printf_float` / `-u _scanf_float`），解决 `%f` 空白或打印 0；Keil 工程只写入工程配置，不修改 `.uvprojx`
+- 构建选项：包含全局选项、C/C++ 编译器、汇编器和链接器四个页面，并按当前工具链切换内容。GCC/Clang 显示 newlib-nano `printf` / `scanf` 浮点支持（`-u _printf_float` / `-u _scanf_float`）、LTO 和函数分段；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段。Make + GCC/Clang 工程打开时读取现有 `OPT` / `CFLAGS`，保存时按差异写回；选择 `AXF` 会生成 `.axf` 副本规则；Keil 和 Make AC5/AC6 只写入工程配置，不修改 `.uvprojx`
 - 左侧目录树：第一行显示工程根目录，可展开/折叠；支持隐藏文件、刷新、点击打开文件；右键可新建文件/文件夹、粘贴、剪切/复制、重命名、删除、复制路径、在资源管理器中显示或用 VS Code 打开
 - 多文件 Tab、脏标记、关闭前提示保存
 - 文本编辑：`Ctrl+S` 保存、Tab 缩进、撤销/重做、复制粘贴等由 egui 文本编辑控件提供
@@ -54,7 +54,7 @@
 - 构建输出面板顶部可拖动调高度，收起后也能向上拉出；高度会保存
 - 本地构建或远程 SSH 构建（复用系统 OpenSSH）
 - 并行构建：设置 → 构建 → 并行任务数；Make 注入 `MAKEFLAGS=-jN`，Cargo 注入 `CARGO_BUILD_JOBS`，CMake 注入 `CMAKE_BUILD_PARALLEL_LEVEL`，命令里已有 `-j` 时不重复添加
-- 烧录工具可选 **自定义命令** / **OpenOCD** / **pyOCD**：支持工具路径下拉/浏览、`${ExecutableName}.hex` 等程序文件变量、OpenOCD 芯片/接口 cfg 自动补全、pyOCD 目标芯片与可选 Pack、命令预览；Flash 始终在本地工程目录执行。工程信息 → 烧录配置 → **内存布局** 可设置 Flash/RAM 起始地址、大小和 .bin 下载起始地址
+- 烧录工具可选 **自定义命令** / **OpenOCD** / **pyOCD**：支持工具路径下拉/浏览、`${ExecutableName}.hex` 等程序文件变量、OpenOCD 芯片配置和接口配置。接口配置是预设下拉（ST-Link、CMSIS-DAP / DAPLink、J-Link、XDS110、ULINK 等）+ 自定义输入 + **自动检测**；默认不再自动填 `stlink.cfg`，自动检测通过 USB VID 识别已连接探针。pyOCD 目标芯片与可选 Pack、命令预览；Flash 始终在本地工程目录执行。工程信息 → 烧录配置 → **内存布局** 可设置 Flash/RAM 起始地址、大小和 .bin 下载起始地址
 - 构建输出标题栏显示 Flash / RAM 占用和芯片容量百分比；容量优先读取链接脚本，其次读取匹配的芯片支持包 `.pdsc`，没有 `size` 输出时直接解析 ELF 段大小
 - 每工程独立的构建、烧录、C/C++ 和调试配置保存在工程内 `.simple-embedded/settings.json`（包括 `debug.gdb_path`）；用户目录作为旧配置迁移和全局偏好存储
 - 工作区文件：构建卡片“工作区”可生成 `<工程名>.se-workspace` 并关联双击打开；也可从“工作区 → 打开工作区文件…”选择 `.se-workspace` / `.code-workspace`
@@ -242,6 +242,8 @@ examples/blink/  可直接打开的演示工程
 - 当前没有接入 `ssh-mcp` / `jlink-mcp`，远程构建走 OpenSSH；烧录走本地自定义命令、内置 OpenOCD 或内置 pyOCD
 - OpenOCD / pyOCD 直接以参数启动，不经过 shell；烧录使用 `program` / `flash`，调试时启动 `gdbserver` 并由 arm-none-eabi-gdb 连接。内置烧录支持 `.hex` / `.elf` / `.axf`，也支持带起始地址的 `.bin`（地址来自内存布局）
 - 并行构建只对 Make / Cargo / CMake 自动注入环境变量；自定义脚本和直接调用 Ninja 需要自己添加并行参数
+- 工具链下拉只影响工程元数据、内存布局和构建选项的展示，不会自动改写 Build/Clean/Rebuild 命令；选择 Keil AC5/AC6 后请把构建命令配置为 UV4/UV5 或自定义包装脚本
+- OpenOCD 接口自动检测基于 USB VID/PID 启发式；同时连接多个探针时取第一个，建议用接口下拉确认实际使用的烧录器
 
 ## 开发
 
@@ -251,6 +253,6 @@ cargo clippy --all-targets -- -D warnings
 cargo run
 ```
 
-测试覆盖自动检测、SSH 命令构造、CRLF 保存、文件树展开、ANSI 解析、后台命令执行、芯片支持包解析、OpenOCD / pyOCD 命令构造、并行构建环境注入、工程配置往返、工作区文件解析、宏重复/可选同值提示、gdb watchpoint 行解析和悬停类型提取等。
+测试覆盖自动检测、混合 CubeMX 工程的 Make/Keil 元数据选择、AC6/armclang 识别、SSH 命令构造、CRLF 保存、文件树展开、ANSI 解析、后台命令执行、芯片支持包解析、OpenOCD 接口/USB 探针检测、OpenOCD / pyOCD 命令构造、并行构建环境注入、工程配置往返、工作区文件解析、宏重复/可选同值提示、gdb watchpoint 行解析和悬停类型提取等。
 
 面向后续开发者和 AI 代理的工程约定、架构与验证清单见 [AGENTS.md](AGENTS.md)。
