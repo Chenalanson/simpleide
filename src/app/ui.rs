@@ -3291,12 +3291,13 @@ impl App {
         let session_present = self.debug.session.is_some();
         let session_running = self.debug.running;
         let session_starting = self.debug.starting;
-        egui::Window::new("内存检测")
+        egui::Window::new("非法检测")
             .id(Id::new("simple_embedded_memory_check"))
             .open(&mut open)
+            .collapsible(false)
             .resizable(true)
-            .default_size([800.0, 580.0])
-            .min_size([440.0, 280.0])
+            .default_size([460.0, 330.0])
+            .min_size([420.0, 260.0])
             .frame(
                 Frame::new()
                     .fill(theme::PANEL)
@@ -6679,8 +6680,6 @@ impl App {
                     ui.spacing_mut().item_spacing.y = 3.0;
                     if let Some(root) = &project_root {
                         ui.add_space(8.0);
-                        settings_section(ui, "构建");
-                        ui.add_space(8.0);
 
                         ui.horizontal(|ui| {
                             ui.add_sized(
@@ -6689,7 +6688,8 @@ impl App {
                                     RichText::new("工具链")
                                         .size(10.5)
                                         .color(theme::TEXT_DIM),
-                                ),
+                                )
+                                .halign(Align::LEFT),
                             );
                             let effective = draft.config.effective_toolchain(&self.project_meta);
                             let selected = if draft.config.toolchain == ToolchainKind::Auto {
@@ -6759,7 +6759,8 @@ impl App {
                                     RichText::new("构建位置")
                                         .size(10.5)
                                         .color(theme::TEXT_DIM),
-                                ),
+                                )
+                                .halign(Align::LEFT),
                             );
                             if segment_button(
                                 ui,
@@ -6799,7 +6800,8 @@ impl App {
                                                 RichText::new("SSH 端口")
                                                     .size(10.5)
                                                     .color(theme::TEXT_DIM),
-                                            ),
+                                            )
+                                            .halign(Align::LEFT),
                                         );
                                         ui.add(
                                             egui::DragValue::new(&mut draft.config.ssh_port)
@@ -6876,7 +6878,8 @@ impl App {
                                     RichText::new("并行任务数")
                                         .size(10.5)
                                         .color(theme::TEXT_DIM),
-                                ),
+                                )
+                                .halign(Align::LEFT),
                             );
                             ui.add(
                                 egui::DragValue::new(&mut draft.config.build_jobs)
@@ -6895,14 +6898,8 @@ impl App {
                             }
                         });
                         ui.add_space(12.0);
-                        settings_section(ui, "工具链路径");
-                        ui.add_space(3.0);
-                        ui.label(
-                            RichText::new(
-                                "每行一个目录，执行构建时会加到 PATH 前面。适合编译器、make、Keil UV4 等不在系统 PATH 的情况；仅本地构建生效。",
-                            )
-                            .size(9.0)
-                            .color(theme::TEXT_FAINT),
+                        settings_section(ui, "工具链路径").on_hover_text(
+                            "每行一个目录，执行构建时会加到 PATH 前面。适合编译器、make、Keil UV4 等不在系统 PATH 的情况；仅本地构建生效。",
                         );
                         ui.add_space(4.0);
                         let input_height = 100.0;
@@ -6944,8 +6941,6 @@ impl App {
 
                     if draft.tab == SettingsTab::Editor {
                     ui.add_space(8.0);
-                    settings_section(ui, "编辑器");
-                    ui.add_space(4.0);
                     ui.add(
                         egui::Slider::new(&mut draft.font_size, 10.0..=28.0)
                             .text("代码字号")
@@ -7007,21 +7002,14 @@ impl App {
 
                     if draft.tab == SettingsTab::Debug {
                         ui.add_space(8.0);
-                        settings_section(ui, "调试");
-                        if self.project.is_some() {
-                            ui.add_space(4.0);
-                            ui.label(
-                                RichText::new("调试程序与 gdb 路径随当前工程保存")
-                                    .size(9.5)
-                                    .color(theme::TEXT_FAINT),
-                            );
-                        }
-                        ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new("调试程序")
                                     .size(11.5)
                                     .color(theme::TEXT_DIM),
+                            )
+                            .on_hover_text(
+                                "留空时会从 build/、Debug/、Release/、out/ 中查找最新的 ELF/AXF/EXE",
                             );
                             ui.add(
                                 TextEdit::singleline(&mut draft.debug_program)
@@ -7050,6 +7038,9 @@ impl App {
                                 RichText::new("gdb 路径")
                                     .size(11.5)
                                     .color(theme::TEXT_DIM),
+                            )
+                            .on_hover_text(
+                                "gdb 路径可以填 arm-none-eabi-gdb.exe，也可以直接填它的 bin 目录。ARM 目标会复用烧录配置中的 OpenOCD / pyOCD 参数，自动启动 GDB server 后连接 arm-none-eabi-gdb；主机 EXE 使用普通 gdb。",
                             );
                             ui.add(
                                 TextEdit::singleline(&mut draft.gdb_path)
@@ -7094,14 +7085,6 @@ impl App {
                                 }
                             }
                         });
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(
-                                "调试程序留空时会从 build/、Debug/、Release/ 中查找最新的 ELF/AXF/EXE。gdb 路径可以填 arm-none-eabi-gdb.exe，也可以直接填它的 bin 目录。ARM 目标会复用烧录配置中的 OpenOCD / pyOCD 参数，自动启动 GDB server 后连接 arm-none-eabi-gdb；主机 EXE 使用普通 gdb。",
-                            )
-                            .size(9.0)
-                            .color(theme::TEXT_FAINT),
-                        );
                         if draft.config.flash_tool == FlashTool::Custom {
                             ui.add_space(4.0);
                             ui.label(
@@ -7956,13 +7939,13 @@ fn settings_path_row(ui: &mut egui::Ui, label: &str, value: &mut String, title: 
     });
 }
 
-fn settings_section(ui: &mut egui::Ui, title: &str) {
+fn settings_section(ui: &mut egui::Ui, title: &str) -> egui::Response {
     ui.label(
         RichText::new(title)
             .size(11.0)
             .strong()
             .color(theme::TEXT_DIM),
-    );
+    )
 }
 
 fn segment_button(ui: &mut egui::Ui, selected: bool, text: &str) -> bool {
@@ -7993,7 +7976,7 @@ fn form_line(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
     ui.horizontal(|ui| {
         ui.add_sized(
             [86.0, 26.0],
-            Label::new(RichText::new(label).size(10.5).color(theme::TEXT_DIM)),
+            Label::new(RichText::new(label).size(10.5).color(theme::TEXT_DIM)).halign(Align::LEFT),
         );
         ui.add_sized(
             [width, 26.0],
