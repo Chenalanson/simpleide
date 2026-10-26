@@ -668,34 +668,20 @@ impl App {
         ui.spacing_mut().item_spacing.y = 2.0;
 
         meta_group(ui, "构建配置", true, |ui| {
-            let mut chosen = self.build_config.toolchain;
+            let toolchain_label = if self.build_config.toolchain == ToolchainKind::Auto {
+                format!("自动检测（{}）", effective_toolchain.label())
+            } else {
+                effective_toolchain.label().to_owned()
+            };
+            meta_row(ui, "工具链", &toolchain_label);
             ui.horizontal(|ui| {
-                ui.add_sized(
-                    [70.0, 18.0],
-                    Label::new(RichText::new("工具链").size(11.0).color(theme::TEXT_FAINT)),
+                ui.add_space(78.0);
+                ui.label(
+                    RichText::new("在 设置 → 构建 中修改")
+                        .size(8.5)
+                        .color(theme::TEXT_FAINT),
                 );
-                let selected = if chosen == ToolchainKind::Auto {
-                    format!("自动检测（{}）", effective_toolchain.label())
-                } else {
-                    chosen.label().to_owned()
-                };
-                egui::ComboBox::from_id_salt("simple_embedded_project_toolchain")
-                    .selected_text(RichText::new(selected).size(11.5).color(theme::TEXT_DIM))
-                    .width(198.0)
-                    .show_ui(ui, |ui| {
-                        for tool in ToolchainKind::ALL {
-                            let label = if tool == ToolchainKind::Auto {
-                                "自动检测".to_owned()
-                            } else {
-                                tool.label().to_owned()
-                            };
-                            ui.selectable_value(&mut chosen, tool, label);
-                        }
-                    });
             });
-            if chosen != self.build_config.toolchain {
-                actions.push(Action::SetToolchain(chosen));
-            }
             if toolchain_mismatch {
                 ui.horizontal(|ui| {
                     ui.add_space(78.0);
@@ -6640,21 +6626,36 @@ impl App {
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if ui
                                     .add(theme::secondary_button("自动检测"))
-                                    .on_hover_text("重新识别 Makefile / Cargo.toml / CMakeLists.txt")
+                                    .on_hover_text("先识别工程根目录的 Makefile / Cargo.toml / CMakeLists.txt / .uvprojx，再查询 PATH 和常见安装目录")
                                     .clicked()
                                 {
                                     let detected = autodetect(root);
-                                    let tool = detected.tool_name();
+                                    let toolchain = detected.toolchain;
+                                    let command = detected.build_command.trim().to_owned();
+                                    let found = crate::config::command_available(&command);
                                     draft.extra_paths_text =
                                         detected.extra_paths.join("\n");
-                                    draft.config.toolchain = ToolchainKind::Auto;
+                                    draft.config.toolchain = toolchain;
                                     draft.config.build_command = detected.build_command;
                                     draft.config.clean_command = detected.clean_command;
                                     draft.config.rebuild_command = detected.rebuild_command;
-                                    draft.note = if tool == "未配置" {
-                                        Some("未识别到构建系统，请手动填写命令。".to_owned())
+                                    draft.note = if toolchain == ToolchainKind::Auto {
+                                        Some("未识别到工程根目录的构建系统，也未在 PATH 找到 make / cargo / cmake；请手动选择工具链并填写命令。".to_owned())
+                                    } else if command.is_empty() {
+                                        Some(format!(
+                                            "工程根目录识别为 {}，但未找到对应构建工具；请在“构建工具链”页设置路径。",
+                                            toolchain.label()
+                                        ))
+                                    } else if !found {
+                                        Some(format!(
+                                            "工程根目录识别为 {}；未在 PATH / 常见目录找到 `{command}`，请在“构建工具链”页设置路径。",
+                                            toolchain.label()
+                                        ))
                                     } else {
-                                        Some(format!("已识别为 {tool}。"))
+                                        Some(format!(
+                                            "工程根目录识别为 {}；构建命令：{command}（已找到）。",
+                                            toolchain.label()
+                                        ))
                                     };
                                 }
                             });
@@ -6668,6 +6669,48 @@ impl App {
                             .truncate(),
                         );
                         ui.add_space(8.0);
+
+                        ui.horizontal(|ui| {
+                            ui.add_sized(
+                                [86.0, 22.0],
+                                Label::new(
+                                    RichText::new("工具链")
+                                        .size(10.5)
+                                        .color(theme::TEXT_DIM),
+                                ),
+                            );
+                            let effective = draft.config.effective_toolchain(&self.project_meta);
+                            let selected = if draft.config.toolchain == ToolchainKind::Auto {
+                                format!("自动检测（{}）", effective.label())
+                            } else {
+                                draft.config.toolchain.label().to_owned()
+                            };
+                            egui::ComboBox::from_id_salt("simple_embedded_settings_toolchain")
+                                .selected_text(
+                                    RichText::new(selected).size(11.0).color(theme::TEXT_DIM),
+                                )
+                                .width(230.0)
+                                .show_ui(ui, |ui| {
+                                    for tool in ToolchainKind::ALL {
+                                        let label = if tool == ToolchainKind::Auto {
+                                            "自动检测".to_owned()
+                                        } else {
+                                            tool.label().to_owned()
+                                        };
+                                        ui.selectable_value(
+                                            &mut draft.config.toolchain,
+                                            tool,
+                                            label,
+                                        );
+                                    }
+                                });
+                        });
+                        ui.label(
+                            RichText::new("自动检测先看工程根目录的 Makefile / Cargo.toml / CMakeLists.txt / .uvprojx，再查询 PATH。工具链保存在工程配置，工程信息只读显示。")
+                                .size(9.0)
+                                .color(theme::TEXT_FAINT),
+                        );
+                        ui.add_space(6.0);
 
                         ui.horizontal(|ui| {
                             ui.add_sized(

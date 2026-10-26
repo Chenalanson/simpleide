@@ -725,7 +725,6 @@ enum Action {
     OpenSettings,
     EditMeta,
     AddMetaItem(MetaListField),
-    SetToolchain(ToolchainKind),
     EditBuildOptions,
     AddSupportPack,
     ImportSupportPack(PathBuf),
@@ -4056,22 +4055,6 @@ impl App {
         self.project_meta = ProjectMeta::detect_for(&root, system);
     }
 
-    fn set_toolchain(&mut self, toolchain: ToolchainKind) {
-        if self.build_config.toolchain == toolchain {
-            return;
-        }
-        self.build_config.toolchain = toolchain;
-        self.refresh_project_meta();
-        self.persist_build_config();
-        self.refresh_support_packs();
-        self.debug.target = self.debug_target();
-        self.build_options_draft = None;
-        self.set_toast(
-            format!("工具链已切换为 {}", self.effective_toolchain().label()),
-            Severity::Info,
-        );
-    }
-
     fn persist_build_config(&mut self) {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             return;
@@ -5601,7 +5584,6 @@ impl App {
                 Action::OpenSettings => self.open_settings(),
                 Action::EditMeta => self.open_meta_editor(),
                 Action::AddMetaItem(field) => self.open_meta_add(field),
-                Action::SetToolchain(toolchain) => self.set_toolchain(toolchain),
                 Action::EditBuildOptions => self.open_build_options(),
                 Action::AddSupportPack => self.add_support_pack(),
                 Action::ImportSupportPack(path) => self.import_support_pack_files(vec![path]),

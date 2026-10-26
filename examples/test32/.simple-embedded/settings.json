@@ -3,6 +3,7 @@
   "build": {
     "target": "Local",
     "build_command": "mingw32-make",
+    "toolchain": "auto",
     "clean_command": "mingw32-make clean",
     "rebuild_command": "mingw32-make clean && mingw32-make",
     "flash_command": "",
@@ -42,6 +43,8 @@
       "short_enums": false,
       "rtti": false,
       "use_microlib": true,
+      "printf_float": false,
+      "scanf_float": false,
       "big_endian": false,
       "debug_info": "enable",
       "assembler_defines": [],

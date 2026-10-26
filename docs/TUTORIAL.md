@@ -69,7 +69,7 @@ cargo run --release -- D:\firmware\my-board\my-board.se-workspace
 - 收起或展开工程信息时标题位置保持不变；文件树较短时标题紧跟最后一个文件，展开状态也会记住
 - 文件树下方是“工程信息”，点击分组或列表整行可选中并收起/展开，选中行显示淡蓝色背景
 - 工程信息中可查看构建配置、芯片支持包、输出目录、CPU、浮点、链接脚本、烧录配置、包含目录、库搜索目录和宏定义
-- 构建配置第一行是 **工具链** 下拉：自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake。CubeMX 同时生成 MDK-ARM 和 Makefile 时，Make 构建显示 Makefile 的目标/芯片/链接脚本，Keil 工具链显示 `.uvprojx` 的值；构建命令与所选工具链不一致时会出现黄色提示
+- 工程信息 → 构建配置里的 **工具链** 只读显示，不能直接改；修改入口是 **设置 → 构建 → 工具链**（自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake）。设置里的 **自动检测** 先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，确定期望的构建系统，再查 PATH 和常见安装目录中的 make / cargo / cmake / UV4。CubeMX 同时生成 MDK-ARM 和 Makefile 时，Make 构建显示 Makefile 的目标/芯片/链接脚本，Keil 工具链显示 `.uvprojx` 的值；构建命令与所选工具链不一致时会出现黄色提示
 - 构建配置里的 **构建选项 → 编辑** 分为全局选项、C/C++ 编译器、汇编器和链接器四个页面，页面内容会随工具链变化：GCC/Clang 显示 newlib-nano 浮点、LTO、函数分段；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段
 - 只有 Make + GCC/Clang 工具链保存构建选项时才会按差异写回 Makefile；链接器输出格式选 `AXF` 后，重新构建会生成 `.axf` 副本。Keil 和 Make AC5/AC6 只写工程配置，不修改 `.uvprojx`
 - **全局选项** 在 GCC/Clang 工具链下提供 newlib-nano 浮点支持开关：`printf / sprintf 支持 %f` 和 `scanf / sscanf 支持 %f`。勾选后 Makefile 工程会写入 `LDFLAGS += -u _printf_float` / `-u _scanf_float`，解决 `%f` 空白或打印 0 的问题；会增加几 KB 体积
@@ -252,10 +252,16 @@ Simple embedded 会自动检查工程根目录：
 
 设置弹窗顶部有 **构建 / 构建工具链 / 编辑器 / 调试 / 其他** 五个页签，点击后下方只显示对应页面。
 
+在 **构建** 页可以：
+
+- 在 **工具链** 下拉里选择自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake 或自定义。工程信息里的工具链是只读显示，只能在保存这里的设置后改变。
+- 点 **自动检测**：先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，确定期望的构建系统；再查 PATH 和常见安装目录中的 make / cargo / cmake / UV4。识别结果会填入工具链、Build/Clean/Rebuild 命令和附加 PATH。
+- 配置本地或远程 SSH 构建、Build/Clean/Rebuild/Flash 命令和并行任务数。
+
 在 **构建工具链** 页可以：
 
 - 用 **编译器** 和 **make 工具** 的 **浏览** 按钮选择可执行文件，或直接输入完整路径；留空时使用系统 `PATH`
-- 点击 **从 PATH 自动检测** 自动填入 `arm-none-eabi-gcc` / `gcc` / `clang` 和 `make` / `mingw32-make`
+- 点击 **从 PATH 自动检测** 自动填入 `arm-none-eabi-gcc` / `gcc` / `clang` / `armclang` / `armcc` 和 `make` / `mingw32-make`
 - 选择 **软件自带**，将当前选择的编译器和 make 复制到软件工具目录；以后构建不再依赖系统 `PATH`
   - 工具目录留空时使用 `%APPDATA%\SimpleEmbedded\tools`；相对路径相对于程序目录
   - 安装会复制整个编译器目录和 make 所需的 DLL，可能需要一些时间

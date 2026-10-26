@@ -252,7 +252,7 @@ pub(crate) fn find_makefile(root: &Path) -> Option<PathBuf> {
     None
 }
 
-fn find_uvprojx(root: &Path) -> Option<PathBuf> {
+pub(crate) fn find_uvprojx(root: &Path) -> Option<PathBuf> {
     for name in ["MDK-ARM", "MDK", "Project", "Projects", "Keil", "keil"] {
         let dir = root.join(name);
         if let Some(path) = find_extension(&dir, "uvprojx", 1) {

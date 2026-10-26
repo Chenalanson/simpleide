@@ -437,22 +437,7 @@ impl BuildConfig {
             return self.toolchain;
         }
         match self.effective_build_system() {
-            BuildSystem::Make => {
-                let compiler = meta
-                    .compiler
-                    .as_deref()
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                if compiler.contains("armclang") {
-                    ToolchainKind::MakeAc6
-                } else if compiler.contains("armcc") {
-                    ToolchainKind::MakeAc5
-                } else if compiler.contains("clang") {
-                    ToolchainKind::MakeClang
-                } else {
-                    ToolchainKind::MakeGcc
-                }
-            }
+            BuildSystem::Make => compiler_toolchain(meta.compiler.as_deref()),
             BuildSystem::Keil => {
                 if meta
                     .toolchain
@@ -1024,10 +1009,13 @@ fn notify_shell_association_changed() {}
 pub fn autodetect(project_root: &Path) -> BuildConfig {
     let mut extra_paths = Vec::new();
 
+    // Root detection comes first: the project files decide which build system
+    // is expected. Only then look for that tool in PATH / common install dirs.
     if project_root.join("Cargo.toml").is_file() {
         add_tool_dir(&mut extra_paths, find_in_path("cargo"));
         return BuildConfig {
             build_command: "cargo build".to_owned(),
+            toolchain: ToolchainKind::Cargo,
             clean_command: "cargo clean".to_owned(),
             rebuild_command: "cargo clean && cargo build".to_owned(),
             extra_paths,
@@ -1050,8 +1038,10 @@ pub fn autodetect(project_root: &Path) -> BuildConfig {
             &mut extra_paths,
             find_one_of(&["arm-none-eabi-gcc", "gcc", "clang", "armclang", "armcc"]),
         );
+        let meta = ProjectMeta::detect_for(project_root, BuildSystem::Make);
         return BuildConfig {
             build_command: make.clone(),
+            toolchain: compiler_toolchain(meta.compiler.as_deref()),
             clean_command: format!("{make} clean"),
             rebuild_command: format!("{make} clean && {make}"),
             extra_paths,
@@ -1068,6 +1058,7 @@ pub fn autodetect(project_root: &Path) -> BuildConfig {
             } else {
                 "cmake -S . -B build && cmake --build build".to_owned()
             },
+            toolchain: ToolchainKind::CMake,
             clean_command: "cmake --build build --target clean".to_owned(),
             rebuild_command: "cmake --build build --clean-first".to_owned(),
             extra_paths,
@@ -1075,7 +1066,123 @@ pub fn autodetect(project_root: &Path) -> BuildConfig {
         };
     }
 
+    if let Some(uvprojx) = crate::project_meta::find_uvprojx(project_root) {
+        let meta = ProjectMeta::detect_for(project_root, BuildSystem::Keil);
+        let toolchain = if meta
+            .toolchain
+            .as_deref()
+            .is_some_and(|value| value.contains("AC5"))
+        {
+            ToolchainKind::KeilAc5
+        } else {
+            ToolchainKind::KeilAc6
+        };
+        let uv = find_one_of(&["UV4", "UV5"]).or_else(find_keil_uv4);
+        add_tool_dir(&mut extra_paths, uv.clone());
+        let project_arg = uvprojx.strip_prefix(project_root).unwrap_or(&uvprojx);
+        let build_command = uv
+            .map(|uv| format!("{} -b \"{}\"", display_path(&uv), project_arg.display()))
+            .unwrap_or_default();
+        return BuildConfig {
+            build_command,
+            toolchain,
+            extra_paths,
+            ..BuildConfig::default()
+        };
+    }
+
+    // No project build file: fall back to tools available on PATH.
+    if let Some(cargo) = find_in_path("cargo") {
+        add_tool_dir(&mut extra_paths, Some(cargo));
+        return BuildConfig {
+            build_command: "cargo build".to_owned(),
+            toolchain: ToolchainKind::Cargo,
+            clean_command: "cargo clean".to_owned(),
+            rebuild_command: "cargo clean && cargo build".to_owned(),
+            extra_paths,
+            ..BuildConfig::default()
+        };
+    }
+    if let Some(cmake) = find_in_path("cmake") {
+        add_tool_dir(&mut extra_paths, Some(cmake));
+        return BuildConfig {
+            build_command: "cmake -S . -B build && cmake --build build".to_owned(),
+            toolchain: ToolchainKind::CMake,
+            clean_command: "cmake --build build --target clean".to_owned(),
+            rebuild_command: "cmake --build build --clean-first".to_owned(),
+            extra_paths,
+            ..BuildConfig::default()
+        };
+    }
+    if let Some(make_path) = find_one_of(&["make", "gmake", "mingw32-make"]) {
+        let make = make_path
+            .file_stem()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "make".to_owned());
+        add_tool_dir(&mut extra_paths, Some(make_path));
+        return BuildConfig {
+            build_command: make.clone(),
+            toolchain: ToolchainKind::MakeGcc,
+            clean_command: format!("{make} clean"),
+            rebuild_command: format!("{make} clean && {make}"),
+            extra_paths,
+            ..BuildConfig::default()
+        };
+    }
+
     BuildConfig::default()
+}
+
+fn compiler_toolchain(compiler: Option<&str>) -> ToolchainKind {
+    let compiler = compiler.unwrap_or_default().to_ascii_lowercase();
+    if compiler.contains("armclang") {
+        ToolchainKind::MakeAc6
+    } else if compiler.contains("armcc") {
+        ToolchainKind::MakeAc5
+    } else if compiler.contains("clang") {
+        ToolchainKind::MakeClang
+    } else {
+        ToolchainKind::MakeGcc
+    }
+}
+
+fn find_keil_uv4() -> Option<PathBuf> {
+    let mut candidates = vec![
+        PathBuf::from(r"C:\Keil_v5\UV4\UV4.exe"),
+        PathBuf::from(r"C:\Keil\UV4\UV4.exe"),
+    ];
+    for env in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(env) {
+            candidates.push(
+                PathBuf::from(root)
+                    .join("Keil_v5")
+                    .join("UV4")
+                    .join("UV4.exe"),
+            );
+        }
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+/// Best-effort check whether the first token of a build command exists.
+pub fn command_available(command: &str) -> bool {
+    let command = command.trim();
+    if command.is_empty() {
+        return false;
+    }
+    let first = if let Some(rest) = command.strip_prefix('"') {
+        rest.split('"').next().unwrap_or(rest)
+    } else {
+        command.split_whitespace().next().unwrap_or(command)
+    };
+    let path = Path::new(first);
+    if path.is_file() {
+        return true;
+    }
+    if first.contains(['/', '\\']) {
+        return false;
+    }
+    find_in_path(first).is_some()
 }
 
 fn find_one_of(names: &[&str]) -> Option<PathBuf> {
@@ -1419,6 +1526,52 @@ mod tests {
         cfg.build_command = "UV4 -b demo.uvprojx".into();
         meta.toolchain = Some("Keil MDK · AC5".into());
         assert_eq!(cfg.effective_toolchain(&meta), ToolchainKind::KeilAc5);
+    }
+
+    #[test]
+    fn autodetect_prefers_root_build_system_and_sets_toolchain() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Makefile"),
+            "TARGET = demo\nCC = armclang\n",
+        )
+        .unwrap();
+        let mdk = dir.path().join("MDK-ARM");
+        std::fs::create_dir_all(&mdk).unwrap();
+        std::fs::write(
+            mdk.join("demo.uvprojx"),
+            "<Project><Targets><Target><uAC6>1</uAC6></Target></Targets></Project>",
+        )
+        .unwrap();
+        let cfg = autodetect(dir.path());
+        assert_eq!(cfg.toolchain, ToolchainKind::MakeAc6);
+        assert_eq!(cfg.tool_name(), "Make");
+    }
+
+    #[test]
+    fn checks_absolute_command_availability() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("tool.exe");
+        std::fs::write(&exe, b"x").unwrap();
+        assert!(command_available(&format!(
+            "\"{}\" -b project",
+            exe.display()
+        )));
+        assert!(!command_available("definitely-not-a-real-tool-xyz build"));
+    }
+
+    #[test]
+    fn autodetect_keil_project_without_makefile() {
+        let dir = tempfile::tempdir().unwrap();
+        let mdk = dir.path().join("MDK-ARM");
+        std::fs::create_dir_all(&mdk).unwrap();
+        std::fs::write(
+            mdk.join("demo.uvprojx"),
+            "<Project><Targets><Target><uAC6>1</uAC6></Target></Targets></Project>",
+        )
+        .unwrap();
+        let cfg = autodetect(dir.path());
+        assert_eq!(cfg.toolchain, ToolchainKind::KeilAc6);
     }
 
     #[test]
