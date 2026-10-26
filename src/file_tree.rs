@@ -135,15 +135,20 @@ impl FileTree {
             }
         };
         let expanded = self.expanded.contains(&root);
-        let row = row(ui, &root_name, true, expanded, 0, false, None);
+        let mut state = collapsing_state(ui, &root, expanded);
+        let openness = state.openness(ui.ctx());
+        let row = row(ui, &root_name, true, openness, 0, false, None);
 
         if row.response.clicked() {
             if expanded {
                 self.expanded.remove(&root);
+                state.set_open(false);
             } else {
                 self.expanded.insert(root.clone());
                 let _ = self.children_for(&root);
+                state.set_open(true);
             }
+            ui.ctx().request_repaint();
         }
 
         let mut context_action = None;
@@ -185,9 +190,9 @@ impl FileTree {
         }
         row.response.on_hover_text(crate::util::display_path(&root));
 
-        if expanded {
+        state.show_body_unindented(ui, |ui| {
             self.show_dir(ui, &root, 1, active, &mut actions, can_paste);
-        }
+        });
         actions
     }
 
@@ -208,6 +213,13 @@ impl FileTree {
         for entry in entries {
             let selected = active == Some(entry.path.as_path());
             let is_expanded = entry.is_dir && self.expanded.contains(&entry.path);
+            let mut state = entry
+                .is_dir
+                .then(|| collapsing_state(ui, &entry.path, is_expanded));
+            let openness = state
+                .as_ref()
+                .map(|state| state.openness(ui.ctx()))
+                .unwrap_or(0.0);
             let badge = self
                 .git_badges
                 .get(&crate::util::project_key(&entry.path))
@@ -216,7 +228,7 @@ impl FileTree {
                 ui,
                 &entry.name,
                 entry.is_dir,
-                is_expanded,
+                openness,
                 depth,
                 selected,
                 badge,
@@ -224,11 +236,16 @@ impl FileTree {
 
             if row.response.clicked() {
                 if entry.is_dir {
-                    if is_expanded {
-                        self.expanded.remove(&entry.path);
-                    } else {
-                        self.expanded.insert(entry.path.clone());
-                        let _ = self.children_for(&entry.path);
+                    if let Some(state) = state.as_mut() {
+                        if is_expanded {
+                            self.expanded.remove(&entry.path);
+                            state.set_open(false);
+                        } else {
+                            self.expanded.insert(entry.path.clone());
+                            let _ = self.children_for(&entry.path);
+                            state.set_open(true);
+                        }
+                        ui.ctx().request_repaint();
                     }
                 } else {
                     actions.push(TreeAction::OpenFile(entry.path.clone()));
@@ -309,8 +326,12 @@ impl FileTree {
             row.response
                 .on_hover_text(crate::util::display_path(&entry.path));
 
-            if entry.is_dir && is_expanded && depth < 64 {
-                self.show_dir(ui, &entry.path, depth + 1, active, actions, can_paste);
+            if entry.is_dir && depth < 64 {
+                if let Some(state) = state.as_mut() {
+                    state.show_body_unindented(ui, |ui| {
+                        self.show_dir(ui, &entry.path, depth + 1, active, actions, can_paste);
+                    });
+                }
             }
         }
     }
@@ -362,11 +383,29 @@ fn is_image_path(path: &Path) -> bool {
         })
 }
 
+fn collapsing_state(
+    ui: &egui::Ui,
+    path: &Path,
+    open: bool,
+) -> egui::collapsing_header::CollapsingState {
+    let id = ui.make_persistent_id(("simple_embedded_file_tree", path));
+    let mut state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, open);
+    if state.is_open() != open {
+        state.set_open(open);
+    }
+    let openness = state.openness(ui.ctx());
+    if openness > 0.0 && openness < 1.0 {
+        ui.ctx().request_repaint();
+    }
+    state
+}
+
 fn row(
     ui: &mut egui::Ui,
     name: &str,
     is_dir: bool,
-    is_expanded: bool,
+    openness: f32,
     depth: usize,
     selected: bool,
     badge: Option<char>,
@@ -392,19 +431,17 @@ fn row(
         let indent = 7.0 + depth as f32 * 14.0;
         let arrow_center = egui::pos2(rect.left() + indent + 5.0, rect.center().y);
         if is_dir {
-            let points = if is_expanded {
-                vec![
-                    egui::pos2(arrow_center.x - 3.5, arrow_center.y - 1.5),
-                    egui::pos2(arrow_center.x + 3.5, arrow_center.y - 1.5),
-                    egui::pos2(arrow_center.x, arrow_center.y + 2.5),
-                ]
-            } else {
-                vec![
-                    egui::pos2(arrow_center.x - 1.5, arrow_center.y - 3.5),
-                    egui::pos2(arrow_center.x - 1.5, arrow_center.y + 3.5),
-                    egui::pos2(arrow_center.x + 2.5, arrow_center.y),
-                ]
-            };
+            let angle = openness.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
+            let (sin, cos) = angle.sin_cos();
+            let rotate = |x: f32, y: f32| egui::vec2(x * cos - y * sin, x * sin + y * cos);
+            let points = [
+                egui::vec2(-1.5, -3.5),
+                egui::vec2(-1.5, 3.5),
+                egui::vec2(2.5, 0.0),
+            ]
+            .into_iter()
+            .map(|point| arrow_center + rotate(point.x, point.y))
+            .collect();
             painter.add(Shape::convex_polygon(
                 points,
                 if selected {

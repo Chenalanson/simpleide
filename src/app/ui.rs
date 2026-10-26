@@ -666,6 +666,10 @@ impl App {
         let toolchain_mismatch = self.build_config.toolchain_mismatch();
 
         ui.spacing_mut().item_spacing.y = 2.0;
+        // Project metadata is a dense, Explorer-like list. The global style
+        // uses 28 px interactive rows for buttons and combo boxes; keep those
+        // tall where they are, but compact the information rows here.
+        ui.spacing_mut().interact_size.y = 20.0;
 
         meta_group(ui, "构建配置", true, |ui| {
             let toolchain_label = if self.build_config.toolchain == ToolchainKind::Auto {
@@ -673,15 +677,13 @@ impl App {
             } else {
                 effective_toolchain.label().to_owned()
             };
-            meta_row(ui, "工具链", &toolchain_label);
-            ui.horizontal(|ui| {
-                ui.add_space(78.0);
-                ui.label(
+            if let Some(response) = meta_row_response(ui, "工具链", &toolchain_label, false) {
+                response.on_hover_text_at_pointer(
                     RichText::new("在 设置 → 构建 中修改")
-                        .size(8.5)
-                        .color(theme::TEXT_FAINT),
+                        .size(10.5)
+                        .color(theme::TEXT_DIM),
                 );
-            });
+            }
             if toolchain_mismatch {
                 ui.horizontal(|ui| {
                     ui.add_space(78.0);
@@ -6618,6 +6620,7 @@ impl App {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if draft.tab == SettingsTab::Build {
+                    ui.spacing_mut().item_spacing.y = 3.0;
                     if let Some(root) = &project_root {
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
@@ -6808,16 +6811,16 @@ impl App {
 
                         ui.add_space(10.0);
                         form_line(ui, "Build", &mut draft.config.build_command, "例如 make -j8");
-                        ui.add_space(3.0);
+                        ui.add_space(1.0);
                         form_line(ui, "Clean", &mut draft.config.clean_command, "例如 make clean");
-                        ui.add_space(3.0);
+                        ui.add_space(1.0);
                         form_line(
                             ui,
                             "Rebuild",
                             &mut draft.config.rebuild_command,
                             "例如 make clean && make",
                         );
-                        ui.add_space(3.0);
+                        ui.add_space(1.0);
                         if draft.config.flash_tool == crate::flash::FlashTool::Custom {
                             form_line(
                                 ui,
@@ -7697,18 +7700,39 @@ fn paint_chevron_openness(
 }
 
 fn meta_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    let _ = meta_row_response(ui, label, value, true);
+}
+
+/// Like [`meta_row`], but returns the value label response so callers can
+/// attach hover help to the toolchain value.
+fn meta_row_response(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &str,
+    value_tooltip: bool,
+) -> Option<egui::Response> {
     if value.trim().is_empty() {
-        return;
+        return None;
     }
-    ui.horizontal(|ui| {
-        ui.add_sized(
-            [70.0, 18.0],
-            Label::new(RichText::new(label).size(11.0).color(theme::TEXT_FAINT)),
-        );
-        let response =
-            ui.add(Label::new(RichText::new(value).size(11.5).color(theme::TEXT_DIM)).truncate());
-        response.on_hover_text(value);
-    });
+    let mut value_response = None;
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), 18.0),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.add_sized(
+                [70.0, 18.0],
+                Label::new(RichText::new(label).size(11.0).color(theme::TEXT_FAINT)),
+            );
+            let response = ui
+                .add(Label::new(RichText::new(value).size(11.5).color(theme::TEXT_DIM)).truncate());
+            value_response = Some(if value_tooltip {
+                response.on_hover_text(value)
+            } else {
+                response
+            });
+        },
+    );
+    value_response
 }
 
 fn meta_editable_list(
@@ -7943,18 +7967,19 @@ fn segment_button(ui: &mut egui::Ui, selected: bool, text: &str) -> bool {
 }
 
 fn form_line(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
+    let width = (ui.available_width() - 86.0 - ui.spacing().item_spacing.x).max(80.0);
     ui.horizontal(|ui| {
         ui.add_sized(
-            [86.0, 22.0],
+            [86.0, 26.0],
             Label::new(RichText::new(label).size(10.5).color(theme::TEXT_DIM)),
         );
-        ui.add(
+        ui.add_sized(
+            [width, 26.0],
             TextEdit::singleline(value)
                 .font(FontId::monospace(11.0))
                 .text_color(theme::TEXT)
                 .background_color(theme::BG)
-                .hint_text(hint)
-                .desired_width(ui.available_width()),
+                .hint_text(hint),
         );
     });
 }
