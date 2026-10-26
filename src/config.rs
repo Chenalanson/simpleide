@@ -16,7 +16,7 @@ use crate::project_meta::ProjectMeta;
 use crate::util::{display_path, file_name, project_key, shell_quote_posix};
 
 pub const APP_NAME: &str = "Simple embedded";
-pub const APP_AUTHOR: &str = "smallYYY";
+pub const APP_AUTHOR: &str = "smallYYY_";
 const APP_DATA_DIR: &str = "SimpleEmbedded";
 const LEGACY_APP_DATA_DIR: &str = "MiniEIDE";
 const MAX_RECENT_PROJECTS: usize = 8;

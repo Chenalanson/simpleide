@@ -3291,11 +3291,17 @@ impl App {
         let session_present = self.debug.session.is_some();
         let session_running = self.debug.running;
         let session_starting = self.debug.starting;
+        let screen = ctx.content_rect();
+        let memory_check_pos = egui::pos2(
+            (screen.right() - 490.0 - 65.0).max(screen.left()),
+            (screen.top() + screen.height() * 0.35).max(screen.top()),
+        );
         egui::Window::new("非法检测")
             .id(Id::new("simple_embedded_memory_check"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
+            .default_pos(memory_check_pos)
             .default_size([460.0, 330.0])
             .min_size([420.0, 260.0])
             .frame(
@@ -6748,6 +6754,15 @@ impl App {
                                     ))
                                 };
                             }
+                            if let Some(note) = &draft.note {
+                                ui.add(
+                                    Label::new(
+                                        RichText::new(note).size(9.0).color(theme::SUCCESS),
+                                    )
+                                    .wrap(),
+                                )
+                                .on_hover_text(note);
+                            }
                         });
                         ui.add_space(6.0);
 
@@ -6829,21 +6844,12 @@ impl App {
                                 });
                         }
 
-                        if let Some(note) = &draft.note {
-                            ui.add_space(5.0);
-                            ui.label(
-                                RichText::new(note)
-                                    .size(9.5)
-                                    .color(theme::SUCCESS),
-                            );
-                        }
-
                         ui.add_space(10.0);
-                        form_line(ui, "Build", &mut draft.config.build_command, "例如 make -j8");
+                        form_line_short(ui, "Build", &mut draft.config.build_command, "例如 make -j8");
                         ui.add_space(1.0);
-                        form_line(ui, "Clean", &mut draft.config.clean_command, "例如 make clean");
+                        form_line_short(ui, "Clean", &mut draft.config.clean_command, "例如 make clean");
                         ui.add_space(1.0);
-                        form_line(
+                        form_line_short(
                             ui,
                             "Rebuild",
                             &mut draft.config.rebuild_command,
@@ -6893,38 +6899,50 @@ impl App {
                                     .min(128) as u16;
                             }
                         });
-                        ui.add_space(12.0);
-                        settings_section(ui, "工具链路径").on_hover_text(
-                            "每行一个目录，执行构建时会加到 PATH 前面。适合编译器、make、Keil UV4 等不在系统 PATH 的情况；仅本地构建生效。",
-                        );
-                        ui.add_space(4.0);
-                        let input_height = 100.0;
-                        Frame::new()
-                            .fill(theme::BG)
-                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
-                            .corner_radius(5)
-                            .inner_margin(Margin::symmetric(4, 3))
-                            .show(ui, |ui| {
-                                ScrollArea::vertical()
-                                    .id_salt("simple_embedded_extra_paths_scroll")
-                                    .max_height(input_height - 6.0)
-                                    .auto_shrink([false, false])
-                                    .scroll_bar_visibility(
-                                        egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
-                                    )
-                                    .show(ui, |ui| {
-                                        ui.add(
-                                            TextEdit::multiline(&mut draft.extra_paths_text)
-                                                .font(FontId::monospace(10.5))
-                                                .text_color(theme::TEXT)
-                                                .background_color(theme::BG)
-                                                .hint_text("例如 C:\\toolchain\\bin")
-                                                .desired_rows(7)
-                                                .desired_width(f32::INFINITY)
-                                                .frame(Frame::new()),
-                                        );
-                                    });
-                            });
+                        ui.add_space(1.0);
+                        ui.horizontal(|ui| {
+                            ui.add_sized(
+                                [86.0, 78.0],
+                                Label::new(
+                                    RichText::new("工具链路径")
+                                        .size(10.5)
+                                        .color(theme::TEXT_DIM),
+                                ),
+                            )
+                            .on_hover_text(
+                                "每行一个目录，执行构建时会加到 PATH 前面。适合编译器、make、Keil UV4 等不在系统 PATH 的情况；仅本地构建生效。",
+                            );
+                            let input_height = 78.0;
+                            ScrollArea::vertical()
+                                .id_salt("simple_embedded_extra_paths_scroll")
+                                .max_height(input_height)
+                                .auto_shrink([false, false])
+                                .scroll_bar_visibility(
+                                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                )
+                                .show(ui, |ui| {
+                                    ui.add_sized(
+                                        [ui.available_width(), input_height],
+                                        TextEdit::multiline(&mut draft.extra_paths_text)
+                                            .font(FontId::monospace(10.5))
+                                            .text_color(theme::TEXT)
+                                            .background_color(theme::BG)
+                                            .hint_text("例如 C:\\toolchain\\bin")
+                                            .desired_rows(5)
+                                            .desired_width(f32::INFINITY)
+                                            .frame(
+                                                Frame::new()
+                                                    .fill(theme::BG)
+                                                    .stroke(Stroke::new(
+                                                        1.0_f32,
+                                                        theme::BORDER_SOFT,
+                                                    ))
+                                                    .corner_radius(5)
+                                                    .inner_margin(Margin::symmetric(4, 3)),
+                                            ),
+                                    );
+                                });
+                        });
                     } else {
                         ui.add_space(10.0);
                         ui.label(
@@ -7968,7 +7986,22 @@ fn segment_button(ui: &mut egui::Ui, selected: bool, text: &str) -> bool {
 }
 
 fn form_line(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
-    let width = (ui.available_width() - 86.0 - ui.spacing().item_spacing.x).max(80.0);
+    form_line_with_margin(ui, label, value, hint, 0.0);
+}
+
+fn form_line_short(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
+    form_line_with_margin(ui, label, value, hint, 70.0);
+}
+
+fn form_line_with_margin(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    hint: &str,
+    right_margin: f32,
+) {
+    let width =
+        (ui.available_width() - 86.0 - ui.spacing().item_spacing.x - right_margin).max(80.0);
     ui.horizontal(|ui| {
         ui.add_sized(
             [86.0, 26.0],

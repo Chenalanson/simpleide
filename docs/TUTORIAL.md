@@ -257,7 +257,7 @@ Simple embedded 会自动检查工程根目录：
 - 在 **工具链** 下拉里选择自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake 或自定义。工程信息里的工具链是只读显示，只能在保存这里的设置后改变。
 - 点 **自动检测**：先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，确定期望的构建系统；再查 PATH 和常见安装目录中的 make / cargo / cmake / UV4。识别结果会填入工具链、Build/Clean/Rebuild 命令和工具链路径。
 - 配置本地或远程 SSH 构建、Build/Clean/Rebuild/Flash 命令和并行任务数。
-- 在 **工具链路径** 里每行填一个目录，构建时会加到 `PATH` 前面，适合编译器、make、Keil UV4 不在系统 `PATH` 的情况。旧版本的“构建工具链”页已移除；发布版自带的 `tools/` 目录仍会自动优先使用。
+- **工具链路径** 位于并行任务数下方，右侧多行输入框高度约为 Build 输入框的三倍；每行填一个目录，构建时会加到 `PATH` 前面，适合编译器、make、Keil UV4 不在系统 `PATH` 的情况。旧版本的“构建工具链”页已移除；发布版自带的 `tools/` 目录仍会自动优先使用。
 
 在 **其他** 页可以：
 

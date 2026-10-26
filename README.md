@@ -59,7 +59,7 @@
 - 每工程独立的构建、烧录、C/C++ 和调试配置保存在工程内 `.simple-embedded/settings.json`（包括 `debug.gdb_path`）；用户目录作为旧配置迁移和全局偏好存储
 - 工作区文件：构建卡片“工作区”可生成 `<工程名>.se-workspace` 并关联双击打开；也可从“工作区 → 打开工作区文件…”选择 `.se-workspace` / `.code-workspace`
 - 配置界面分为 构建 / 编辑器 / 调试 / 其他：构建页可设置工具链、命令、并行任务数和工具链路径；旧版本的“构建工具链”页已移除，软件自带 `tools/` 存在时仍会自动优先使用
-- “工具链路径”多行输入对应工程配置中的 `extra_paths`，每行一个目录，本地构建时会前置到 PATH；本地 Make 构建会自动接入 Git for Windows / MSYS 的 `rm` 等 Unix 工具
+- “工具链路径”多行输入对应工程配置中的 `extra_paths`，高度为 Build 输入框的三倍，内容超出时在框内滚动；本地构建时会前置到 PATH。本地 Make 构建会自动接入 Git for Windows / MSYS 的 `rm` 等 Unix 工具
 
 ## 运行
 
