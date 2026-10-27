@@ -897,6 +897,7 @@ enum Action {
     ToggleHidden,
     OpenSettings,
     OpenThemeSettings,
+    OpenFirmwareConfirm,
     RefreshBoardFiles,
     ReadBoardFile(crate::micropython::BoardFile),
     EditMeta,
@@ -947,6 +948,7 @@ pub struct App {
     project_debug: crate::config::ProjectDebugSettings,
     settings_draft: Option<SettingsDraft>,
     theme_settings: Option<ThemeSettingsDraft>,
+    firmware_confirm: bool,
     meta_draft: Option<MetaDraft>,
     meta_add: Option<MetaAddDraft>,
     flash_draft: Option<FlashDraft>,
@@ -1036,6 +1038,7 @@ impl App {
             project_debug: crate::config::ProjectDebugSettings::default(),
             settings_draft: None,
             theme_settings: None,
+            firmware_confirm: false,
             meta_draft: None,
             meta_add: None,
             flash_draft: None,
@@ -2486,6 +2489,7 @@ impl App {
     fn has_modal(&self) -> bool {
         self.settings_draft.is_some()
             || self.theme_settings.is_some()
+            || self.firmware_confirm
             || self.pending.is_some()
             || self.meta_draft.is_some()
             || self.meta_add.is_some()
@@ -4549,6 +4553,60 @@ impl App {
         });
     }
 
+    fn start_firmware_flash(&mut self) -> bool {
+        if self.build.is_running() || self.micropython_busy {
+            self.set_toast("已有任务正在进行", Severity::Warning);
+            return false;
+        }
+        if !self.build_config_uses_micropython() {
+            self.set_toast("请先选择 MicroPython 工具链", Severity::Warning);
+            return false;
+        }
+        let serial = self.build_config.serial.clone();
+        if !serial.is_ready() {
+            self.set_toast(
+                "请先在配置 → 构建中设置 MicroPython 串口和波特率",
+                Severity::Warning,
+            );
+            return false;
+        }
+        let config = self.build_config.firmware.clone();
+        if !config.is_ready() {
+            self.set_toast("请先选择固件文件并配置 esptool", Severity::Warning);
+            return false;
+        }
+        if !Path::new(config.file.trim()).is_file() {
+            self.set_toast(format!("固件文件不存在：{}", config.file), Severity::Error);
+            return false;
+        }
+        let port = serial.port.trim().to_owned();
+        let baud = serial.baud;
+        let command = format!(
+            "MicroPython · 烧录固件 {} → {} @ {}（{} @ {baud}）",
+            config.file, config.chip, config.address, port
+        );
+        self.build.log.clear_diagnostics();
+        self.build.log.push_blank();
+        self.build.log.push_message(command, Severity::Command);
+        self.output_view = OutputView::Build;
+        self.settings.output_open = true;
+        if self.settings.output_height < 100.0 {
+            self.settings.output_height = 214.0;
+        }
+        self.settings.save();
+        let (sender, receiver) = mpsc::channel();
+        self.micropython_busy = true;
+        self.micropython_action = Some("烧录固件".to_owned());
+        self.micropython_rx = Some(receiver);
+        self.board_file_error = None;
+        self.set_toast("正在烧录 MicroPython 固件…", Severity::Info);
+        std::thread::spawn(move || {
+            let result = crate::micropython::flash_firmware(&port, baud, &config);
+            let _ = sender.send(MicroPythonJobResult::Report(result));
+        });
+        true
+    }
+
     fn start_board_files(&mut self) {
         if self.build.is_running() || self.micropython_busy {
             return;
@@ -4668,9 +4726,15 @@ impl App {
                         }
                         if report.success {
                             self.board_file_error = None;
+                            if action == "烧录固件" {
+                                self.board_files = None;
+                                self.board_error = None;
+                                self.board_remote_paths.clear();
+                            }
                             let message = match action.as_str() {
                                 "上传" => "MicroPython 上传完成".to_owned(),
                                 "复位" => "MicroPython 已软复位".to_owned(),
+                                "烧录固件" => "MicroPython 固件烧录完成".to_owned(),
                                 _ => "MicroPython 已启动 main.py（设备继续运行）".to_owned(),
                             };
                             self.build
@@ -5683,6 +5747,7 @@ impl App {
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 self.settings_draft = None;
                 self.cancel_theme_settings(ctx);
+                self.firmware_confirm = false;
                 self.pending = None;
                 self.meta_draft = None;
                 self.meta_add = None;
@@ -6776,6 +6841,11 @@ impl App {
                 }
                 Action::OpenSettings => self.open_settings(),
                 Action::OpenThemeSettings => self.open_theme_settings(),
+                Action::OpenFirmwareConfirm => {
+                    if self.build_config_uses_micropython() {
+                        self.firmware_confirm = true;
+                    }
+                }
                 Action::RefreshBoardFiles => self.start_board_files(),
                 Action::ReadBoardFile(file) => self.start_board_file(file),
                 Action::EditMeta => self.open_meta_editor(),
@@ -7357,6 +7427,10 @@ impl eframe::App for App {
             self.show_theme_settings_modal(&ctx);
             actions.clear();
         }
+        if self.firmware_confirm {
+            self.show_firmware_confirm(&ctx);
+            actions.clear();
+        }
         if self.pending.is_some() {
             self.show_pending_modal(&ctx);
             actions.clear();
@@ -7727,6 +7801,32 @@ impl App {
                         };
                         if response.clicked() {
                             actions.push(Action::Run(TaskKind::Flash));
+                        }
+
+                        if micropython {
+                            ui.add_space(6.0);
+                            let firmware_tip = if !self.build_config.serial.is_ready() {
+                                "请先在配置 → 构建中选择 MicroPython 串口和波特率"
+                            } else if self.micropython_busy {
+                                "MicroPython 操作正在进行…"
+                            } else if !self.build_config.firmware.is_ready() {
+                                "烧录 MicroPython 固件（请先在配置中填写固件和 esptool）"
+                            } else {
+                                "烧录 MicroPython 固件（会覆盖开发板固件）"
+                            };
+                            let response = ui
+                                .add_enabled_ui(micro_ready, |ui| {
+                                    ui.add_sized([width, 30.0], theme::secondary_button("固件"))
+                                })
+                                .inner;
+                            let response = if micro_ready {
+                                response.on_hover_text(firmware_tip)
+                            } else {
+                                response.on_disabled_hover_text(firmware_tip)
+                            };
+                            if response.clicked() {
+                                actions.push(Action::OpenFirmwareConfirm);
+                            }
                         }
 
                         ui.add_space(6.0);

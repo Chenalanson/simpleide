@@ -1,6 +1,9 @@
 //! Minimal MicroPython raw-REPL client used by the ESP32 run/upload actions.
 
+use std::ffi::OsString;
 use std::io::{ErrorKind, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -439,6 +442,226 @@ fn join_output(a: &str, b: &str) -> String {
     }
 }
 
+pub fn detect_esptool() -> Option<String> {
+    for candidate in ["esptool", "esptool.exe", "esptool.py"] {
+        if crate::config::command_available(candidate) {
+            return Some(candidate.to_owned());
+        }
+    }
+    common_esptool_paths()
+        .into_iter()
+        .find(|path| path.is_file())
+        .map(|path| crate::util::display_path(&path))
+}
+
+#[cfg(windows)]
+fn common_esptool_paths() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        scan_python_installs(
+            &PathBuf::from(local).join("Programs").join("Python"),
+            &mut out,
+        );
+    }
+    if let Some(roaming) = std::env::var_os("APPDATA") {
+        scan_python_installs(&PathBuf::from(roaming).join("Python"), &mut out);
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn common_esptool_paths() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+#[cfg(windows)]
+fn scan_python_installs(base: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let candidate = entry.path().join("Scripts").join("esptool.exe");
+        if candidate.is_file() {
+            out.push(candidate);
+        }
+    }
+}
+
+fn esptool_invocation(esptool: &str) -> Result<(String, Vec<OsString>), String> {
+    let lower = esptool.to_ascii_lowercase();
+    if !lower.ends_with(".py") {
+        return Ok((esptool.to_owned(), Vec::new()));
+    }
+    let python = if crate::config::command_available("python") {
+        "python"
+    } else if crate::config::command_available("py") {
+        "py"
+    } else {
+        return Err("系统未找到 python 或 py，无法运行 esptool.py".to_owned());
+    };
+    let mut prefix = Vec::new();
+    if esptool.contains('\\') || esptool.contains('/') {
+        prefix.push(OsString::from(esptool));
+    } else {
+        // `esptool.py` on PATH usually means the pip module is installed.
+        prefix.push(OsString::from("-m"));
+        prefix.push(OsString::from("esptool"));
+    }
+    Ok((python.to_owned(), prefix))
+}
+
+fn esptool_major_version(program: &str, prefix: &[OsString]) -> Option<u32> {
+    let mut command = Command::new(program);
+    command.args(prefix);
+    command.arg("version");
+    crate::util::hide_console(&mut command);
+    let output = command.output().ok()?;
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_esptool_major(&text)
+}
+
+fn parse_esptool_major(text: &str) -> Option<u32> {
+    for line in text.lines() {
+        let lower = line.to_ascii_lowercase();
+        let Some(index) = lower.find("esptool") else {
+            continue;
+        };
+        let rest = &line[index + "esptool".len()..];
+        let Some(version) = rest.find('v') else {
+            continue;
+        };
+        let digits: String = rest[version + 1..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect();
+        if let Ok(major) = digits.parse() {
+            return Some(major);
+        }
+    }
+    None
+}
+
+fn erase_command(major: Option<u32>) -> &'static str {
+    if major.is_some_and(|major| major >= 5) {
+        "erase-flash"
+    } else {
+        "erase_flash"
+    }
+}
+
+fn firmware_write_args(major: Option<u32>, verify: bool, address: &str, file: &str) -> Vec<String> {
+    let mut args = vec![if major.is_some_and(|major| major >= 5) {
+        "write-flash".to_owned()
+    } else {
+        "write_flash".to_owned()
+    }];
+    // esptool 5 verifies automatically and no longer accepts --verify/--no-verify;
+    // esptool 4 verifies by default, so only opt out explicitly.
+    if !verify && !major.is_some_and(|major| major >= 5) {
+        args.push("--no-verify".to_owned());
+    }
+    args.push("-z".to_owned());
+    args.push(address.to_owned());
+    args.push(file.to_owned());
+    args
+}
+
+pub fn flash_firmware(
+    port: &str,
+    baud: u32,
+    config: &crate::config::FirmwareConfig,
+) -> Result<Report, String> {
+    let file = config.file.trim();
+    if file.is_empty() {
+        return Err("请选择 MicroPython 固件 .bin 文件".to_owned());
+    }
+    if !Path::new(file).is_file() {
+        return Err(format!("固件文件不存在：{file}"));
+    }
+    if config.esptool.trim().is_empty() {
+        return Err("请填写 esptool 路径".to_owned());
+    }
+    if config.chip.trim().is_empty() || config.address.trim().is_empty() {
+        return Err("请选择芯片并填写烧录地址".to_owned());
+    }
+    let (program, prefix) = esptool_invocation(config.esptool.trim())?;
+    let major = esptool_major_version(&program, &prefix);
+    let base = vec![
+        "--chip".to_owned(),
+        config.chip.trim().to_owned(),
+        "--port".to_owned(),
+        port.to_owned(),
+        "--baud".to_owned(),
+        baud.to_string(),
+    ];
+    let mut output = String::new();
+    if major.is_some_and(|major| major >= 5) && !config.verify {
+        output.push_str("esptool 5 会自动校验写入内容，忽略“写入校验”开关。\n");
+    }
+
+    if config.erase {
+        let mut args = base.clone();
+        args.push(erase_command(major).to_owned());
+        let (success, text) = run_esptool(&program, &prefix, &args)?;
+        output = join_output(&output, &text);
+        if !success {
+            return Ok(Report {
+                output,
+                error: "擦除 ESP32 Flash 失败".to_owned(),
+                success: false,
+            });
+        }
+    }
+
+    let mut args = base.clone();
+    args.extend(firmware_write_args(
+        major,
+        config.verify,
+        config.address.trim(),
+        file,
+    ));
+    let (success, text) = run_esptool(&program, &prefix, &args)?;
+    output = join_output(&output, &text);
+    Ok(Report {
+        error: if success {
+            String::new()
+        } else if text.trim().is_empty() {
+            "esptool 烧录失败".to_owned()
+        } else {
+            text.lines().last().unwrap_or("esptool 烧录失败").to_owned()
+        },
+        output,
+        success,
+    })
+}
+
+fn run_esptool(
+    program: &str,
+    prefix: &[OsString],
+    args: &[String],
+) -> Result<(bool, String), String> {
+    let mut command = Command::new(program);
+    command.args(prefix);
+    command.args(args);
+    crate::util::hide_console(&mut command);
+    let output = command
+        .output()
+        .map_err(|err| format!("启动 esptool 失败：{err}"))?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !stderr.trim().is_empty() {
+        if !text.trim().is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&stderr);
+    }
+    Ok((output.status.success(), clean_text(&text)))
+}
+
 fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
@@ -544,5 +767,46 @@ mod tests {
         let error =
             soft_reset("THIS_PORT_DOES_NOT_EXIST", 115_200).expect_err("invalid port must fail");
         assert!(error.contains("打开串口") || error.contains("does not exist"));
+    }
+
+    #[test]
+    fn firmware_flash_requires_an_existing_firmware_file() {
+        let config = crate::config::FirmwareConfig {
+            file: "definitely-missing-firmware.bin".to_owned(),
+            ..crate::config::FirmwareConfig::default()
+        };
+        let error = flash_firmware("COM_DOES_NOT_EXIST", 115_200, &config).unwrap_err();
+        assert!(error.contains("固件文件不存在"));
+    }
+
+    #[test]
+    fn parses_esptool_major_versions() {
+        assert_eq!(parse_esptool_major("esptool.py v4.8.1"), Some(4));
+        assert_eq!(parse_esptool_major("esptool v5.6.0"), Some(5));
+        assert_eq!(
+            parse_esptool_major("Detecting chip type...\nesptool.py v3.3"),
+            Some(3)
+        );
+        assert_eq!(parse_esptool_major("no version here"), None);
+    }
+
+    #[test]
+    fn firmware_commands_follow_the_esptool_major_version() {
+        assert_eq!(erase_command(Some(4)), "erase_flash");
+        assert_eq!(erase_command(Some(5)), "erase-flash");
+        assert_eq!(erase_command(None), "erase_flash");
+
+        let legacy = firmware_write_args(Some(4), false, "0x1000", "fw.bin");
+        assert_eq!(legacy[0], "write_flash");
+        assert!(legacy.contains(&"--no-verify".to_owned()));
+        let legacy_verify = firmware_write_args(Some(4), true, "0x1000", "fw.bin");
+        assert!(!legacy_verify.contains(&"--no-verify".to_owned()));
+        assert!(!legacy_verify.contains(&"--verify".to_owned()));
+
+        let modern = firmware_write_args(Some(5), false, "0x0", "fw.bin");
+        assert_eq!(modern[0], "write-flash");
+        assert!(!modern.contains(&"--no-verify".to_owned()));
+        assert_eq!(modern[modern.len() - 2], "0x0");
+        assert_eq!(modern[modern.len() - 1], "fw.bin");
     }
 }

@@ -247,6 +247,59 @@ impl ToolchainKind {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+pub struct FirmwareConfig {
+    /// esptool executable, `esptool.py`, or a name on PATH.
+    pub esptool: String,
+    /// Combined MicroPython firmware image (`.bin`).
+    pub file: String,
+    /// esptool `--chip` value.
+    pub chip: String,
+    /// Flash offset for the combined image.
+    pub address: String,
+    pub erase: bool,
+    pub verify: bool,
+}
+
+impl Default for FirmwareConfig {
+    fn default() -> Self {
+        Self {
+            esptool: "esptool".to_owned(),
+            file: String::new(),
+            chip: "esp32".to_owned(),
+            address: "0x1000".to_owned(),
+            erase: false,
+            verify: true,
+        }
+    }
+}
+
+impl FirmwareConfig {
+    pub const CHIPS: &'static [(&'static str, &'static str)] = &[
+        ("esp32", "ESP32"),
+        ("esp32s2", "ESP32-S2"),
+        ("esp32s3", "ESP32-S3"),
+        ("esp32c3", "ESP32-C3"),
+        ("esp32c6", "ESP32-C6"),
+        ("esp32h2", "ESP32-H2"),
+    ];
+
+    pub fn default_address(chip: &str) -> &'static str {
+        match chip.to_ascii_lowercase().as_str() {
+            "esp32" | "esp32s2" => "0x1000",
+            _ => "0x0",
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        !self.esptool.trim().is_empty()
+            && !self.file.trim().is_empty()
+            && !self.chip.trim().is_empty()
+            && !self.address.trim().is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BuildConfig {
     pub target: BuildTarget,
     pub build_command: String,
@@ -261,6 +314,8 @@ pub struct BuildConfig {
     pub pyocd: PyOcdConfig,
     /// Serial port used by MicroPython / ESP32 targets.
     pub serial: crate::serial::SerialConfig,
+    /// MicroPython firmware flashing configuration.
+    pub firmware: FirmwareConfig,
     /// Parallel build jobs. Zero keeps the command unchanged.
     pub build_jobs: u16,
     pub ssh_host: String,
@@ -340,6 +395,7 @@ impl Default for BuildConfig {
             openocd: OpenOcdConfig::default(),
             pyocd: PyOcdConfig::default(),
             serial: crate::serial::SerialConfig::default(),
+            firmware: FirmwareConfig::default(),
             build_jobs: 0,
             ssh_host: String::new(),
             ssh_port: 22,
@@ -1668,9 +1724,27 @@ mod tests {
         assert_eq!(cfg.toolchain, ToolchainKind::Micropython);
         assert_eq!(cfg.serial.port, "COM4");
         assert_eq!(cfg.serial.baud, 921_600);
+        assert_eq!(cfg.firmware.chip, "esp32");
+        assert_eq!(cfg.firmware.address, "0x1000");
+        assert!(cfg.firmware.verify);
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains(r#""toolchain":"micropython""#));
         assert!(json.contains(r#""serial":{"port":"COM4","baud":921600}"#));
+        assert!(json.contains(r#""firmware""#));
+    }
+
+    #[test]
+    fn micropython_firmware_defaults_follow_the_chip() {
+        assert_eq!(FirmwareConfig::default_address("esp32"), "0x1000");
+        assert_eq!(FirmwareConfig::default_address("esp32s2"), "0x1000");
+        assert_eq!(FirmwareConfig::default_address("esp32s3"), "0x0");
+        assert_eq!(FirmwareConfig::default_address("esp32c3"), "0x0");
+        assert!(!FirmwareConfig::default().is_ready());
+        let config = FirmwareConfig {
+            file: "esp32.bin".into(),
+            ..FirmwareConfig::default()
+        };
+        assert!(config.is_ready());
     }
 
     #[test]

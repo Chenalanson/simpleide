@@ -294,7 +294,26 @@ Simple embedded 会自动检查工程根目录：
    - 点击文件会把芯片内容下载到工程的对应相对路径并打开到编辑器；同名文件会生成“副本”后缀，不会覆盖本地文件
    - 下载时会记住芯片原路径；之后点 **上传** 会优先写回原路径，即使本地打开的是“副本”文件。修改 `main.py` 后点 **运行** 则始终写回板上的 `main.py`
    - 列表读取、单文件读取、运行 / 上传 / 复位失败或串口被占用时，错误会同时显示在芯片文件面板和 **MicroPython 输出**
-6. 当前上传/读取上限为 128 KB，尚未内置交互式 REPL、目录上传或固件烧录。Build / Clean / Rebuild / 检测按钮在 MicroPython 模式下隐藏，避免误执行 C 工具链命令。
+6. 当前上传/读取上限为 128 KB，尚未内置交互式 REPL 或目录上传。Build / Clean / Rebuild / 检测按钮在 MicroPython 模式下隐藏，避免误执行 C 工具链命令。
+
+### 烧录 MicroPython 固件
+
+如果开发板还是空白 Flash 或不是 MicroPython 固件，可以直接在编辑器里烧录：
+
+1. 安装 esptool：`pip install esptool`（支持 4.x / 5.x），确保 `esptool` 在 PATH 中，或在配置里浏览到 `esptool.exe`。
+2. 从 MicroPython 官网下载对应开发板的**合并固件 `.bin`**。
+3. 在 **配置 → 构建 → MicroPython → 串口连接 → MicroPython 固件烧录** 中填写：
+   - 固件文件：合并后的 `.bin`
+   - esptool：程序名或完整路径；可点 **自动检测**
+   - 芯片：ESP32 / ESP32-S2 / ESP32-S3 / ESP32-C3 / ESP32-C6 / ESP32-H2
+   - 烧录地址：ESP32 / ESP32-S2 默认 `0x1000`，S3/C3/C6/H2 默认 `0x0`
+   - 可选 **烧录前整片擦除** 和 **写入校验**
+4. 保存配置后，点击右侧操作栏的 **固件**，确认后开始烧录。
+5. 烧录输出显示在 **MicroPython 输出**；成功后重新点击 **刷新** 读取芯片文件，或直接写 `main.py` 并点 **运行**。
+
+编辑器会先探测 esptool 主版本：esptool 4.x 使用 `write_flash` / `erase_flash`，取消 **写入校验** 时传 `--no-verify`；esptool 5.x 使用 `write-flash` / `erase-flash`，写入后自动校验，取消勾选不会关闭校验。
+
+固件烧录会覆盖开发板上的 MicroPython 固件；勾选整片擦除会清除板上已有 `.py` 文件。编辑器不会自动下载固件，需要自己准备对应芯片的 MicroPython `.bin`。
 
 开发板接线时注意使用支持数据传输的 USB 线；部分 ESP32 开发板需要 CP210x 或 CH340 驱动，安装驱动后重新点击 **自动检测**。
 

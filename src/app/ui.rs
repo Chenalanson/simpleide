@@ -7724,6 +7724,173 @@ impl App {
         }
     }
 
+    pub(super) fn show_firmware_confirm(&mut self, ctx: &egui::Context) {
+        let config = self.build_config.firmware.clone();
+        let serial = self.build_config.serial.clone();
+        let file_ok = !config.file.trim().is_empty() && Path::new(config.file.trim()).is_file();
+        let valid = serial.is_ready() && config.is_ready() && file_ok;
+        let chip_label = crate::config::FirmwareConfig::CHIPS
+            .iter()
+            .find(|(value, _)| *value == config.chip.trim())
+            .map(|(_, label)| *label)
+            .unwrap_or(config.chip.as_str());
+        let mut close = false;
+        let mut start = false;
+        let mut open_config = false;
+
+        let modal = egui::Modal::new(Id::new("simple_embedded_firmware_modal"))
+            .frame(
+                Frame::new()
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(20, 16)),
+            )
+            .backdrop_color(Color32::from_black_alpha(170));
+        modal.show(ctx, |ui| {
+            ui.set_width(560.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("烧录 MicroPython 固件")
+                        .size(18.0)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if window_close_button(ui) {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(
+                    "烧录会覆盖开发板上的 MicroPython 固件；勾选整片擦除会同时清除芯片上的 .py 文件。",
+                )
+                .size(10.5)
+                .color(theme::warning()),
+            );
+            ui.label(
+                RichText::new("需要安装 esptool（pip install esptool），并选择合并后的固件 .bin。")
+                    .size(9.5)
+                    .color(theme::text_faint()),
+            );
+            ui.add_space(8.0);
+            for (label, value) in [
+                (
+                    "固件文件",
+                    if file_ok {
+                        config.file.as_str()
+                    } else {
+                        "未选择或文件不存在"
+                    },
+                ),
+                ("芯片", chip_label),
+                ("烧录地址", config.address.trim()),
+                ("串口", serial.port.trim()),
+                ("esptool", config.esptool.trim()),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [78.0, 20.0],
+                        Label::new(RichText::new(label).size(10.5).color(theme::text_dim())),
+                    );
+                    ui.add(
+                        Label::new(RichText::new(value).monospace().size(10.5).color(
+                            if value.is_empty() {
+                                theme::error()
+                            } else {
+                                theme::text()
+                            },
+                        ))
+                        .truncate(),
+                    )
+                    .on_hover_text(value);
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.add_sized([78.0, 20.0], Label::new(RichText::new("").size(10.0)));
+                ui.label(
+                    RichText::new(format!(
+                        "{} · 波特率 {} · {}{}",
+                        chip_label,
+                        serial.baud,
+                        if config.erase {
+                            "整片擦除"
+                        } else {
+                            "保留 Flash"
+                        },
+                        if config.verify {
+                            " · 写入校验"
+                        } else {
+                            ""
+                        }
+                    ))
+                    .size(9.5)
+                    .color(theme::text_faint()),
+                );
+            });
+            if !valid {
+                ui.add_space(6.0);
+                ui.add(
+                    Label::new(
+                        RichText::new(
+                            "请先在 配置 → 构建 → MicroPython 串口连接中补全串口、固件和 esptool。",
+                        )
+                        .size(9.5)
+                        .color(theme::error()),
+                    )
+                    .wrap(),
+                );
+            }
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                if ui.add(theme::secondary_button("打开配置")).clicked() {
+                    open_config = true;
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let button = if valid {
+                        theme::primary_button("开始烧录")
+                    } else {
+                        egui::Button::new(
+                            RichText::new("开始烧录")
+                                .color(theme::text_faint())
+                                .size(13.0),
+                        )
+                        .fill(theme::surface())
+                        .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+                        .corner_radius(6)
+                        .min_size(egui::vec2(0.0, 28.0))
+                    };
+                    let response = ui.add_enabled(valid, button);
+                    if response.clicked() {
+                        start = true;
+                    }
+                    if ui.add(theme::secondary_button("取消")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+
+        if open_config {
+            self.firmware_confirm = false;
+            self.open_settings();
+            return;
+        }
+        if close {
+            self.firmware_confirm = false;
+            return;
+        }
+        if start && self.start_firmware_flash() {
+            self.firmware_confirm = false;
+        }
+    }
+
     pub(super) fn show_theme_settings_modal(&mut self, ctx: &egui::Context) {
         let Some(mut draft) = self.theme_settings.take() else {
             return;
@@ -8962,6 +9129,120 @@ fn show_serial_settings(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
             ui.add_space(2.0);
             ui.label(
                 RichText::new("自动检测会优先选择 ESP32 / CP210x / CH340 / FTDI 等 USB 串口。")
+                    .size(9.0)
+                    .color(theme::text_faint()),
+            );
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("MicroPython 固件烧录")
+                    .size(12.0)
+                    .strong()
+                    .color(theme::text()),
+            );
+            ui.label(
+                RichText::new(
+                    "需要 esptool；使用合并后的固件 .bin 文件。烧录会覆盖开发板固件，整片擦除会清除板上文件。",
+                )
+                .size(9.0)
+                .color(theme::text_faint()),
+            );
+            ui.add_space(4.0);
+            settings_path_row(
+                ui,
+                "固件文件",
+                &mut draft.config.firmware.file,
+                "选择 MicroPython 固件",
+                "esp32-2024xxxx-v1.xx.x.bin",
+            );
+            ui.add_space(3.0);
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [86.0, 22.0],
+                    Label::new(RichText::new("esptool").size(10.5).color(theme::text_dim())),
+                );
+                ui.add(
+                    TextEdit::singleline(&mut draft.config.firmware.esptool)
+                        .desired_width(280.0)
+                        .hint_text("esptool 或 esptool.exe"),
+                );
+                if ui.add(theme::secondary_button("自动检测")).clicked() {
+                    if let Some(path) = crate::micropython::detect_esptool() {
+                        draft.config.firmware.esptool = path;
+                    }
+                }
+                if ui.add(theme::secondary_button("浏览")).clicked() {
+                    let dialog = rfd::FileDialog::new().set_title("选择 esptool");
+                    if let Some(path) = dialog.pick_file() {
+                        draft.config.firmware.esptool = util::display_path(&path);
+                    }
+                }
+            });
+            ui.add_space(3.0);
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [86.0, 22.0],
+                    Label::new(
+                        RichText::new("芯片 / 地址")
+                            .size(10.5)
+                            .color(theme::text_dim()),
+                    ),
+                );
+                let previous_chip = draft.config.firmware.chip.clone();
+                egui::ComboBox::from_id_salt("simple_embedded_firmware_chip")
+                    .selected_text(
+                        crate::config::FirmwareConfig::CHIPS
+                            .iter()
+                            .find(|(value, _)| *value == draft.config.firmware.chip.as_str())
+                            .map(|(_, label)| *label)
+                            .unwrap_or(draft.config.firmware.chip.as_str()),
+                    )
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for (value, label) in crate::config::FirmwareConfig::CHIPS {
+                            ui.selectable_value(
+                                &mut draft.config.firmware.chip,
+                                (*value).to_owned(),
+                                *label,
+                            );
+                        }
+                    });
+                if draft.config.firmware.chip != previous_chip {
+                    let old_default =
+                        crate::config::FirmwareConfig::default_address(&previous_chip);
+                    if draft.config.firmware.address.trim().is_empty()
+                        || draft.config.firmware.address.trim() == old_default
+                    {
+                        draft.config.firmware.address =
+                            crate::config::FirmwareConfig::default_address(
+                                &draft.config.firmware.chip,
+                            )
+                            .to_owned();
+                    }
+                }
+                ui.add(
+                    TextEdit::singleline(&mut draft.config.firmware.address)
+                        .desired_width(120.0)
+                        .hint_text("0x1000"),
+                );
+            });
+            ui.add_space(3.0);
+            ui.horizontal(|ui| {
+                ui.add_space(86.0);
+                ui.checkbox(
+                    &mut draft.config.firmware.erase,
+                    "烧录前整片擦除（会清除板上文件）",
+                );
+                ui.checkbox(&mut draft.config.firmware.verify, "写入校验")
+                    .on_hover_text(
+                        "esptool 5 会自动校验写入内容；esptool 4 取消勾选时传 --no-verify。",
+                    );
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("保存配置后，点击右侧操作栏的“固件”开始烧录。")
                     .size(9.0)
                     .color(theme::text_faint()),
             );
