@@ -175,6 +175,8 @@ Cortex-M 通常只有 2–4 个硬件比较器。GDB 会优先使用硬件 watch
 
 变化记录默认展开；最新一条事件的 **调用栈** 也会默认展开，方便直接看到“哪一行修改、谁调用”。
 
+OpenOCD 在 Cortex-M 上有时会把 watchpoint 命中报告成 `Program received signal SIGTRAP`，而不是 GDB 的 `Old value` / `New value`。遇到这种情况，应用会用创建 watchpoint 时保存的旧值和命中后查询到的当前值补齐记录，仍然显示旧值 → 新值、位置和调用栈。
+
 展开后，每条记录包含：
 
 ```text
@@ -182,7 +184,7 @@ Cortex-M 通常只有 2–4 个硬件比较器。GDB 会优先使用硬件 watch
 ```
 
 - **时间**：本机本地时间，精确到毫秒
-- **旧值 → 新值**：GDB 报告的 `Old value` / `New value`
+- **旧值 → 新值**：GDB 报告的 `Old value` / `New value`，或应用在 SIGTRAP 命中后查询到的值
 - **位置**：GDB 命中后停止的函数和源码行，通常就是实际执行写入/读取的位置
 
 如果 GDB 返回了调用栈，记录下方还会有 **调用栈** 折叠项，例如：

@@ -1,8 +1,10 @@
 //! Lightweight project metadata extracted from Makefiles and Keil uVision projects.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::BuildSystem;
+use crate::ignore::IgnoreRules;
 
 #[derive(Clone, Debug, Default)]
 pub struct ProjectMeta {
@@ -304,6 +306,167 @@ fn find_extension(root: &Path, extension: &str, max_depth: usize) -> Option<Path
     None
 }
 
+const HEADER_EXTENSIONS: [&str; 5] = ["h", "hpp", "hh", "hxx", "inl"];
+const MAX_HEADER_SCAN_DIRS: usize = 5000;
+const MAX_HEADER_SCAN_DEPTH: usize = 16;
+
+/// Collect the parent directory of every C/C++ header in the project. Paths
+/// are returned relative to `base` (the project root for Make, the `.uvprojx`
+/// directory for Keil) so they can be appended to the build system's existing
+/// include list without rewriting its conventions.
+pub(crate) fn detect_header_include_dirs(
+    root: &Path,
+    base: &Path,
+    ignore: &IgnoreRules,
+) -> Vec<String> {
+    let mut directories = BTreeSet::new();
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    let mut scanned = 0usize;
+    while let Some((dir, depth)) = pending.pop() {
+        scanned += 1;
+        if scanned > MAX_HEADER_SCAN_DIRS {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries = entries.flatten().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                if depth >= MAX_HEADER_SCAN_DEPTH {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                let relative = path.strip_prefix(root).unwrap_or(&path);
+                if skip_header_scan_dir(&name) || ignore.is_ignored(relative, true) {
+                    continue;
+                }
+                pending.push((path, depth + 1));
+            } else if file_type.is_file()
+                && path.extension().is_some_and(|extension| {
+                    HEADER_EXTENSIONS
+                        .iter()
+                        .any(|header| extension.eq_ignore_ascii_case(header))
+                })
+            {
+                let relative = path.strip_prefix(root).unwrap_or(&path);
+                if !ignore.is_ignored(relative, false) {
+                    directories.insert(dir.clone());
+                }
+            }
+        }
+    }
+    let mut result = directories
+        .into_iter()
+        .map(|directory| include_dir_string(base, &directory))
+        .collect::<Vec<_>>();
+    result.sort_by_key(|value| value.to_ascii_lowercase());
+    result.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    result
+}
+
+fn skip_header_scan_dir(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            "build"
+                | "debug"
+                | "release"
+                | "out"
+                | "target"
+                | "dist"
+                | "node_modules"
+                | "cmake-build-debug"
+                | "cmake-build-release"
+                | "__pycache__"
+        )
+}
+
+fn include_dir_string(base: &Path, directory: &Path) -> String {
+    relative_path(base, directory)
+        .map(|path| {
+            let value = path.to_string_lossy().replace('\\', "/");
+            if value.is_empty() {
+                ".".to_owned()
+            } else {
+                value
+            }
+        })
+        .unwrap_or_else(|| directory.to_string_lossy().replace('\\', "/"))
+}
+
+fn relative_path(base: &Path, target: &Path) -> Option<PathBuf> {
+    let base = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+    let target = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+    let base_components = base.components().collect::<Vec<_>>();
+    let target_components = target.components().collect::<Vec<_>>();
+    let mut common = 0;
+    while common < base_components.len()
+        && common < target_components.len()
+        && base_components[common]
+            .as_os_str()
+            .eq_ignore_ascii_case(target_components[common].as_os_str())
+    {
+        common += 1;
+    }
+    if common == 0 {
+        return None;
+    }
+    let mut result = PathBuf::new();
+    for _ in common..base_components.len() {
+        result.push("..");
+    }
+    for component in &target_components[common..] {
+        result.push(component.as_os_str());
+    }
+    Some(result)
+}
+
+/// Append newly detected directories while comparing paths in their absolute
+/// form, so `Core/Inc`, `./Core/Inc` and an absolute path do not appear twice.
+pub(crate) fn merge_include_dirs(
+    existing: &[String],
+    detected: &[String],
+    base: &Path,
+) -> (Vec<String>, usize) {
+    let mut result = existing.to_vec();
+    let mut keys = existing
+        .iter()
+        .map(|value| include_path_key(value, base))
+        .collect::<BTreeSet<_>>();
+    let mut added = 0;
+    for directory in detected {
+        if keys.insert(include_path_key(directory, base)) {
+            result.push(directory.clone());
+            added += 1;
+        }
+    }
+    (result, added)
+}
+
+fn include_path_key(value: &str, base: &Path) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return String::new();
+    }
+    let path = PathBuf::from(value.replace('\\', "/"));
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    };
+    let absolute = std::fs::canonicalize(&absolute).unwrap_or(absolute);
+    absolute
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase()
+}
+
 fn make_var(text: &str, key: &str) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
     let mut index = 0;
@@ -558,5 +721,41 @@ mod tests {
         assert_eq!(meta.output_dir.as_deref(), Some("build\\"));
         assert!(meta.include_dirs.iter().any(|value| value == "../Core/Inc"));
         assert!(meta.defines.iter().any(|value| value == "STM32G474xx"));
+    }
+
+    #[test]
+    fn detects_header_parent_directories_and_merges_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("Core/Inc")).unwrap();
+        std::fs::write(root.join("Core/Inc/main.h"), "").unwrap();
+        std::fs::create_dir_all(root.join("Middlewares/Lib/Inc")).unwrap();
+        std::fs::write(root.join("Middlewares/Lib/Inc/lib.hpp"), "").unwrap();
+        std::fs::create_dir_all(root.join("build/generated")).unwrap();
+        std::fs::write(root.join("build/generated/generated.h"), "").unwrap();
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::write(root.join(".hidden/secret.h"), "").unwrap();
+
+        let ignore = IgnoreRules::load(root, false, "");
+        let detected = detect_header_include_dirs(root, root, &ignore);
+        assert_eq!(
+            detected,
+            vec!["Core/Inc".to_owned(), "Middlewares/Lib/Inc".to_owned()]
+        );
+
+        let (merged, added) = merge_include_dirs(&["Core/Inc".to_owned()], &detected, root);
+        assert_eq!(added, 1);
+        assert_eq!(
+            merged,
+            vec!["Core/Inc".to_owned(), "Middlewares/Lib/Inc".to_owned()]
+        );
+
+        let mdk = root.join("MDK-ARM");
+        std::fs::create_dir_all(&mdk).unwrap();
+        let relative = detect_header_include_dirs(root, &mdk, &ignore);
+        assert!(relative.iter().any(|value| value == "../Core/Inc"));
+        assert!(relative
+            .iter()
+            .any(|value| value == "../Middlewares/Lib/Inc"));
     }
 }

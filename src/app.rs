@@ -284,6 +284,29 @@ struct RegisterValue {
     raw: String,
 }
 
+fn marker_number(line: &str, prefix: &str) -> Option<u64> {
+    let start = line.find(prefix)? + prefix.len();
+    let rest = &line[start..];
+    let end = rest.find("__")?;
+    rest[..end].parse().ok()
+}
+
+/// Extract the value part of a gdb `print` response such as
+/// `$1 = 0 '\000'`. Multi-line struct output is intentionally limited to its
+/// first line; watchpoint expressions are normally scalars.
+fn parse_print_value(line: &str) -> Option<String> {
+    let line = line.trim().trim_start_matches("(gdb) ").trim();
+    let (name, value) = line.split_once(" = ")?;
+    if !name.starts_with('$') {
+        return None;
+    }
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
 #[derive(Default)]
 struct DebugState {
     open: bool,
@@ -319,6 +342,12 @@ struct DebugState {
     current_source: Option<(PathBuf, usize)>,
     /// Number of console lines already scanned for stop locations.
     log_scan: usize,
+    /// Arm saved watchpoints only after the first real stop (normally `main`),
+    /// so startup code that clears `.bss` does not trip them.
+    pending_watch_rearm: bool,
+    /// Ignore late reset/load log lines until gdb reports the temporary `main`
+    /// breakpoint after an automatic start.
+    waiting_for_main: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -366,6 +395,8 @@ struct WatchEvent {
 
 #[derive(Clone, Debug)]
 struct HwWatchpoint {
+    /// Stable id used for GDB convenience variables such as `$__se_wp_7`.
+    uid: u64,
     number: Option<usize>,
     expression: String,
     kind: WatchKind,
@@ -374,6 +405,36 @@ struct HwWatchpoint {
     old_value: Option<String>,
     new_value: Option<String>,
     history: Vec<WatchEvent>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WatchProbeRole {
+    Old,
+    New,
+}
+
+#[derive(Clone, Debug)]
+struct WatchProbeRequest {
+    query_id: u64,
+    watch_uid: u64,
+    role: WatchProbeRole,
+}
+
+/// OpenOCD reports Cortex-M watchpoint hits as `SIGTRAP` instead of gdb's
+/// `Old value / New value` pair. After such a stop we ask gdb for both the
+/// saved old value and the current expression value, then record the change.
+#[derive(Debug)]
+struct PendingWatchProbe {
+    id: u64,
+    time: String,
+    location: Option<String>,
+    requests: Vec<WatchProbeRequest>,
+    results: Vec<(u64, Option<String>)>,
+    collecting: Option<u64>,
+    bt_collecting: bool,
+    bt_done: bool,
+    bt_lines: Vec<String>,
+    ticks: u32,
 }
 
 #[derive(Debug)]
@@ -400,6 +461,7 @@ struct MemoryCheckState {
     watch_error: Option<String>,
     watch_log_scan: usize,
     pending_bt: Option<PendingWatchBt>,
+    pending_probe: Option<PendingWatchProbe>,
     watch_seq: u64,
 }
 
@@ -740,6 +802,7 @@ enum Action {
     ToggleHidden,
     OpenSettings,
     EditMeta,
+    DetectIncludeDirs,
     AddMetaItem(MetaListField),
     EditBuildOptions,
     AddSupportPack,
@@ -1484,13 +1547,22 @@ impl App {
             self.set_toast("目标正在运行，请先暂停再添加 watchpoint", Severity::Warning);
             return;
         }
-        let Some(session) = &mut self.debug.session else {
+        if self.debug.session.is_none() {
             self.set_toast("请先启动调试会话", Severity::Warning);
             return;
-        };
-        session.send("set can-use-hw-watchpoints 1");
-        session.send(&format!("{} {expression}", kind.command()));
+        }
+        self.memory_check.watch_seq = self.memory_check.watch_seq.wrapping_add(1).max(1);
+        let uid = self.memory_check.watch_seq;
+        if let Some(session) = &mut self.debug.session {
+            session.send("set can-use-hw-watchpoints 1");
+            session.send(&format!("{} {expression}", kind.command()));
+            // Keep the value at creation time in a gdb convenience variable.
+            // When OpenOCD reports a hit as SIGTRAP without old/new values, the
+            // probe below can still show what the variable used to be.
+            session.send(&format!("set $__se_wp_{uid} = {expression}"));
+        }
         self.memory_check.watchpoints.push(HwWatchpoint {
+            uid,
             number: None,
             expression: expression.to_owned(),
             kind,
@@ -1549,6 +1621,7 @@ impl App {
             watchpoint.new_value = None;
         }
         self.memory_check.pending_bt = None;
+        self.memory_check.pending_probe = None;
         self.memory_check.watch_error = None;
         self.memory_check.watch_log_scan = 0;
     }
@@ -1562,7 +1635,13 @@ impl App {
             .memory_check
             .watchpoints
             .iter()
-            .map(|watchpoint| (watchpoint.expression.clone(), watchpoint.kind))
+            .map(|watchpoint| {
+                (
+                    watchpoint.uid,
+                    watchpoint.expression.clone(),
+                    watchpoint.kind,
+                )
+            })
             .collect::<Vec<_>>();
         for watchpoint in &mut self.memory_check.watchpoints {
             watchpoint.number = None;
@@ -1576,8 +1655,9 @@ impl App {
         }
         if let Some(session) = &mut self.debug.session {
             session.send("set can-use-hw-watchpoints 1");
-            for (expression, kind) in expressions {
+            for (uid, expression, kind) in expressions {
                 session.send(&format!("{} {expression}", kind.command()));
+                session.send(&format!("set $__se_wp_{uid} = {expression}"));
             }
         }
     }
@@ -1599,11 +1679,21 @@ impl App {
         self.memory_check.watch_log_scan = session.log.len();
         self.poll_watch_backtrace(&fresh);
 
+        let sigtrap = fresh
+            .iter()
+            .any(|line| line.contains("SIGTRAP") || line.contains("Trace/breakpoint trap"));
+        let sigtrap_location = fresh
+            .iter()
+            .rev()
+            .find(|line| line.contains(" at ") && line.contains(':'))
+            .map(|line| line.trim().to_owned());
+        self.poll_watch_probe(&fresh);
         let mut hit = None;
         let mut bt_hit = None;
         let mut created_watch = false;
         let mut deleted_watchpoints = Vec::new();
         let mut evaluation_error = false;
+        let mut native_updates = Vec::new();
         for (index, line) in fresh.iter().enumerate() {
             let trimmed = line.trim();
             if trimmed.contains("Value has been optimized out")
@@ -1668,10 +1758,20 @@ impl App {
                     None
                 }
             });
+            let notice_is_hit = old_value.is_none()
+                && new_value.is_none()
+                && fresh
+                    .iter()
+                    .skip(index + 1)
+                    .any(|line| line.contains("SIGTRAP") || line.contains("Trace/breakpoint trap"));
             let position = match position {
                 Some(position) => position,
                 None if old_value.is_none() && new_value.is_none() => {
+                    self.memory_check.watch_seq =
+                        self.memory_check.watch_seq.wrapping_add(1).max(1);
+                    let uid = self.memory_check.watch_seq;
                     self.memory_check.watchpoints.push(HwWatchpoint {
+                        uid,
                         number: Some(notice.number),
                         expression: notice.expression.clone(),
                         kind: WatchKind::Write,
@@ -1706,9 +1806,10 @@ impl App {
                     watchpoint.history.remove(0);
                 }
                 let expression = watchpoint.expression.clone();
+                native_updates.push((watchpoint.uid, expression.clone()));
                 hit = Some((notice.number, expression.clone(), old_value, new_value));
                 bt_hit = Some((event_id, expression));
-            } else {
+            } else if !notice_is_hit {
                 created_watch = true;
             }
         }
@@ -1727,6 +1828,12 @@ impl App {
         if created_watch && !evaluation_error {
             self.memory_check.watch_error = None;
         }
+        if let Some(session) = &mut self.debug.session {
+            for (uid, expression) in native_updates {
+                session.send(&format!("set $__se_wp_{uid} = {expression}"));
+            }
+        }
+        let native_hit = hit.is_some();
         if let Some((event_id, expression)) = bt_hit {
             self.memory_check.pending_bt = Some(PendingWatchBt {
                 event_id,
@@ -1754,6 +1861,229 @@ impl App {
             if self.memory_check.open {
                 self.memory_check.tab = MemoryCheckTab::Dynamic;
             }
+        }
+
+        // OpenOCD often reports a Cortex-M watchpoint as a bare SIGTRAP.
+        // Query the saved and current values ourselves so the user still gets
+        // the old -> new pair, source location and call stack.
+        if sigtrap && !native_hit {
+            self.start_watch_probe(sigtrap_location, crate::util::local_timestamp());
+        }
+    }
+
+    fn start_watch_probe(&mut self, location: Option<String>, time: String) {
+        if self.memory_check.pending_probe.is_some() {
+            return;
+        }
+        let watchpoints = self
+            .memory_check
+            .watchpoints
+            .iter()
+            .map(|watchpoint| (watchpoint.uid, watchpoint.expression.clone()))
+            .collect::<Vec<_>>();
+        if watchpoints.is_empty() {
+            return;
+        }
+        self.memory_check.watch_seq = self.memory_check.watch_seq.wrapping_add(1).max(1);
+        let probe_id = self.memory_check.watch_seq;
+        let mut requests = Vec::new();
+        let mut commands = Vec::new();
+        for (uid, expression) in &watchpoints {
+            self.memory_check.watch_seq = self.memory_check.watch_seq.wrapping_add(1).max(1);
+            let old_query = self.memory_check.watch_seq;
+            self.memory_check.watch_seq = self.memory_check.watch_seq.wrapping_add(1).max(1);
+            let new_query = self.memory_check.watch_seq;
+            requests.push(WatchProbeRequest {
+                query_id: old_query,
+                watch_uid: *uid,
+                role: WatchProbeRole::Old,
+            });
+            requests.push(WatchProbeRequest {
+                query_id: new_query,
+                watch_uid: *uid,
+                role: WatchProbeRole::New,
+            });
+            commands.push(format!("echo __SE_WV_BEGIN_{old_query}__\\n"));
+            commands.push(format!("print $__se_wp_{uid}"));
+            commands.push(format!("echo __SE_WV_END_{old_query}__\\n"));
+            commands.push(format!("echo __SE_WV_BEGIN_{new_query}__\\n"));
+            commands.push(format!("print {expression}"));
+            commands.push(format!("echo __SE_WV_END_{new_query}__\\n"));
+            commands.push(format!("set $__se_wp_{uid} = {expression}"));
+        }
+        commands.push(format!("echo __SE_WP_BT_BEGIN_{probe_id}__\\n"));
+        commands.push("bt 6".to_owned());
+        commands.push(format!("echo __SE_WP_BT_END_{probe_id}__\\n"));
+        if let Some(session) = &mut self.debug.session {
+            for command in commands {
+                session.send(&command);
+            }
+        }
+        self.memory_check.pending_probe = Some(PendingWatchProbe {
+            id: probe_id,
+            time,
+            location,
+            requests,
+            results: Vec::new(),
+            collecting: None,
+            bt_collecting: false,
+            bt_done: false,
+            bt_lines: Vec::new(),
+            ticks: 0,
+        });
+    }
+
+    fn poll_watch_probe(&mut self, fresh: &[String]) {
+        let Some(mut probe) = self.memory_check.pending_probe.take() else {
+            return;
+        };
+        probe.ticks = probe.ticks.saturating_add(1);
+        let bt_begin = format!("__SE_WP_BT_BEGIN_{}__", probe.id);
+        let bt_end = format!("__SE_WP_BT_END_{}__", probe.id);
+        for line in fresh {
+            let trimmed = line.trim();
+            if let Some(query) = marker_number(trimmed, "__SE_WV_BEGIN_") {
+                probe.collecting = Some(query);
+                continue;
+            }
+            if let Some(query) = marker_number(trimmed, "__SE_WV_END_") {
+                if !probe.results.iter().any(|(id, _)| *id == query) {
+                    probe.results.push((query, None));
+                }
+                if probe.collecting == Some(query) {
+                    probe.collecting = None;
+                }
+                continue;
+            }
+            if trimmed.contains(&bt_begin) {
+                probe.bt_collecting = true;
+                probe.bt_lines.clear();
+                continue;
+            }
+            if trimmed.contains(&bt_end) {
+                probe.bt_done = true;
+                probe.bt_collecting = false;
+                continue;
+            }
+            if let Some(query) = probe.collecting {
+                if let Some(value) = parse_print_value(trimmed) {
+                    if let Some(entry) = probe.results.iter_mut().find(|(id, _)| *id == query) {
+                        if entry.1.is_none() {
+                            entry.1 = Some(value);
+                        }
+                    } else {
+                        probe.results.push((query, Some(value)));
+                    }
+                }
+            }
+            if probe.bt_collecting {
+                let value = trimmed.trim_start_matches("(gdb) ").trim();
+                if value.starts_with('#') || value.contains(" at ") {
+                    probe.bt_lines.push(value.to_owned());
+                    if probe.bt_lines.len() > 8 {
+                        probe.bt_lines.remove(0);
+                    }
+                }
+            }
+        }
+        let values_ready = probe
+            .requests
+            .iter()
+            .all(|request| probe.results.iter().any(|(id, _)| *id == request.query_id));
+        let finished = (values_ready && probe.bt_done) || probe.ticks > 600;
+        if finished {
+            self.finish_watch_probe(probe);
+        } else {
+            self.memory_check.pending_probe = Some(probe);
+        }
+    }
+
+    fn finish_watch_probe(&mut self, probe: PendingWatchProbe) {
+        let mut changes = Vec::new();
+        for request in &probe.requests {
+            if request.role != WatchProbeRole::New {
+                continue;
+            }
+            let Some(new_value) = probe
+                .results
+                .iter()
+                .find(|(id, _)| *id == request.query_id)
+                .and_then(|(_, value)| value.clone())
+            else {
+                continue;
+            };
+            let old_value = probe
+                .requests
+                .iter()
+                .find(|candidate| {
+                    candidate.watch_uid == request.watch_uid
+                        && candidate.role == WatchProbeRole::Old
+                })
+                .and_then(|candidate| {
+                    probe
+                        .results
+                        .iter()
+                        .find(|(id, _)| *id == candidate.query_id)
+                        .and_then(|(_, value)| value.clone())
+                });
+            let Some(old_value) = old_value else {
+                continue;
+            };
+            if old_value != new_value {
+                changes.push((request.watch_uid, old_value, new_value));
+            }
+        }
+        if changes.is_empty() {
+            return;
+        }
+        let mut event_ids = Vec::with_capacity(changes.len());
+        for _ in &changes {
+            self.memory_check.watch_seq = self.memory_check.watch_seq.wrapping_add(1).max(1);
+            event_ids.push(self.memory_check.watch_seq);
+        }
+        let mut hit = None;
+        for ((uid, old_value, new_value), event_id) in changes.into_iter().zip(event_ids) {
+            let Some(watchpoint) = self
+                .memory_check
+                .watchpoints
+                .iter_mut()
+                .find(|watchpoint| watchpoint.uid == uid)
+            else {
+                continue;
+            };
+            watchpoint.hits = watchpoint.hits.saturating_add(1);
+            watchpoint.old_value = Some(old_value.clone());
+            watchpoint.new_value = Some(new_value.clone());
+            watchpoint.history.push(WatchEvent {
+                id: event_id,
+                time: probe.time.clone(),
+                old_value: Some(old_value.clone()),
+                new_value: Some(new_value.clone()),
+                location: probe.location.clone(),
+                stack: probe.bt_lines.clone(),
+            });
+            if watchpoint.history.len() > 200 {
+                watchpoint.history.remove(0);
+            }
+            if hit.is_none() {
+                let number = watchpoint
+                    .number
+                    .map(|number| format!("#{number}"))
+                    .unwrap_or_else(|| "#?".to_owned());
+                hit = Some((number, watchpoint.expression.clone(), old_value, new_value));
+            }
+        }
+        let Some((number, expression, old_value, new_value)) = hit else {
+            return;
+        };
+        self.memory_check.watch_error = None;
+        self.debug.running = false;
+        self.set_toast(
+            format!("watchpoint {number} 命中：{expression}（{old_value} -> {new_value}）"),
+            Severity::Warning,
+        );
+        if self.memory_check.open {
+            self.memory_check.tab = MemoryCheckTab::Dynamic;
         }
     }
 
@@ -2358,6 +2688,8 @@ impl App {
         self.debug.running = false;
         self.debug.open = true;
         self.debug.error = None;
+        self.debug.pending_watch_rearm = false;
+        self.debug.waiting_for_main = false;
         self.detach_hardware_watchpoints();
         self.debug.log.clear();
         self.debug.target = Some(target.clone());
@@ -2423,12 +2755,18 @@ impl App {
                 if self.settings.auto_start_watch {
                     self.memory_check.open = true;
                     self.memory_check.tab = MemoryCheckTab::Dynamic;
-                    self.rearm_hardware_watchpoints();
+                    // Do not arm at the reset vector: startup clears `.bss`, which
+                    // would trip a watchpoint on a global before `main` runs.
+                    // Arm once the temporary `main` breakpoint stops the target.
+                    self.debug.pending_watch_rearm = true;
                 }
                 let continue_now = self.debug.pending_continue;
                 self.debug.pending_continue = false;
                 if continue_now {
                     if let Some(session) = &mut self.debug.session {
+                        // Ignore log lines produced by reset/load so the rearm
+                        // below only reacts to the stop at `main`.
+                        self.debug.log_scan = session.log.len();
                         // Stop once at main so starting a session immediately opens
                         // and highlights the entry source line instead of running
                         // silently until the first user breakpoint.
@@ -2439,6 +2777,7 @@ impl App {
                             session.send("run");
                             session.started = true;
                         }
+                        self.debug.waiting_for_main = true;
                         self.debug.running = true;
                     }
                 }
@@ -2571,6 +2910,8 @@ impl App {
             self.debug.starting = false;
             self.debug.pending_continue = false;
             self.debug.running = false;
+            self.debug.pending_watch_rearm = false;
+            self.debug.waiting_for_main = false;
             self.debug.error = None;
             self.debug.log.push("[调试启动已取消]".to_owned());
             self.detach_hardware_watchpoints();
@@ -2585,6 +2926,8 @@ impl App {
         self.debug.starting = false;
         self.debug.pending_continue = false;
         self.debug.running = false;
+        self.debug.pending_watch_rearm = false;
+        self.debug.waiting_for_main = false;
         self.debug.watch_refresh = None;
         self.debug.last_watch_refresh = None;
         self.debug.error = None;
@@ -2622,6 +2965,27 @@ impl App {
                 || line.contains("Remote connection closed")
         }) {
             self.debug.running = false;
+        }
+        let main_hit = fresh.iter().any(|line| {
+            line.contains("Temporary breakpoint")
+                && (line.contains(", main") || line.contains("in main"))
+        });
+        if self.debug.waiting_for_main
+            && fresh.iter().any(|line| {
+                line.contains("Function \"main\" not defined")
+                    || line.contains("No symbol \"main\"")
+            })
+        {
+            self.debug.waiting_for_main = false;
+        }
+        if self.debug.waiting_for_main {
+            // `load`/reset output can still be in flight when the automatic
+            // `continue` is sent. Ignore it until gdb confirms the temporary
+            // breakpoint at main, otherwise watchpoints are armed too early.
+            if !main_hit {
+                return;
+            }
+            self.debug.waiting_for_main = false;
         }
         let mut found = None;
         for line in fresh.iter().rev() {
@@ -2661,6 +3025,11 @@ impl App {
         };
         self.debug.running = false;
         self.debug.current_source = Some((path.clone(), line));
+        let startup_stop = raw.to_ascii_lowercase().contains("startup");
+        if self.debug.pending_watch_rearm && (main_hit || !startup_stop) {
+            self.debug.pending_watch_rearm = false;
+            self.rearm_hardware_watchpoints();
+        }
         self.jump_to_debug_source(ctx, &path, line);
         ctx.request_repaint();
     }
@@ -4151,6 +4520,59 @@ impl App {
         self.build_config.meta_defines = None;
         let result = self.persist_meta_overrides();
         self.notify_sync("已恢复自动检测的 C/C++ 属性", result, Severity::Info);
+    }
+
+    /// Scan the project for C/C++ headers and append every parent directory to
+    /// the include list. Make projects then sync the result to `C_INCLUDES`.
+    fn detect_include_dirs(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Info);
+            return;
+        };
+        let system = self.build_config.effective_build_system();
+        let base = if system == BuildSystem::Keil {
+            crate::project_meta::find_uvprojx(&root)
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+                .unwrap_or_else(|| root.clone())
+        } else {
+            root.clone()
+        };
+        let ignore = IgnoreRules::load(
+            &root,
+            self.settings.respect_gitignore,
+            &self.settings.ignore_patterns,
+        );
+        let detected = crate::project_meta::detect_header_include_dirs(&root, &base, &ignore);
+        if detected.is_empty() {
+            self.set_toast(
+                "未找到 C/C++ 头文件；请确认工程中包含 .h / .hpp 文件",
+                Severity::Info,
+            );
+            return;
+        }
+        let existing = self.effective_includes().to_vec();
+        let (merged, added) = crate::project_meta::merge_include_dirs(&existing, &detected, &base);
+        if added == 0 {
+            self.set_toast(
+                format!(
+                    "已检测到 {} 个头文件目录，全部已在包含目录中",
+                    detected.len()
+                ),
+                Severity::Info,
+            );
+            return;
+        }
+        self.build_config.meta_includes = Some(merged.clone());
+        let result = self.persist_meta_overrides();
+        self.notify_sync(
+            &format!(
+                "已添加 {} 个头文件包含目录（共 {} 个）",
+                added,
+                merged.len()
+            ),
+            result,
+            Severity::Success,
+        );
     }
 
     fn persist_meta_overrides(&mut self) -> Result<bool, String> {
@@ -5723,6 +6145,7 @@ impl App {
                 }
                 Action::OpenSettings => self.open_settings(),
                 Action::EditMeta => self.open_meta_editor(),
+                Action::DetectIncludeDirs => self.detect_include_dirs(),
                 Action::AddMetaItem(field) => self.open_meta_add(field),
                 Action::EditBuildOptions => self.open_build_options(),
                 Action::AddSupportPack => self.add_support_pack(),
@@ -7264,6 +7687,25 @@ fn colored_dot(ui: &mut egui::Ui, color: Color32, size: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_print_values_and_probe_markers() {
+        assert_eq!(
+            parse_print_value("(gdb) $1 = 0 '\\000'"),
+            Some("0 '\\000'".to_owned())
+        );
+        assert_eq!(parse_print_value("$2 = 41"), Some("41".to_owned()));
+        assert_eq!(parse_print_value("Old value = 0"), None);
+        assert_eq!(
+            parse_print_value("No symbol \"i\" in current context."),
+            None
+        );
+        assert_eq!(
+            marker_number("(gdb) __SE_WV_BEGIN_12__", "__SE_WV_BEGIN_"),
+            Some(12)
+        );
+        assert_eq!(marker_number("__SE_WV_END_3__", "__SE_WV_BEGIN_"), None);
+    }
 
     #[test]
     fn find_matches_literal_and_case_insensitive() {

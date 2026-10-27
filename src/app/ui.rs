@@ -1163,6 +1163,15 @@ impl App {
                 MetaListField::Includes,
                 actions,
             );
+            if ui
+                .add(small_flat_button("自动检测包含目录", theme::ACCENT))
+                .on_hover_text(
+                    "扫描工程中的 .h / .hpp 文件，把所在父目录加入包含目录；Make 工程会同步到 Makefile",
+                )
+                .clicked()
+            {
+                actions.push(Action::DetectIncludeDirs);
+            }
             meta_editable_list(
                 ui,
                 "库搜索目录",
