@@ -270,10 +270,22 @@ Simple embedded 会自动检查工程根目录：
 
 在 **构建** 页可以：
 
-- 在 **工具链** 下拉里选择自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake 或自定义。工程信息里的工具链是只读显示，只能在保存这里的设置后改变。
+- 在 **工具链** 下拉里选择自动检测、Make GCC / Clang / AC5 / AC6、Keil MDK AC5 / AC6、Cargo、CMake、MicroPython 或自定义。工程信息里的工具链是只读显示，只能在保存这里的设置后改变。
 - 点 **自动检测**：先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，确定期望的构建系统；再查 PATH 和常见安装目录中的 make / cargo / cmake / UV4。识别结果会填入工具链、Build/Clean/Rebuild 命令和工具链路径。
 - 配置本地或远程 SSH 构建、Build/Clean/Rebuild/Flash 命令和并行任务数。
 - **工具链路径** 位于并行任务数下方，右侧多行输入框高度约为 Build 输入框的三倍；每行填一个目录，构建时会加到 `PATH` 前面，适合编译器、make、Keil UV4 不在系统 `PATH` 的情况。旧版本的“构建工具链”页已移除；发布版自带的 `tools/` 目录仍会自动优先使用。
+
+### MicroPython / ESP32 串口
+
+1. 在 **配置 → 构建 → 工具链** 中选择 **MicroPython**。如果工程根目录只有 `main.py` / `boot.py`，打开工程时也会自动识别为 MicroPython。
+2. 工具链下面的构建命令区域会切换成 **串口连接**：
+   - **串口端口**：点击下拉框可选择检测到的串口，也可以在弹出的“手动输入端口”里直接填写 `COM3` 或 `/dev/ttyUSB0`
+   - **波特率**：默认 `115200`，可选 `9600`、`74880`、`115200`、`230400`、`460800`、`921600` 等常用速率
+   - **自动检测**：扫描当前串口，优先选择 ESP32 / CP210x / CH340 / FTDI 等 USB 串口；没有识别到设备时会提示检查 USB 数据线和驱动
+3. 点击 **保存** 后，端口和波特率写入工程的 `.simple-embedded/settings.json` 的 `serial` 字段。
+4. 当前版本完成串口连接配置；尚未内置 REPL、文件上传或固件烧录。MicroPython 模式下 Build / Clean / Rebuild / Flash / 调试 / 检测按钮会禁用，避免误执行 C 工具链命令。
+
+开发板接线时注意使用支持数据传输的 USB 线；部分 ESP32 开发板需要 CP210x 或 CH340 驱动，安装驱动后重新点击 **自动检测**。
 
 在 **其他** 页可以：
 

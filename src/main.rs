@@ -31,6 +31,7 @@ mod navigation;
 mod project_meta;
 mod registers;
 mod search;
+mod serial;
 mod support_pack;
 mod symbols;
 mod theme;

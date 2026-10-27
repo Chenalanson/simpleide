@@ -180,11 +180,12 @@ pub enum ToolchainKind {
     KeilAc6,
     Cargo,
     CMake,
+    Micropython,
     Custom,
 }
 
 impl ToolchainKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Auto,
         Self::MakeGcc,
         Self::MakeClang,
@@ -194,6 +195,7 @@ impl ToolchainKind {
         Self::KeilAc5,
         Self::Cargo,
         Self::CMake,
+        Self::Micropython,
         Self::Custom,
     ];
 
@@ -208,6 +210,7 @@ impl ToolchainKind {
             Self::KeilAc6 => "Keil MDK · AC6",
             Self::Cargo => "Cargo",
             Self::CMake => "CMake",
+            Self::Micropython => "MicroPython",
             Self::Custom => "自定义",
         }
     }
@@ -218,7 +221,7 @@ impl ToolchainKind {
             Self::KeilAc5 | Self::KeilAc6 => BuildSystem::Keil,
             Self::Cargo => BuildSystem::Cargo,
             Self::CMake => BuildSystem::CMake,
-            Self::Auto | Self::Custom => BuildSystem::Other,
+            Self::Auto | Self::Micropython | Self::Custom => BuildSystem::Other,
         }
     }
 
@@ -236,6 +239,10 @@ impl ToolchainKind {
     pub fn is_make_gcc_like(self) -> bool {
         matches!(self, Self::MakeGcc | Self::MakeClang)
     }
+
+    pub fn is_micropython(self) -> bool {
+        matches!(self, Self::Micropython)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -252,6 +259,8 @@ pub struct BuildConfig {
     pub flash_tool: FlashTool,
     pub openocd: OpenOcdConfig,
     pub pyocd: PyOcdConfig,
+    /// Serial port used by MicroPython / ESP32 targets.
+    pub serial: crate::serial::SerialConfig,
     /// Parallel build jobs. Zero keeps the command unchanged.
     pub build_jobs: u16,
     pub ssh_host: String,
@@ -330,6 +339,7 @@ impl Default for BuildConfig {
             flash_tool: FlashTool::Custom,
             openocd: OpenOcdConfig::default(),
             pyocd: PyOcdConfig::default(),
+            serial: crate::serial::SerialConfig::default(),
             build_jobs: 0,
             ssh_host: String::new(),
             ssh_port: 22,
@@ -359,6 +369,9 @@ impl BuildConfig {
     }
 
     pub fn has_command(&self, kind: TaskKind) -> bool {
+        if self.toolchain.is_micropython() {
+            return false;
+        }
         if kind == TaskKind::Flash {
             return match self.flash_tool {
                 FlashTool::Custom => !self.flash_command.trim().is_empty(),
@@ -370,6 +383,9 @@ impl BuildConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.toolchain.is_micropython() {
+            return self.serial.validate();
+        }
         if self.build_command.trim().is_empty() {
             return Err("Build 命令不能为空".to_owned());
         }
@@ -385,6 +401,9 @@ impl BuildConfig {
     }
 
     pub fn tool_name(&self) -> &'static str {
+        if self.toolchain.is_micropython() {
+            return "MicroPython";
+        }
         let lower = self.build_command.to_ascii_lowercase();
         if lower.contains("cargo") {
             "Cargo"
@@ -471,11 +490,16 @@ impl BuildConfig {
     }
 
     pub fn toolchain_mismatch(&self) -> bool {
-        !matches!(self.toolchain, ToolchainKind::Auto | ToolchainKind::Custom)
-            && self.build_system() != self.toolchain.build_system()
+        !matches!(
+            self.toolchain,
+            ToolchainKind::Auto | ToolchainKind::Micropython | ToolchainKind::Custom
+        ) && self.build_system() != self.toolchain.build_system()
     }
 
     pub fn mode_summary(&self) -> String {
+        if self.toolchain.is_micropython() {
+            return format!("MicroPython · {}", self.serial.summary());
+        }
         format!("{} · {}", self.tool_name(), self.target.label())
     }
 
@@ -521,6 +545,11 @@ impl BuildConfig {
     }
 
     pub fn make_spec(&self, kind: TaskKind, project_root: &Path) -> Result<RunSpec, String> {
+        if self.toolchain.is_micropython() {
+            return Err(
+                "MicroPython 工具链当前用于串口连接配置，尚未接入构建或烧录命令".to_owned(),
+            );
+        }
         if kind == TaskKind::Flash {
             let load_address = self.download_address();
             let spec = match self.flash_tool {
@@ -1087,6 +1116,14 @@ pub fn autodetect(project_root: &Path) -> BuildConfig {
         };
     }
 
+    // MicroPython projects commonly only contain boot.py / main.py.
+    if project_root.join("boot.py").is_file() || project_root.join("main.py").is_file() {
+        return BuildConfig {
+            toolchain: ToolchainKind::Micropython,
+            ..BuildConfig::default()
+        };
+    }
+
     // No project build file: fall back to tools available on PATH.
     if let Some(cargo) = find_in_path("cargo") {
         add_tool_dir(&mut extra_paths, Some(cargo));
@@ -1583,6 +1620,16 @@ mod tests {
     }
 
     #[test]
+    fn autodetect_recognizes_micropython_main_py() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.py"), "print('esp32')\n").unwrap();
+        let cfg = autodetect(dir.path());
+        assert_eq!(cfg.toolchain, ToolchainKind::Micropython);
+        assert!(cfg.serial.port.is_empty());
+        assert_eq!(cfg.serial.baud, 115_200);
+    }
+
+    #[test]
     fn validates_ssh_fields() {
         let mut cfg = BuildConfig {
             target: BuildTarget::Ssh,
@@ -1593,6 +1640,37 @@ mod tests {
         cfg.ssh_host = "dev@vm".into();
         cfg.remote_dir = "/home/dev/project".into();
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn micropython_requires_serial_port_and_skips_build_commands() {
+        let mut cfg = BuildConfig {
+            toolchain: ToolchainKind::Micropython,
+            ..BuildConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+        cfg.serial.port = "COM7".into();
+        cfg.serial.baud = 115_200;
+        assert!(cfg.validate().is_ok());
+        assert!(!cfg.has_command(TaskKind::Build));
+        assert!(!cfg.has_command(TaskKind::Flash));
+        assert_eq!(cfg.tool_name(), "MicroPython");
+        assert!(cfg.mode_summary().contains("COM7"));
+        assert!(cfg.mode_summary().contains("115200"));
+    }
+
+    #[test]
+    fn micropython_serial_config_round_trips_through_json() {
+        let cfg: BuildConfig = serde_json::from_str(
+            r#"{"toolchain":"micropython","serial":{"port":"COM4","baud":921600}}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.toolchain, ToolchainKind::Micropython);
+        assert_eq!(cfg.serial.port, "COM4");
+        assert_eq!(cfg.serial.baud, 921_600);
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains(r#""toolchain":"micropython""#));
+        assert!(json.contains(r#""serial":{"port":"COM4","baud":921600}"#));
     }
 
     #[test]

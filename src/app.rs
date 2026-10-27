@@ -99,8 +99,48 @@ struct SettingsDraft {
     show_hidden: bool,
     respect_gitignore: bool,
     ignore_patterns: String,
+    serial_ports: Vec<crate::serial::PortChoice>,
+    serial_note: Option<String>,
     note: Option<String>,
     error: Option<String>,
+}
+
+impl SettingsDraft {
+    fn refresh_serial_ports(&mut self, select_best: bool) {
+        match crate::serial::scan() {
+            Ok(ports) => {
+                let chosen = if select_best || self.config.serial.port.trim().is_empty() {
+                    crate::serial::preferred_port(&ports).cloned()
+                } else {
+                    None
+                };
+                self.serial_note = if let Some(choice) = &chosen {
+                    self.config.serial.port = choice.port.clone();
+                    Some(if choice.likely_esp32 {
+                        format!("已选择 {}（ESP32 / USB 串口）", choice.label)
+                    } else {
+                        format!("已选择 {}", choice.label)
+                    })
+                } else if ports.is_empty() {
+                    Some("未检测到串口；请检查 ESP32 的 USB 数据线和串口驱动，或点端口下拉手动输入。".to_owned())
+                } else if let Some(choice) = crate::serial::preferred_port(&ports) {
+                    Some(format!(
+                        "检测到 {} 个串口；当前端口 {}，可点击自动检测切换到 {}",
+                        ports.len(),
+                        self.config.serial.port.trim(),
+                        choice.port
+                    ))
+                } else {
+                    Some(format!("检测到 {} 个串口", ports.len()))
+                };
+                self.serial_ports = ports;
+            }
+            Err(err) => {
+                self.serial_ports.clear();
+                self.serial_note = Some(err);
+            }
+        }
+    }
 }
 
 struct MetaDraft {
@@ -1573,6 +1613,10 @@ impl App {
             self.set_toast("请先打开一个工程", Severity::Warning);
             return;
         }
+        if self.effective_toolchain().is_micropython() {
+            self.set_toast("MicroPython 串口模式不支持 C 内存检测", Severity::Warning);
+            return;
+        }
         if self.debug.session.is_some() {
             self.memory_check.open = true;
             self.memory_check.tab = MemoryCheckTab::Dynamic;
@@ -2863,6 +2907,10 @@ impl App {
     }
 
     fn debug_continue(&mut self) {
+        if self.effective_toolchain().is_micropython() {
+            self.set_toast("MicroPython 串口模式不使用 gdb 调试", Severity::Warning);
+            return;
+        }
         self.focus_debug_output();
         if self.debug.running {
             self.debug_pause();
@@ -4367,7 +4415,15 @@ impl App {
             return;
         };
         if !self.build_config.has_command(kind) {
-            self.set_toast(format!("{} 尚未配置", kind.label()), Severity::Warning);
+            let message = if self.build_config.toolchain.is_micropython() {
+                format!(
+                    "MicroPython 模式下不执行{}，请先在配置 → 构建中设置串口",
+                    kind.label()
+                )
+            } else {
+                format!("{} 尚未配置", kind.label())
+            };
+            self.set_toast(message, Severity::Warning);
             if kind == TaskKind::Flash {
                 self.open_flash_config();
             } else {
@@ -4488,7 +4544,7 @@ impl App {
                 }
             }
         }
-        self.settings_draft = Some(SettingsDraft {
+        let mut draft = SettingsDraft {
             tab: SettingsTab::Build,
             extra_paths_text: extra_paths.join("\n"),
             config: self.build_config.clone(),
@@ -4513,9 +4569,15 @@ impl App {
             show_hidden: self.settings.show_hidden,
             respect_gitignore: self.settings.respect_gitignore,
             ignore_patterns: self.settings.ignore_patterns.clone(),
+            serial_ports: Vec::new(),
+            serial_note: None,
             note: None,
             error: None,
-        });
+        };
+        if draft.config.toolchain.is_micropython() {
+            draft.refresh_serial_ports(false);
+        }
+        self.settings_draft = Some(draft);
     }
 
     fn effective_includes(&self) -> &[String] {
@@ -5011,6 +5073,14 @@ impl App {
     }
 
     fn ensure_firmware_analysis(&mut self, force: bool) {
+        if self.effective_toolchain().is_micropython() {
+            self.firmware_view.path = None;
+            self.firmware_view.modified = None;
+            self.firmware_view.analysis = None;
+            self.firmware_view.error = Some("MicroPython 串口模式不使用 ELF 内存分析".to_owned());
+            self.firmware_view.checked_at = Some(Instant::now());
+            return;
+        }
         if !force
             && self
                 .firmware_view
@@ -7042,11 +7112,13 @@ impl App {
     fn show_action_rail(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let running = self.build.is_running();
         let has_project = self.project.is_some();
+        let micropython = self.effective_toolchain().is_micropython();
         let can_build = has_project && !running && self.build_config.has_command(TaskKind::Build);
         let can_clean = has_project && !running && self.build_config.has_command(TaskKind::Clean);
         let can_rebuild =
             has_project && !running && self.build_config.has_command(TaskKind::Rebuild);
         let can_flash = has_project && !running && self.build_config.has_command(TaskKind::Flash);
+        let can_debug = has_project && !micropython;
 
         egui::Panel::right("simple_embedded_action_rail")
             .show_separator_line(false)
@@ -7090,6 +7162,8 @@ impl App {
                     } else {
                         let build_tip = if can_build {
                             "构建工程 (Ctrl+B)"
+                        } else if micropython {
+                            "MicroPython 模式使用串口连接，不执行本地构建"
                         } else if has_project {
                             "请先在左上角工程卡片中配置构建环境"
                         } else {
@@ -7119,6 +7193,8 @@ impl App {
                         ui.add_space(6.0);
                         let clean_tip = if can_clean {
                             "执行 Clean 命令"
+                        } else if micropython {
+                            "MicroPython 模式不执行 Clean"
                         } else if has_project {
                             "Clean 命令尚未配置"
                         } else {
@@ -7141,6 +7217,8 @@ impl App {
                         ui.add_space(6.0);
                         let rebuild_tip = if can_rebuild {
                             "清理后重新构建 (Ctrl+Shift+B)"
+                        } else if micropython {
+                            "MicroPython 模式不执行重构"
                         } else if has_project {
                             "Rebuild 命令尚未配置"
                         } else {
@@ -7167,6 +7245,8 @@ impl App {
                                 FlashTool::PyOcd => "使用 pyOCD 烧录（本地工程目录）",
                                 FlashTool::Custom => "调用配置的烧录命令（本地工程目录）",
                             }
+                        } else if micropython {
+                            "MicroPython 模式通过串口通信，烧录命令尚未接入"
                         } else if has_project {
                             "尚未配置烧录，请在左侧“烧录配置”中设置"
                         } else {
@@ -7187,24 +7267,32 @@ impl App {
                         }
 
                         ui.add_space(6.0);
-                        let debug_tip = if self.debug.session.is_some() {
+                        let debug_tip = if micropython {
+                            "MicroPython 串口模式不使用 gdb"
+                        } else if self.debug.session.is_some() {
                             "打开调试控制 (F5 继续)"
                         } else {
                             "启动 gdb 调试（需在设置中配置调试程序）"
                         };
                         let response = ui
-                            .add_enabled_ui(has_project, |ui| {
+                            .add_enabled_ui(can_debug, |ui| {
                                 ui.add_sized([width, 30.0], theme::secondary_button("调试"))
                             })
-                            .inner
-                            .on_hover_text(debug_tip);
+                            .inner;
+                        let response = if can_debug {
+                            response.on_hover_text(debug_tip)
+                        } else {
+                            response.on_disabled_hover_text(debug_tip)
+                        };
                         if response.clicked() {
                             actions.push(Action::OpenDebug);
                         }
 
                         ui.add_space(6.0);
-                        let can_check = has_project;
-                        let check_tip = if !has_project {
+                        let can_check = has_project && !micropython;
+                        let check_tip = if micropython {
+                            "MicroPython 模式不执行 C 静态内存检测"
+                        } else if !has_project {
                             "请先打开一个工程"
                         } else if self.debug.session.is_some() {
                             "打开动态监测：硬件 watchpoint（调试已连接）"

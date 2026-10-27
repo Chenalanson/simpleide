@@ -18,13 +18,14 @@
 
 ## 功能
 
-- 打开任意文件夹作为工程；构建系统仍以 `Makefile` / `Cargo.toml` / `CMakeLists.txt` 为准，工程配置只存在于 `.simple-embedded/settings.json`
+- 打开任意文件夹作为工程；构建系统以 `Makefile` / `Cargo.toml` / `CMakeLists.txt` / `.uvprojx` 为准，只有 `main.py` / `boot.py` 的目录识别为 MicroPython；工程配置只存在于 `.simple-embedded/settings.json`
 - 标题栏与界面配色一致（亮色主题使用亮色标题栏），构建 / 清理 / 重构建 / 烧录集中在右侧操作栏；配置界面从构建卡片的“配置”或 `Ctrl+,` 打开
 - 全应用主题：右侧操作栏底部 **设置** 打开设置窗口，第一个菜单是 **编辑器主题**，内置 40 套暗色 + 10 套亮色（共 50 套）。点击主题即时预览，整个软件（编辑器、侧栏、面板、菜单、按钮、状态栏和 Windows 标题栏）一起换肤；保存后写入全局设置，取消或关闭会恢复原主题
 - 左侧栏全高，资源管理器与工程信息默认各占一半高度；文件树较短时工程信息自动上移紧接文件列表；文件树较长时可拖动中间分割线调整比例；拖动左栏右边缘可调整宽度；分割比例和折叠状态会保存
 - 左侧构建卡片显示工程名（加粗）、完整路径、检测到的芯片型号和构建模式；未导入时按钮为“导入 / 配置 / 工作区”，导入后为“更换 / 配置 / 工作区”
 - 资源管理器、工程信息、构建配置等可折叠区域带缓动动画和旋转箭头；状态提示 Toast 使用更大字号，便于阅读
-- 工程信息树：分组和列表标题左侧都有折叠箭头，整行可点击并显示淡蓝色选中背景；**工具链** 在这里只读显示，修改入口是 **配置 → 构建 → 工具链**（自动检测 / Make GCC / Clang / AC5 / AC6 / Keil MDK AC5 / AC6 / Cargo / CMake）。自动检测先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，再查 PATH 和常见安装目录。CubeMX 同时生成 MDK-ARM 和 Makefile 时，Make 构建读取 Makefile 元数据，Keil 工具链读取 `.uvprojx`，不再无条件显示 Keil；支持识别 armclang（AC6）和 armcc（AC5）。列表右侧 `+` 可添加；包含目录支持 **自动检测包含目录**，递归扫描 `.h` / `.hpp` 等头文件并把所在父目录追加进去；仅有效构建系统为 Make 时同步到 Makefile（自动备份），Keil `.uvprojx` 只读
+- 工程信息树：分组和列表标题左侧都有折叠箭头，整行可点击并显示淡蓝色选中背景；**工具链** 在这里只读显示，修改入口是 **配置 → 构建 → 工具链**（自动检测 / Make GCC / Clang / AC5 / AC6 / Keil MDK AC5 / AC6 / Cargo / CMake / MicroPython）。自动检测先看工程根目录的 Cargo.toml / Makefile / CMakeLists.txt / `.uvprojx`，再查 PATH 和常见安装目录；根目录只有 `main.py` / `boot.py` 时识别为 MicroPython。CubeMX 同时生成 MDK-ARM 和 Makefile 时，Make 构建读取 Makefile 元数据，Keil 工具链读取 `.uvprojx`，不再无条件显示 Keil；支持识别 armclang（AC6）和 armcc（AC5）。列表右侧 `+` 可添加；包含目录支持 **自动检测包含目录**，递归扫描 `.h` / `.hpp` 等头文件并把所在父目录追加进去；仅有效构建系统为 Make 时同步到 Makefile（自动备份），Keil `.uvprojx` 只读
+- MicroPython / ESP32：在 **配置 → 构建 → 工具链** 选择 **MicroPython** 后，下方内容切换为 **串口连接**，可选择端口和波特率（默认 115200），端口旁的 **自动检测** 会扫描串口并优先选择 ESP32 / CP210x / CH340 / FTDI 等 USB 串口；端口和波特率保存在工程 `.simple-embedded/settings.json` 的 `serial` 字段。当前版本完成串口连接配置，尚未内置 REPL、文件上传或固件烧录，MicroPython 模式下构建 / 重构 / 烧录 / 调试 / 检测按钮会禁用
 - 芯片支持包：在工程信息中点击 `+` 添加 Keil/CMSIS `.pack` / `.pdsc`，文件放在工程根目录；显示包名、版本、厂商、设备和 SVD 数量，寄存器浏览器可直接使用包内 SVD
 - 构建选项：包含全局选项、C/C++ 编译器、汇编器和链接器四个页面，并按当前工具链切换内容。GCC/Clang 先用 Use MicroLIB 作为浮点选项总开关，勾选后才能启用 newlib-nano `printf` / `scanf` 浮点支持（`-u _printf_float` / `-u _scanf_float`），另有 LTO 和函数分段；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段。Make + GCC/Clang 工程打开时读取现有 `OPT` / `CFLAGS`，保存时按差异写回；选择 `AXF` 会生成 `.axf` 副本规则；Keil 和 Make AC5/AC6 只写入工程配置，不修改 `.uvprojx`
 - 左侧目录树：第一行显示工程根目录，可展开/折叠；支持隐藏文件、刷新、点击打开文件；右键可新建文件/文件夹、粘贴、剪切/复制、重命名、删除、复制路径、在资源管理器中显示或用 VS Code 打开
@@ -227,6 +228,7 @@ src/
   file_tree.rs   惰性目录树
   highlight.rs   syntect 高亮 + galley 缓存
   log.rs         ANSI SGR 解析、错误分级、日志裁剪
+  serial.rs      MicroPython / ESP32 串口配置、端口扫描与 ESP32/CP210x/CH340 识别
   codetheme.rs   50 套编辑器/应用主题色板
   theme.rs       从主题派生面板、文字、强调色并安装 egui 样式
   util.rs        路径、换行、文件管理器集成
@@ -256,6 +258,7 @@ build.rs        生成并嵌入 exe 图标资源
 - OpenOCD / pyOCD 直接以参数启动，不经过 shell；烧录使用 `program` / `flash`，调试时启动 `gdbserver` 并由 arm-none-eabi-gdb 连接。内置烧录支持 `.hex` / `.elf` / `.axf`，也支持带起始地址的 `.bin`（地址来自内存布局）
 - 并行构建只对 Make / Cargo / CMake 自动注入环境变量；自定义脚本和直接调用 Ninja 需要自己添加并行参数
 - 工具链下拉只影响工程元数据、内存布局和构建选项的展示，不会自动改写 Build/Clean/Rebuild 命令；选择 Keil AC5/AC6 后请把构建命令配置为 UV4/UV5 或自定义包装脚本
+- MicroPython 工具链当前只接入串口连接配置（端口、波特率、自动检测）；尚未实现 REPL、文件上传、软复位或固件烧录。MicroPython 模式下构建 / 重构 / 烧录 / 调试 / 检测按钮禁用，后续可在此基础上接入 `mpremote` 等工具
 - OpenOCD 接口自动检测基于 USB VID/PID 启发式；同时连接多个探针时取第一个，建议用接口下拉确认实际使用的烧录器
 
 ## 开发

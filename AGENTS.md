@@ -14,7 +14,7 @@ Simple embedded 是一个 Windows 桌面端、文件夹优先的极简嵌入式 
 
 核心产品约束：**工程文件夹就是工程**。不要引入 `.eide`、`.mini-ide` 等专有工程格式，也不要修改 Keil `.uvprojx`。用户设置默认写到用户目录；工程内的普通 JSON 配置文件 `.simple-embedded/settings.json` 保存该工程的构建/烧录配置，打开工程时优先读取并自动迁移旧的本机配置。允许写入工程的场景：自动创建/保存工程配置、用户主动生成 `<工程名>.se-workspace`、Makefile 工程保存构建选项或 C/C++ 属性时按差异同步（修改前自动备份到用户目录）、用户主动添加芯片支持包时复制 `.pack` / `.pdsc` 到工程根目录。
 
-技术栈：Rust 2021、eframe/egui 0.34.3（glow）、syntect 5.3、serde、zip 9.1（读取 Keil/CMSIS 支持包）、OpenSSH。
+技术栈：Rust 2021、eframe/egui 0.34.3（glow）、syntect 5.3、serde、zip 9.1（读取 Keil/CMSIS 支持包）、serialport 4（MicroPython / ESP32 串口扫描）、OpenSSH。
 
 ## 快速命令
 
@@ -60,6 +60,7 @@ src/highlight.rs       syntect 高亮和 galley 缓存
 src/hover.rs           标识符悬停：声明签名、注释、返回值/类型
 src/minimap.rs         编辑器右侧代码预览、缩略行缓存和滚动跳转
 src/log.rs             ANSI SGR、错误分级、日志上限
+src/serial.rs          MicroPython / ESP32 串口配置、端口扫描与 USB 桥接芯片识别
 src/codetheme.rs       50 套编辑器 / 应用主题色板（暗色 40 + 亮色 10）
 src/theme.rs           从当前主题派生整套 UI 配色、egui 样式和按钮样式
 src/toolchain.rs       系统 / 软件自带工具链检测、PATH 目录和复制安装
@@ -147,7 +148,7 @@ docs/                  README 截图和使用教程
 - 面包屑栏只显示从工程根目录开始的路径（`doc.rel_path` 的 `/` 替换为 ` > `）和未保存标记；编码、行尾、语言、只读、寄存器、数组、符号、格式化、自动换行、保存移到最底部状态栏。补全和列编辑不出现在可见工具栏。
 - 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::gutter()` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。右侧操作栏宽约 58px（原 110px 的一半），按钮内边距同步收窄。编辑器卡底部两角由 `paint_bottom_corners` 补绘 `gutter` 圆角，输出面板标题栏紧贴面板顶部，拖动区域合并到标题栏顶部 4px，日志区使用 `editor_bg` 并撑满剩余空间。输出面板标题提供“构建输出 / 调试输出”切换，`OutputView` 决定显示哪一份日志；构建开始时切回构建，启动调试时切到调试。
 - 右侧操作栏最底部是 **设置** 按钮，大小与构建 / 烧录等按钮一致；点击打开标题为“设置”的独立窗口。窗口左侧第一个菜单是 **编辑器主题**，右侧列出 40 套暗色 + 10 套亮色共 50 套主题，支持按名称或色值搜索。主题卡片展示名称、明暗标签、语法示例和 9 色色板；点击卡片即时预览整个应用，保存后写入 `Settings.editor_theme`，取消 / 关闭 / Esc 恢复原主题。`codetheme.rs` 只保存 9 个代码色字段，`theme.rs` 从中派生 bg / gutter / panel / surface / text / accent / border / success 等整套 UI 色，因此侧栏、菜单、状态栏和 Windows 标题栏会一起切换；不要把它退回成只给代码区换色。
-- “配置”弹窗第一行是 构建 / 编辑器 / 调试 / 其他 四个页签，下方只显示当前页；构建页包含工具链下拉、自动检测、Build/Clean/Rebuild/Flash 命令、“并行任务数”（0 = 不启用，可一键填入 CPU 核心数）和“工具链路径”。**自动检测** 按钮紧挨工具链下拉，完整说明作为鼠标下方的悬停提示；“并行任务数”直接跟在 Rebuild（或 Flash）后面，不再有“并行构建”小标题和解释段落。`form_line` 的单行输入框高 26px，构建页行距收紧到 3px，命令行之间只留 1px 额外间距；配置页内容区固定为 400px（以构建页高度为准），切换页签时弹窗高度不变。“工具链路径”与 Build 等标签同列，右侧多行输入框高度为 Build 输入框的三倍（约 78px），内容超出时在框内滚动；它对应 `BuildConfig.extra_paths`，并在打开配置时合并自动检测到的工具目录。构建页不再显示工程路径，底部的“本地或 SSH 构建共用同一组命令”说明也已删除，只保留右下角的保存 / 取消按钮。“当前烧录工具为…”和并行构建说明段落已删除。自动检测先看工程根目录的构建文件，再查 PATH/常见安装目录。原来的“构建工具链”页已删除；软件自带 `tools/` 存在时自动优先使用，否则回退到旧配置路径、额外 PATH 和系统 PATH。调试页的调试程序和 gdb 路径在工程打开时读写工程的 `debug` 节点（无工程时才用全局设置），提供浏览和自动检测；调试程序为空时会自动回填 build 产物，gdb 路径既可填 exe，也可填 `bin` 目录。
+- “配置”弹窗第一行是 构建 / 编辑器 / 调试 / 其他 四个页签，下方只显示当前页；构建页包含工具链下拉、自动检测、Build/Clean/Rebuild/Flash 命令、“并行任务数”（0 = 不启用，可一键填入 CPU 核心数）和“工具链路径”。**自动检测** 按钮紧挨工具链下拉，完整说明作为鼠标下方的悬停提示；“并行任务数”直接跟在 Rebuild（或 Flash）后面，不再有“并行构建”小标题和解释段落。`form_line` 的单行输入框高 26px，构建页行距收紧到 3px，命令行之间只留 1px 额外间距；配置页内容区固定为 400px（以构建页高度为准），切换页签时弹窗高度不变。“工具链路径”与 Build 等标签同列，右侧多行输入框高度为 Build 输入框的三倍（约 78px），内容超出时在框内滚动；它对应 `BuildConfig.extra_paths`，并在打开配置时合并自动检测到的工具目录。构建页不再显示工程路径，底部的“本地或 SSH 构建共用同一组命令”说明也已删除，只保留右下角的保存 / 取消按钮。“当前烧录工具为…”和并行构建说明段落已删除。自动检测先看工程根目录的构建文件，再查 PATH/常见安装目录。原来的“构建工具链”页已删除；软件自带 `tools/` 存在时自动优先使用，否则回退到旧配置路径、额外 PATH 和系统 PATH。调试页的调试程序和 gdb 路径在工程打开时读写工程的 `debug` 节点（无工程时才用全局设置），提供浏览和自动检测；调试程序为空时会自动回填 build 产物，gdb 路径既可填 exe，也可填 `bin` 目录。工具链选择 **MicroPython** 时，构建页在工具链行下方改为串口连接面板：端口下拉（弹层内可手动输入）、波特率下拉、端口旁的 **自动检测**，并隐藏构建位置、SSH、命令、并行任务和工具链路径；端口/波特率来自 `BuildConfig.serial`。
 - 最底部状态栏是贯穿整个窗口宽度的矩形条（无圆角、无外圈间隙），内容靠右排列：右侧操作按钮 + 行列/缩进/编码/行尾/语言信息。
 - 资源管理器、工程信息、构建配置、芯片支持包、烧录配置、C/C++ 列表等可折叠区域使用缓动动画，不直接瞬间显示/隐藏：侧栏高度动画 0.22s、`cubic_in_out`，其余折叠组使用 egui `CollapsingState` 和全局 0.20s 动画；箭头随 openness 旋转。动画期间主动 `request_repaint()`，避免掉帧式跳变。
 - Toast 使用 12.5px 正文、10.5px 状态文字、14×10 内边距，最大宽度 460px；不要再把提示字号设为 9–11px。
@@ -159,7 +160,8 @@ docs/                  README 截图和使用教程
 ### 工程信息
 
 - `project_meta.rs` 按 `BuildConfig.effective_build_system()` 读取 Makefile 或 Keil `.uvprojx`，提取目标名、芯片、CPU、浮点、链接脚本、内存布局、包含目录、宏定义等。CubeMX 同时生成 `MDK-ARM/*.uvprojx` 和根 Makefile 时，Make 构建优先 Makefile 元数据，Keil 工具链优先 `.uvprojx`，不会再无条件显示 Keil。Makefile 的 `CC` / `PREFIX` 识别 GCC、Clang、armclang（AC6）和 armcc（AC5）；芯片型号优先从具体链接脚本名（如 `STM32F407ZGTx_FLASH.ld`）提取，`XX` 通用名回退到 `C_DEFS`。
-- 工程信息 → 构建配置里的 **工具链** 只读显示当前有效工具链；鼠标悬停在工具链值上时，才在鼠标下方显示“在 配置 → 构建 中修改”，不再占用单独一行。不能在这里直接改。修改入口是配置 → 构建 → **工具链** 下拉（自动检测、Make · GCC/Clang/AC5/AC6、Keil MDK · AC5/AC6、Cargo、CMake、自定义）。保存设置后重新计算工程元数据、内存布局、芯片支持包和调试产物；构建命令与所选工具链不一致时显示黄色警告。`BuildConfig.toolchain` 保存在工程配置中。配置里的 **自动检测** 顺序是：先看工程根目录的 `Cargo.toml` / Makefile / `CMakeLists.txt` / `*.uvprojx`，确定期望的构建系统；再在 PATH 和常见安装目录中查找对应工具（Keil 会查 `UV4/UV5` 和常见 `Keil_v5\UV4` 目录）。根目录没有构建文件时才回退到 PATH 中的 cargo / cmake / make。
+- 工程信息 → 构建配置里的 **工具链** 只读显示当前有效工具链；鼠标悬停在工具链值上时，才在鼠标下方显示“在 配置 → 构建 中修改”，不再占用单独一行。不能在这里直接改。修改入口是配置 → 构建 → **工具链** 下拉（自动检测、Make · GCC/Clang/AC5/AC6、Keil MDK · AC5/AC6、Cargo、CMake、MicroPython、自定义）。保存设置后重新计算工程元数据、内存布局、芯片支持包和调试产物；构建命令与所选工具链不一致时显示黄色警告。`BuildConfig.toolchain` 保存在工程配置中。配置里的 **自动检测** 顺序是：先看工程根目录的 `Cargo.toml` / Makefile / `CMakeLists.txt` / `*.uvprojx`，确定期望的构建系统；再在 PATH 和常见安装目录中查找对应工具（Keil 会查 `UV4/UV5` 和常见 `Keil_v5\UV4` 目录）。根目录只有 `main.py` / `boot.py` 时识别为 MicroPython；没有构建文件时才回退到 PATH 中的 cargo / cmake / make。
+- MicroPython / ESP32：`BuildConfig.serial` 保存 `port` 和 `baud`（默认 115200），随工程 `.simple-embedded/settings.json` 一起持久化。构建页选中 MicroPython 后隐藏构建位置、SSH、Build/Clean/Rebuild/Flash、并行任务和工具链路径，改为串口连接面板：端口下拉（弹层内可手动输入 COM3 或 `/dev/ttyUSB0`）、波特率下拉和 **自动检测**。`serial.rs::scan()` 使用 `serialport::available_ports()`，按 VID/产品名给端口打分并排序，优先 Espressif `0x303A`、CP210x、CH340/CH910x、FTDI、PL2303 等；打开配置或切换工具链时扫描，自动检测按钮总是选择当前最佳端口。面板提示未检测到设备时仍允许手动端口，保存时要求端口非空、波特率在 1200–4000000。MicroPython 模式下 `has_command` 全部为 false，构建/重构/烧录/调试/检测按钮禁用，`make_spec` 返回明确错误。当前只完成串口连接配置，尚未接入 REPL、文件上传、软复位或固件烧录。
 - 左栏先显示资源管理器，再显示“工程信息”；分割线紧贴“工程信息”标题上下，包含“构建配置”“芯片支持包”“烧录配置”“C/C++ 属性”四个分组。分组标题以及三个 C/C++ 列表标题左侧各有折叠箭头，整行可点击并切换展开；点击行会记录选中状态并显示淡蓝色背景，加号只在鼠标悬停对应行时显示，点击只添加、不折叠。信息行固定 18px 高、行距 2px，`interact_size.y` 在工程信息内收紧到 20px，整体密度接近资源管理器。构建配置的“编辑”、C/C++ 属性的“自动检测包含目录”/“批量编辑”、烧录配置的“编辑”和“内存布局...”都使用内容宽度的按钮并左对齐。展开和选中状态存在 egui 内存中。数据按工程缓存，刷新文件树时重新读取。
 - “芯片支持包”分组右侧的绿色 `+` 打开文件选择器，只接受 Keil/CMSIS `.pack` / `.pdsc`，并把文件复制到工程根目录（同名文件不覆盖）。`support_pack.rs` 解析包名、厂商、版本、设备列表和 SVD 数量；`.pack` 通过 zip 读取包内 `.pdsc`，不整体解压。寄存器浏览器在工程内没有独立 `.svd` 时，会直接读取第一个 `.pack` 内的 SVD。支持包不会生成自定义工程文件，也不代表完整的 Keil 设备树/启动文件/烧录算法导入。
 - 包含目录、库搜索目录和预处理器定义支持在左栏编辑：每个列表右侧有绿色 `+`，批量编辑仍可用。包含目录下方的 **自动检测包含目录** 会递归扫描工程内 `.h` / `.hpp` / `.hh` / `.hxx` / `.inl` 文件，跳过构建目录、隐藏目录和忽略目录，按绝对路径去重后把父目录追加到列表。覆盖值存 `BuildConfig.meta_includes` / `meta_library_dirs` / `meta_defines`（`None` 表示自动检测）。仅当有效构建系统是 Make 时保存会同步到 `C_INCLUDES` / `LIBDIR` / `C_DEFS`，修改前备份到 `%APPDATA%\SimpleEmbedded\backups`；选择 Keil AC5/AC6 时只写工程配置，`.uvprojx` 不会被修改。
@@ -213,7 +215,7 @@ docs/                  README 截图和使用教程
 ```
 
 - 打开工程时优先读取工程的 `.simple-embedded/settings.json`；不存在时回退到用户目录里的每工程配置，并自动迁移写入工程文件。迁移成功后删除用户目录里的旧条目，避免删除工程配置后被旧缓存恢复；只有工程文件写入失败时才保留用户目录回退。
-- 工程文件是普通 JSON（`ProjectSettings { version, build, debug }`），保存 Build/Clean/Rebuild/Flash/SSH、OpenOCD/pyOCD、并行任务数、C/C++ 属性覆盖、构建选项、内存布局 `build.memory`，以及调试程序 `debug.program` 和 gdb 路径 `debug.gdb_path`。可以手改，也可以和源码一起提交。
+- 工程文件是普通 JSON（`ProjectSettings { version, build, debug }`），保存 Build/Clean/Rebuild/Flash/SSH、OpenOCD/pyOCD、MicroPython 串口 `serial.port` / `serial.baud`、并行任务数、C/C++ 属性覆盖、构建选项、内存布局 `build.memory`，以及调试程序 `debug.program` 和 gdb 路径 `debug.gdb_path`。可以手改，也可以和源码一起提交。
 - 全局设置继续保存最近工程、编辑器偏好、主题（`Settings.editor_theme`）、输出面板状态等；启动时先读取该字段并用 `theme::apply` 派生整套 UI 配色，再打开上次工程。`Settings::load` 容忍 UTF-8 BOM，解析失败会回退默认值并输出到 stderr。
 - Makefile 备份位于 `%APPDATA%\SimpleEmbedded\backups\<工程名>-<hash>\`，默认保留最近 12 份。
 - 自动检测结果只是初值；用户可以随时在设置里改。修改设置后必须点击保存。
@@ -238,6 +240,7 @@ docs/                  README 截图和使用教程
 
 - 没有 `.eide`/`.mini-ide` 等专有工程格式、Keil 自动导入或链接脚本生成器；`.simple-embedded/settings.json` 和 `.se-workspace` 都是普通 JSON。芯片支持包只读取元数据、SVD 和器件内存区域，不导入 Keil 设备树、启动文件、链接脚本或烧录算法。Keil 工程可以通过手动命令或外部包装脚本接入。
 - 工具链下拉只改变元数据、内存布局和构建选项展示，不会自动改写 Build/Clean/Rebuild 命令；选择 Keil AC5/AC6 后仍需把构建命令配置为 UV4/UV5 或自定义包装脚本，界面会对“构建命令与工具链不一致”给出黄色提示。Keil 构建选项只写入工程配置，不修改 `.uvprojx`。
+- MicroPython 适配目前只完成工具链选择与串口连接配置（端口、波特率、自动检测），尚未实现 REPL、文件上传、软复位或固件烧录；该模式下构建 / 重构 / 烧录 / 调试 / 检测按钮禁用，构建命令不会被调用。端口自动检测依赖 `serialport` crate 的枚举结果，按 USB VID/产品名启发式排序，不能保证每个 ESP32 开发板都被识别为“ESP32”。
 - OpenOCD 自动检测是 USB VID/PID 启发式：Windows 使用 PnP，Linux 使用 `lsusb`；同时连接多个探针时按 ST-Link、CMSIS-DAP/DAPLink、J-Link 的优先级取第一个，用户可在接口下拉中改选。它不是对 OpenOCD 支持的全部适配器做穷举。
 - 没有 LSP/语义级跳转；符号搜索、TODO、寄存器浏览器都是轻量索引。补全/定义/引用是启发式功能；成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型。
 - 内存布局的起始地址/大小只写入工程 `.simple-embedded/settings.json`，不会自动改写链接脚本；Flash/RAM 总量优先来自链接脚本，其次来自芯片支持包。`.bin` 使用内存布局里的下载起始地址。
@@ -260,7 +263,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil 工程、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、图标 ICO 条目与 exe 嵌入资源一致性。当前共 182 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、图标 ICO 条目与 exe 嵌入资源一致性。当前共 190 个测试。
 
 UI 改动后建议：
 

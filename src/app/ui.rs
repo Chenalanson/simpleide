@@ -179,17 +179,26 @@ impl App {
             .as_ref()
             .map(|project| (project.name.clone(), util::display_path(&project.root)));
         let has_project = project_info.is_some();
+        let micropython = self.build_config.toolchain.is_micropython();
         let mode = if has_project {
-            let toolchain = self.build_config.effective_toolchain(&self.project_meta);
-            format!(
-                "{} · {}",
-                toolchain.label(),
-                self.build_config.target.label()
-            )
+            if micropython {
+                format!("MicroPython · {}", self.build_config.serial.summary())
+            } else {
+                let toolchain = self.build_config.effective_toolchain(&self.project_meta);
+                format!(
+                    "{} · {}",
+                    toolchain.label(),
+                    self.build_config.target.label()
+                )
+            }
         } else {
             self.build_config.mode_summary()
         };
-        let has_command = !self.build_config.build_command.trim().is_empty();
+        let has_command = if micropython {
+            self.build_config.serial.is_ready()
+        } else {
+            !self.build_config.build_command.trim().is_empty()
+        };
         let active_path = self.active_document().map(|doc| doc.path.clone());
         let show_hidden = self.settings.show_hidden;
 
@@ -255,6 +264,12 @@ impl App {
                                 let (dot_color, builder_text, builder_color) = if has_project {
                                     if has_command {
                                         (theme::success(), mode.clone(), theme::text_dim())
+                                    } else if micropython {
+                                        (
+                                            theme::warning(),
+                                            "MicroPython · 请选择串口".to_owned(),
+                                            theme::warning(),
+                                        )
                                     } else {
                                         (
                                             theme::warning(),
@@ -6982,6 +6997,7 @@ impl App {
                             } else {
                                 draft.config.toolchain.label().to_owned()
                             };
+                            let previous_toolchain = draft.config.toolchain;
                             egui::ComboBox::from_id_salt("simple_embedded_settings_toolchain")
                                 .selected_text(
                                     RichText::new(selected).size(11.0).color(theme::text_dim()),
@@ -7001,10 +7017,19 @@ impl App {
                                         );
                                     }
                                 });
-                            if ui
-                                .add(theme::secondary_button("自动检测"))
-                                .on_hover_text_at_pointer("自动检测先看工程根目录的 Makefile / Cargo.toml / CMakeLists.txt / .uvprojx，再查询 PATH。工具链保存在工程配置，工程信息只读显示。")
-                                .clicked()
+                            if draft.config.toolchain != previous_toolchain {
+                                draft.note = None;
+                                if draft.config.toolchain.is_micropython() {
+                                    draft.config.target = BuildTarget::Local;
+                                    draft.refresh_serial_ports(false);
+                                }
+                            }
+                            let micropython = draft.config.toolchain.is_micropython();
+                            if !micropython
+                                && ui
+                                    .add(theme::secondary_button("自动检测"))
+                                    .on_hover_text_at_pointer("自动检测先看工程根目录的 Makefile / Cargo.toml / CMakeLists.txt / .uvprojx，再查询 PATH。工具链保存在工程配置，工程信息只读显示。")
+                                    .clicked()
                             {
                                 let detected = autodetect(root);
                                 let toolchain = detected.toolchain;
@@ -7044,8 +7069,11 @@ impl App {
                                 .on_hover_text(note);
                             }
                         });
+                        let micropython = draft.config.toolchain.is_micropython();
+                        if micropython {
+                            show_serial_settings(ui, &mut draft);
+                        } else {
                         ui.add_space(6.0);
-
                         ui.horizontal(|ui| {
                             ui.add_sized(
                                 [86.0, 22.0],
@@ -7223,6 +7251,7 @@ impl App {
                                     );
                                 });
                         });
+                        }
                     } else {
                         ui.add_space(10.0);
                         ui.label(
@@ -7468,6 +7497,7 @@ impl App {
             draft.config.flash_command = draft.config.flash_command.trim().to_owned();
             draft.config.ssh_host = draft.config.ssh_host.trim().to_owned();
             draft.config.remote_dir = draft.config.remote_dir.trim().to_owned();
+            draft.config.serial.port = draft.config.serial.port.trim().to_owned();
             let mut extra_paths = Vec::new();
             for path in draft.extra_paths_text.lines() {
                 let path = path.trim();
@@ -8655,6 +8685,136 @@ fn theme_card(
         crate::codetheme::hex(theme.selection),
         crate::codetheme::hex(theme.line_highlight),
     ))
+}
+
+fn show_serial_settings(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
+    ui.add_space(10.0);
+    Frame::new()
+        .fill(theme::bg())
+        .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+        .corner_radius(7)
+        .inner_margin(Margin::symmetric(12, 9))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new("串口连接")
+                    .size(12.0)
+                    .strong()
+                    .color(theme::text()),
+            );
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new(
+                    "MicroPython 通过串口与 ESP32 通信；保存后端口和波特率写入工程配置。",
+                )
+                .size(9.0)
+                .color(theme::text_faint()),
+            );
+            ui.add_space(6.0);
+
+            let ports = draft.serial_ports.clone();
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [86.0, 22.0],
+                    Label::new(
+                        RichText::new("串口端口")
+                            .size(10.5)
+                            .color(theme::text_dim()),
+                    ),
+                );
+                let selected = if draft.config.serial.port.trim().is_empty() {
+                    "选择串口".to_owned()
+                } else {
+                    draft.config.serial.port.clone()
+                };
+                egui::ComboBox::from_id_salt("simple_embedded_serial_port")
+                    .selected_text(RichText::new(selected).size(11.0).color(theme::text_dim()))
+                    .width(250.0)
+                    .show_ui(ui, |ui| {
+                        ui.label(
+                            RichText::new("手动输入端口")
+                                .size(9.5)
+                                .color(theme::text_faint()),
+                        );
+                        ui.add(
+                            TextEdit::singleline(&mut draft.config.serial.port)
+                                .desired_width(280.0)
+                                .hint_text("COM3 或 /dev/ttyUSB0"),
+                        );
+                        if !ports.is_empty() {
+                            ui.separator();
+                            ui.label(
+                                RichText::new("检测到的串口")
+                                    .size(9.5)
+                                    .color(theme::text_faint()),
+                            );
+                            for choice in &ports {
+                                let label = if choice.likely_esp32 {
+                                    format!("{}（ESP32 / USB 串口）", choice.label)
+                                } else {
+                                    choice.label.clone()
+                                };
+                                ui.selectable_value(
+                                    &mut draft.config.serial.port,
+                                    choice.port.clone(),
+                                    label,
+                                );
+                            }
+                        }
+                    });
+                if ui
+                    .add(theme::secondary_button("自动检测"))
+                    .on_hover_text("扫描串口并优先选择 ESP32 / CP210x / CH340 / FTDI 等 USB 串口")
+                    .clicked()
+                {
+                    draft.refresh_serial_ports(true);
+                }
+            });
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [86.0, 22.0],
+                    Label::new(RichText::new("波特率").size(10.5).color(theme::text_dim())),
+                );
+                egui::ComboBox::from_id_salt("simple_embedded_serial_baud")
+                    .selected_text(
+                        RichText::new(draft.config.serial.baud.to_string())
+                            .size(11.0)
+                            .color(theme::text_dim()),
+                    )
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for rate in crate::serial::COMMON_BAUD_RATES {
+                            ui.selectable_value(
+                                &mut draft.config.serial.baud,
+                                *rate,
+                                rate.to_string(),
+                            );
+                        }
+                    });
+                ui.label(
+                    RichText::new("ESP32 常用 115200")
+                        .size(9.0)
+                        .color(theme::text_faint()),
+                );
+            });
+
+            if let Some(note) = &draft.serial_note {
+                ui.add_space(4.0);
+                let color = if draft.serial_ports.is_empty() {
+                    theme::warning()
+                } else {
+                    theme::success()
+                };
+                ui.add(Label::new(RichText::new(note).size(9.0).color(color)).wrap());
+            }
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("自动检测会优先选择 ESP32 / CP210x / CH340 / FTDI 等 USB 串口。")
+                    .size(9.0)
+                    .color(theme::text_faint()),
+            );
+        });
 }
 
 fn settings_path_row(ui: &mut egui::Ui, label: &str, value: &mut String, title: &str, hint: &str) {
