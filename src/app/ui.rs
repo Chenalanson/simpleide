@@ -250,7 +250,26 @@ impl App {
                                         RichText::new(builder_text).size(12.0).color(builder_color),
                                     );
                                 });
-                                ui.add_space(6.0);
+                                ui.add_space(3.0);
+                                if has_project {
+                                    if let Some(device) = self.project_meta.device.as_deref() {
+                                        ui.allocate_ui_with_layout(
+                                            egui::vec2(ui.available_width(), 16.0),
+                                            Layout::right_to_left(Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    RichText::new(device)
+                                                        .size(11.5)
+                                                        .color(theme::TEXT_DIM),
+                                                )
+                                                .on_hover_text(
+                                                    "从 Makefile / .uvprojx 检测到的芯片型号",
+                                                );
+                                            },
+                                        );
+                                    }
+                                }
+                                ui.add_space(3.0);
                                 let spacing = ui.spacing().item_spacing.x;
                                 let columns = 3.0;
                                 let button_width =
