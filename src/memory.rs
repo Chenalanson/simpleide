@@ -200,6 +200,365 @@ struct ElfSection {
     size: u64,
 }
 
+/// One writable global/static object found in the ELF symbol table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirmwareSymbol {
+    pub name: String,
+    pub address: u64,
+    pub size: u64,
+    pub section: String,
+}
+
+/// Lightweight firmware picture used by the build-output memory view.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FirmwareAnalysis {
+    /// Global/static objects in writable, allocated sections, largest first.
+    pub globals: Vec<FirmwareSymbol>,
+    pub data_size: u64,
+    pub bss_size: u64,
+    pub stack_top: Option<u64>,
+    pub stack_size: Option<u64>,
+    pub stack_limit: Option<u64>,
+    pub heap_size: Option<u64>,
+    pub heap_kind: Option<String>,
+    pub has_symbols: bool,
+}
+
+impl FirmwareAnalysis {
+    /// Stack bytes currently in use, assuming `sp` is the active stack pointer.
+    pub fn stack_used(&self, sp: u64) -> Option<u64> {
+        let top = self.stack_top?;
+        let limit = self.stack_limit?;
+        (sp >= limit && sp <= top).then(|| top.saturating_sub(sp))
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct ElfSectionDetail {
+    name: String,
+    kind: u32,
+    flags: u64,
+    offset: u64,
+    size: u64,
+    link: u32,
+    entsize: u64,
+}
+
+#[derive(Clone, Debug)]
+struct ElfRawSymbol {
+    name: String,
+    value: u64,
+    size: u64,
+    info: u8,
+    section_name: String,
+    section_flags: u64,
+}
+
+/// Parse an ELF/AXF file and extract globals, the configured stack region and
+/// the FreeRTOS heap symbols. Returns `None` for non-ELF files or invalid data.
+pub fn analyze_elf(path: &Path) -> Option<FirmwareAnalysis> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 52 || &data[..4] != b"\x7fELF" {
+        return None;
+    }
+    let class = data[4];
+    let little_endian = data[5] != 2;
+    let (shoff, shentsize, shnum, shstrndx) = match class {
+        1 => (
+            read_u32(&data, 32, little_endian)? as u64,
+            read_u16(&data, 46, little_endian)? as u64,
+            read_u16(&data, 48, little_endian)? as u64,
+            read_u16(&data, 50, little_endian)? as u64,
+        ),
+        2 => (
+            read_u64(&data, 40, little_endian)?,
+            read_u16(&data, 58, little_endian)? as u64,
+            read_u16(&data, 60, little_endian)? as u64,
+            read_u16(&data, 62, little_endian)? as u64,
+        ),
+        _ => return None,
+    };
+    if shoff == 0 || shentsize < if class == 1 { 40 } else { 64 } || shnum == 0 {
+        return None;
+    }
+    let count = (shnum as usize).min(8192);
+    let mut sections = Vec::with_capacity(count);
+    for index in 0..count {
+        let offset = shoff.checked_add((index as u64).checked_mul(shentsize)?)?;
+        let offset = usize::try_from(offset).ok()?;
+        let section = match class {
+            1 => ElfSectionDetail {
+                kind: read_u32(&data, offset + 4, little_endian)?,
+                flags: read_u32(&data, offset + 8, little_endian)? as u64,
+                offset: read_u32(&data, offset + 16, little_endian)? as u64,
+                size: read_u32(&data, offset + 20, little_endian)? as u64,
+                link: read_u32(&data, offset + 24, little_endian)?,
+                entsize: read_u32(&data, offset + 36, little_endian)? as u64,
+                ..Default::default()
+            },
+            2 => ElfSectionDetail {
+                kind: read_u32(&data, offset + 4, little_endian)?,
+                flags: read_u64(&data, offset + 8, little_endian)?,
+                offset: read_u64(&data, offset + 24, little_endian)?,
+                size: read_u64(&data, offset + 32, little_endian)?,
+                link: read_u32(&data, offset + 40, little_endian)?,
+                entsize: read_u64(&data, offset + 56, little_endian)?,
+                ..Default::default()
+            },
+            _ => return None,
+        };
+        sections.push(section);
+    }
+
+    if let Some(names_section) = sections.get(shstrndx as usize) {
+        let start = usize::try_from(names_section.offset).ok()?;
+        let end = usize::try_from(names_section.offset.checked_add(names_section.size)?).ok()?;
+        if let Some(names) = data.get(start..end) {
+            for (index, section) in sections.iter_mut().enumerate() {
+                let offset = shoff.checked_add((index as u64).checked_mul(shentsize)?)?;
+                let offset = usize::try_from(offset).ok()?;
+                let name_offset = read_u32(&data, offset, little_endian)? as usize;
+                section.name = read_cstr(names, name_offset);
+            }
+        }
+    }
+
+    let data_size = sections
+        .iter()
+        .filter(|section| section.name == ".data" || section.name.starts_with(".data."))
+        .map(|section| section.size)
+        .sum();
+    let bss_size = sections
+        .iter()
+        .filter(|section| section.name == ".bss" || section.name.starts_with(".bss."))
+        .map(|section| section.size)
+        .sum();
+
+    let symbol_section = sections
+        .iter()
+        .enumerate()
+        .find(|(_, section)| section.kind == 2)
+        .or_else(|| {
+            sections
+                .iter()
+                .enumerate()
+                .find(|(_, section)| section.kind == 11)
+        });
+    let mut raw_symbols = Vec::new();
+    if let Some((_, symbol_section)) = symbol_section {
+        let string_section = sections.get(symbol_section.link as usize);
+        if let Some(string_section) = string_section {
+            let symbols_start = usize::try_from(symbol_section.offset).ok()?;
+            let symbols_end =
+                usize::try_from(symbol_section.offset.checked_add(symbol_section.size)?).ok()?;
+            let strings_start = usize::try_from(string_section.offset).ok()?;
+            let strings_end =
+                usize::try_from(string_section.offset.checked_add(string_section.size)?).ok()?;
+            if let (Some(symbol_data), Some(strings)) = (
+                data.get(symbols_start..symbols_end),
+                data.get(strings_start..strings_end),
+            ) {
+                let entry_size = if symbol_section.entsize > 0 {
+                    symbol_section.entsize as usize
+                } else if class == 1 {
+                    16
+                } else {
+                    24
+                };
+                if entry_size >= if class == 1 { 16 } else { 24 } {
+                    for offset in (0..symbol_data.len()).step_by(entry_size) {
+                        let name_offset = read_u32(symbol_data, offset, little_endian)? as usize;
+                        let name = read_cstr(strings, name_offset);
+                        let (value, size, info, shndx) = match class {
+                            1 => (
+                                read_u32(symbol_data, offset + 4, little_endian)? as u64,
+                                read_u32(symbol_data, offset + 8, little_endian)? as u64,
+                                *symbol_data.get(offset + 12)?,
+                                read_u16(symbol_data, offset + 14, little_endian)?,
+                            ),
+                            2 => (
+                                read_u64(symbol_data, offset + 8, little_endian)?,
+                                read_u64(symbol_data, offset + 16, little_endian)?,
+                                *symbol_data.get(offset + 4)?,
+                                read_u16(symbol_data, offset + 6, little_endian)?,
+                            ),
+                            _ => return None,
+                        };
+                        let (section_name, section_flags) = sections
+                            .get(shndx as usize)
+                            .map(|section| (section.name.clone(), section.flags))
+                            .unwrap_or_default();
+                        raw_symbols.push(ElfRawSymbol {
+                            name,
+                            value,
+                            size,
+                            info,
+                            section_name,
+                            section_flags,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let mut globals = raw_symbols
+        .iter()
+        .filter(|symbol| {
+            let symbol_type = symbol.info & 0xf;
+            let writable = symbol.section_flags & 0x1 != 0;
+            let allocated = symbol.section_flags & 0x2 != 0;
+            let executable = symbol.section_flags & 0x4 != 0;
+            let lower_name = symbol.name.to_ascii_lowercase();
+            !symbol.name.is_empty()
+                && !symbol.name.starts_with('.')
+                && !symbol.name.starts_with('$')
+                && !matches!(
+                    lower_name.as_str(),
+                    "ucheap"
+                        | "uc_heap"
+                        | "xfreebytesremaining"
+                        | "xminimumeverfreebytesremaining"
+                        | "xnextfreebyte"
+                        | "pxend"
+                )
+                && symbol.size > 0
+                && (symbol_type == 1 || symbol_type == 5 || symbol_type == 6)
+                && writable
+                && allocated
+                && !executable
+                && !symbol.section_name.to_ascii_lowercase().contains("heap")
+                && !symbol.section_name.to_ascii_lowercase().contains("stack")
+        })
+        .map(|symbol| FirmwareSymbol {
+            name: symbol.name.clone(),
+            address: symbol.value,
+            size: symbol.size,
+            section: symbol.section_name.clone(),
+        })
+        .collect::<Vec<_>>();
+    globals.sort_by(|left, right| {
+        right
+            .size
+            .cmp(&left.size)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    globals.truncate(200);
+
+    let stack_top = find_symbol(
+        &raw_symbols,
+        &[
+            "_estack",
+            "__stacktop",
+            "__stack_top",
+            "_stack_top",
+            "__initial_sp",
+            "estack",
+        ],
+    )
+    .map(|symbol| symbol.value)
+    .filter(|value| *value > 0);
+    let stack_size = find_symbol(
+        &raw_symbols,
+        &[
+            "_min_stack_size",
+            "__stack_size",
+            "_stack_size",
+            "stack_size",
+            "__stack_size__",
+        ],
+    )
+    .and_then(symbol_size_or_value);
+    let stack_limit = find_symbol(
+        &raw_symbols,
+        &[
+            "__stacklimit",
+            "_stack_limit",
+            "__stack_limit",
+            "__stack_limit__",
+        ],
+    )
+    .map(|symbol| symbol.value)
+    .filter(|value| *value > 0);
+    let (stack_top, stack_size, stack_limit) = match (stack_top, stack_size, stack_limit) {
+        (Some(top), Some(size), _) => (Some(top), Some(size), Some(top.saturating_sub(size))),
+        (Some(top), None, Some(limit)) => (Some(top), Some(top.saturating_sub(limit)), Some(limit)),
+        (None, Some(size), Some(limit)) => {
+            (Some(limit.saturating_add(size)), Some(size), Some(limit))
+        }
+        (top, size, limit) => (top, size, limit),
+    };
+
+    let heap_symbol = find_symbol(&raw_symbols, &["ucheap", "uc_heap"]);
+    let heap_size = heap_symbol
+        .map(|symbol| symbol.size)
+        .filter(|size| *size > 0)
+        .or_else(|| {
+            sections
+                .iter()
+                .find(|section| {
+                    section.name.eq_ignore_ascii_case(".heap") || section.name.starts_with(".heap.")
+                })
+                .map(|section| section.size)
+                .filter(|size| *size > 0)
+        });
+    let heap_kind = if heap_symbol.is_some() || heap_size.is_some() {
+        if find_symbol(
+            &raw_symbols,
+            &["xfreebytesremaining", "xminimumeverfreebytesremaining"],
+        )
+        .is_some()
+        {
+            Some("heap_4".to_owned())
+        } else if find_symbol(&raw_symbols, &["pxend"]).is_some() {
+            Some("heap_5".to_owned())
+        } else if find_symbol(&raw_symbols, &["xnextfreebyte"]).is_some() {
+            Some("heap_1/2".to_owned())
+        } else {
+            Some("FreeRTOS".to_owned())
+        }
+    } else {
+        None
+    };
+
+    Some(FirmwareAnalysis {
+        globals,
+        data_size,
+        bss_size,
+        stack_top,
+        stack_size,
+        stack_limit,
+        heap_size,
+        heap_kind,
+        has_symbols: !raw_symbols.is_empty(),
+    })
+}
+
+fn find_symbol<'a>(symbols: &'a [ElfRawSymbol], names: &[&str]) -> Option<&'a ElfRawSymbol> {
+    symbols.iter().find(|symbol| {
+        names
+            .iter()
+            .any(|name| symbol.name.eq_ignore_ascii_case(name))
+    })
+}
+
+fn symbol_size_or_value(symbol: &ElfRawSymbol) -> Option<u64> {
+    if symbol.size > 0 {
+        Some(symbol.size)
+    } else if symbol.value > 0 {
+        Some(symbol.value)
+    } else {
+        None
+    }
+}
+
+fn read_cstr(data: &[u8], offset: usize) -> String {
+    data.get(offset..)
+        .and_then(|rest| rest.split(|byte| *byte == 0).next())
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        .unwrap_or_default()
+}
+
 fn read_u16(data: &[u8], offset: usize, little_endian: bool) -> Option<u16> {
     let bytes: [u8; 2] = data.get(offset..offset + 2)?.try_into().ok()?;
     Some(if little_endian {
@@ -665,6 +1024,155 @@ MEMORY
 
     fn put_u32(data: &mut [u8], offset: usize, value: u32) {
         data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    #[test]
+    fn analyzes_elf_globals_stack_and_heap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("analysis.elf");
+        let section_names = b"\0.shstrtab\0.symtab\0.strtab\0.bss\0.data\0";
+        let symbol_names =
+            b"\0counter\0buffer\0ucHeap\0_estack\0_Min_Stack_Size\0xFreeBytesRemaining\0";
+        let shoff = 52usize;
+        let section_count = 6usize;
+        let shstrtab_offset = shoff + section_count * 40;
+        let symtab_offset = shstrtab_offset + section_names.len();
+        let symtab_size = 7 * 16;
+        let strtab_offset = symtab_offset + symtab_size;
+        let file_size = strtab_offset + symbol_names.len();
+        let mut data = vec![0u8; file_size];
+        data[..4].copy_from_slice(b"\x7fELF");
+        data[4] = 1;
+        data[5] = 1;
+        data[6] = 1;
+        put_u16(&mut data, 16, 2);
+        put_u16(&mut data, 18, 40);
+        put_u32(&mut data, 20, 1);
+        put_u32(&mut data, 32, shoff as u32);
+        put_u16(&mut data, 40, 52);
+        put_u16(&mut data, 46, 40);
+        put_u16(&mut data, 48, section_count as u16);
+        put_u16(&mut data, 50, 1);
+        data[shstrtab_offset..shstrtab_offset + section_names.len()].copy_from_slice(section_names);
+        data[strtab_offset..strtab_offset + symbol_names.len()].copy_from_slice(symbol_names);
+
+        write_elf_section(
+            &mut data,
+            shoff,
+            1,
+            1,
+            3,
+            0,
+            0,
+            shstrtab_offset as u32,
+            section_names.len() as u32,
+            0,
+            0,
+        );
+        write_elf_section(
+            &mut data,
+            shoff,
+            2,
+            11,
+            2,
+            0,
+            0,
+            symtab_offset as u32,
+            symtab_size as u32,
+            3,
+            16,
+        );
+        write_elf_section(
+            &mut data,
+            shoff,
+            3,
+            19,
+            3,
+            0,
+            0,
+            strtab_offset as u32,
+            symbol_names.len() as u32,
+            0,
+            0,
+        );
+        write_elf_section(&mut data, shoff, 4, 27, 8, 3, 0x2000_0000, 0, 0x40, 0, 0);
+        write_elf_section(&mut data, shoff, 5, 32, 1, 3, 0x2000_0040, 0, 8, 0, 0);
+        write_elf_symbol(&mut data, symtab_offset, 1, 1, 0x2000_0000, 4, 0x11, 4);
+        write_elf_symbol(&mut data, symtab_offset, 2, 9, 0x2000_0004, 0x20, 0x11, 4);
+        write_elf_symbol(&mut data, symtab_offset, 3, 16, 0x2000_0024, 0x100, 0x11, 4);
+        write_elf_symbol(
+            &mut data,
+            symtab_offset,
+            4,
+            23,
+            0x2000_4000,
+            0,
+            0x10,
+            0xfff1,
+        );
+        write_elf_symbol(&mut data, symtab_offset, 5, 31, 0x400, 0, 0x10, 0xfff1);
+        write_elf_symbol(&mut data, symtab_offset, 6, 47, 0x2000_0124, 4, 0x11, 4);
+        std::fs::write(&path, data).unwrap();
+
+        let analysis = analyze_elf(&path).expect("analysis should parse");
+        assert!(analysis.has_symbols);
+        assert_eq!(analysis.data_size, 8);
+        assert_eq!(analysis.bss_size, 0x40);
+        assert_eq!(analysis.globals.len(), 2, "{:?}", analysis.globals);
+        assert_eq!(analysis.globals[0].name, "buffer");
+        assert_eq!(analysis.globals[0].size, 0x20);
+        assert_eq!(analysis.globals[1].name, "counter");
+        assert_eq!(analysis.stack_top, Some(0x2000_4000));
+        assert_eq!(analysis.stack_size, Some(0x400));
+        assert_eq!(analysis.stack_limit, Some(0x2000_3c00));
+        assert_eq!(analysis.stack_used(0x2000_3e00), Some(0x200));
+        assert_eq!(analysis.stack_used(0x2000_3000), None);
+        assert_eq!(analysis.heap_size, Some(0x100));
+        assert_eq!(analysis.heap_kind.as_deref(), Some("heap_4"));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_elf_section(
+        data: &mut [u8],
+        shoff: usize,
+        index: usize,
+        name: u32,
+        kind: u32,
+        flags: u32,
+        address: u32,
+        offset: u32,
+        size: u32,
+        link: u32,
+        entsize: u32,
+    ) {
+        let base = shoff + index * 40;
+        put_u32(data, base, name);
+        put_u32(data, base + 4, kind);
+        put_u32(data, base + 8, flags);
+        put_u32(data, base + 12, address);
+        put_u32(data, base + 16, offset);
+        put_u32(data, base + 20, size);
+        put_u32(data, base + 24, link);
+        put_u32(data, base + 36, entsize);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_elf_symbol(
+        data: &mut [u8],
+        symtab_offset: usize,
+        index: usize,
+        name: u32,
+        value: u32,
+        size: u32,
+        info: u8,
+        shndx: u16,
+    ) {
+        let base = symtab_offset + index * 16;
+        put_u32(data, base, name);
+        put_u32(data, base + 4, value);
+        put_u32(data, base + 8, size);
+        data[base + 12] = info;
+        put_u16(data, base + 14, shndx);
     }
 
     #[test]

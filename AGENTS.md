@@ -52,7 +52,7 @@ src/project_meta.rs    按所选构建系统提取 Makefile / Keil .uvprojx 元�
 src/editor.rs          EditorBuffer（String + revision）和 Document
 src/file_tree.rs       惰性目录树
 src/flash.rs           烧录配置、OpenOCD 接口预设/USB 探针检测、pyOCD 命令构造
-src/memory.rs          ELF / 链接脚本 / PDSC 内存区域与固件占用统计
+src/memory.rs          ELF 符号 / 全局变量 / 栈堆分析、链接脚本 / PDSC 内存区域与固件占用统计
 src/memory_check.rs    数组越界、危险字符串函数、重复释放等 C 内存安全静态扫描
 src/macro_check.rs     同名宏重复、宏族相同替换值（可选黄色波浪线）诊断
 src/completion.rs      轻量成员索引、补全上下文和候选类型
@@ -107,7 +107,8 @@ docs/                  README 截图和使用教程
 - 高亮缓存键是 `(revision, wrap_width, font_size)`；修改文本后 `layout_cached` 会自动重建。换字号、换自动换行宽度也由键覆盖。
 - 文档打开时会规范化到内部 LF，保存时恢复原 CRLF/LF 和 BOM。
 - `util::read_text_file` 先按 UTF-8 读取，失败后回退 GBK；`LoadedText.encoding` / `Document.encoding` 记录编码，保存时用 `write_text_file` 按编码写回。工具栏可切换 UTF-8 / GBK。
-- 文件上限 16 MB，二进制文件拒绝打开。
+- 文件上限 16 MB；二进制文件不按文本打开，而是用只读十六进制视图显示（上限 32 MB）。
+- `Document.binary` 保存 `HexDump`：`.bin` / `.elf` / `.axf` / `.o` / `.a` / `.lib` / `.exe` / `.pack` / 图片等扩展名直接进入十六进制模式；文本读取遇到 NUL 二进制错误也会回退到十六进制。编辑器中央显示偏移、HEX 和 ASCII，只读，状态栏隐藏编辑/编码操作；右键“十六进制查看”的独立窗口仍保留。
 - 打开文件/切换 Tab 时，`focus_editor` 会请求焦点并清掉跨 Tab 的旧选区。
 - 左侧行号与当前行高亮；`Settings.relative_line_numbers` 切换相对行号，`Settings.ruler_column` 可选 80/120 列标尺，`Settings.show_whitespace` 显示空格/Tab/换行标记。
 - `minimap.rs` 在编辑区右侧绘制约 76px 的代码预览：按 revision 缓存抽样行，用缩进/长度和近似语法色渲染；缩略图可点击或拖动跳转，并显示当前视口位置。`Settings.show_minimap` 控制开关，窗口过窄时自动隐藏。
@@ -224,6 +225,7 @@ docs/                  README 截图和使用教程
 - 右侧操作栏：纵向排列 Build、Clean/重构、Flash、调试、检测；不再放设置按钮，设置从构建卡片“配置”或 `Ctrl+,` 打开。检测按钮在工程打开后即可用：无调试会话时运行静态扫描并打开“非法检测 → 静态检测”；有调试会话时打开“动态监测”，可添加硬件 watchpoint（写入 `watch`、读取 `rwatch`、读写 `awatch`，GDB 优先使用硬件比较器，Cortex-M 通常 2-4 个），命中后目标自动暂停并记录本机时间、旧值 → 新值、GDB 停止位置和调用栈（每个监测点最多 200 条记录）。动态监测页可勾选“调试时自动启动动态监测”，启动调试时自动打开面板，并在临时 `main` 断点暂停后再重新启用已保存的 watchpoint（避免启动清 `.bss` 时误命中）；停止调试后表达式和历史保留。OpenOCD 把命中报告为 `SIGTRAP` 而不是 `Old value` / `New value` 时，应用通过 GDB convenience variable 查询命中前的值和当前值补记录。静态检测扫描所有 `.c/.h`：数组常量下标越界、`strcpy`/`strcat`/`strncpy`/`memcpy`/`memset` 常量长度、`gets`/`sprintf`、重复 `free`、可疑 `malloc` 字节数、返回数组名；结果在窗口内按文件:行显示，可点击跳转。静态扫描是启发式检查，不替代 ASAN/Valgrind；动态 watchpoint 依赖 gdb / OpenOCD / pyOCD 会话。
 - 构建结果和内存占用显示在输出面板标题和日志中；构建视图标题显示 `Flash 已用 / 总量 (百分比) · RAM 已用 / 总量 (百分比)`，占用来自 `text/data/bss` 或 ELF 段，容量来自链接脚本 / PDSC / 工程信息。输出面板可切换“构建输出 / 调试输出”，底部不再保留重复的状态栏。
 - 构建输出面板顶部有 10px 拖动手柄，收起时也能向上拉出；高度存 `Settings.output_height`，最大到主区域顶部。
+- 构建输出视图右侧固定显示 **内存可视化** 侧栏（默认 380px，可拖动 6px 分隔条调整，高度与调试侧栏一致）：`memory.rs::analyze_elf` 解析 ELF32/64 符号表，列出写入型 `.data` / `.bss` 全局变量（最多 200 个，展示前 14 个）、`_estack` / `_Min_Stack_Size` 栈区、`ucHeap` / `.heap` FreeRTOS 堆区；调试暂停且寄存器可用时用 SP 估算当前栈使用，否则显示静态预留。缓存按 ELF 路径/修改时间刷新，面板内 **刷新** 强制重读。
 - 调试控制是编辑器右上角的小浮层，位置参考查找浮层；停止、单步等使用 `Painter` 绘制的图案按钮。调试信息放在输出面板“调试输出”页，不在独立窗口里。
 - “工程信息 → 烧录配置”提供烧录工具下拉（自定义命令 / OpenOCD / pyOCD）。OpenOCD 模式显示工具路径、程序文件、芯片配置和接口配置；接口配置是预设下拉（ST-Link、CMSIS-DAP / DAPLink、J-Link、XDS110、ULINK 等）+ 自定义文本框 + **自动检测** 按钮。`OpenOcdConfig::default()` 的接口为空，不再自动填 `stlink.cfg`；自动检测通过 Windows PnP（或 `lsusb`）VID 识别已连接的 ST-Link / CMSIS-DAP / DAPLink / J-Link，失败时提示手动选择。pyOCD 模式显示工具路径、程序文件、目标芯片和可选 Pack；“编辑”打开独立烧录配置弹窗，含命令预览。分组还显示 Flash/RAM 容量和 **内存布局...** 按钮：弹窗采用 Cortex-Debug 风格两列网格，Read/Write 侧为 IRAM1/2 与 RAM1-3（Default、起始地址、大小、NoInit），Read/Only 侧为 IROM1/2 与 ROM1-3（Default、起始地址、大小、启动），底部显示 RAM Total / ROM Total；自动值优先来自链接脚本，其次来自匹配 PDSC 的 `<memory>`；保存到工程配置但不改写链接脚本。工具/路径下拉修改后立即写入工程 `.simple-embedded/settings.json`，弹窗中的字段点击保存后写入。**内存布局...** 按钮放在 Flash/RAM 行的上方，**编辑** 是居中显示在分组底部的按钮。
 - 关闭窗口、关闭 Tab、切换工程时都要处理未保存确认。
@@ -256,7 +258,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil 工程、命令可用性检查、图标 ICO 条目与 exe 嵌入资源一致性。当前共 176 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil 工程、命令可用性检查、图标 ICO 条目与 exe 嵌入资源一致性。当前共 178 个测试。
 
 UI 改动后建议：
 

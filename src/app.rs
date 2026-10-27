@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{
-    self, Align, Button, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, RichText,
+    self, Align, Button, Color32, CornerRadius, FontId, Frame, Id, Label, Layout, Margin, RichText,
     ScrollArea, Sense, Stroke, TextEdit, ViewportCommand,
 };
 #[cfg(target_os = "windows")]
@@ -465,6 +465,28 @@ struct MemoryCheckState {
     watch_seq: u64,
 }
 
+struct FirmwareViewState {
+    path: Option<PathBuf>,
+    modified: Option<SystemTime>,
+    checked_at: Option<Instant>,
+    analysis: Option<crate::memory::FirmwareAnalysis>,
+    error: Option<String>,
+    side_width: f32,
+}
+
+impl Default for FirmwareViewState {
+    fn default() -> Self {
+        Self {
+            path: None,
+            modified: None,
+            checked_at: None,
+            analysis: None,
+            error: None,
+            side_width: 380.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CreateKind {
     File,
@@ -868,6 +890,7 @@ pub struct App {
     memory_draft: Option<MemoryDraft>,
     memory_layout: Option<crate::memory::ResolvedMemory>,
     memory_usage_cache: Option<(PathBuf, SystemTime, Option<crate::memory::MemoryUsage>)>,
+    firmware_view: FirmwareViewState,
     memory_check: MemoryCheckState,
     file_clipboard: Option<FileClipboard>,
     image_preview: Option<ImagePreviewState>,
@@ -948,6 +971,7 @@ impl App {
             memory_draft: None,
             memory_layout: None,
             memory_usage_cache: None,
+            firmware_view: FirmwareViewState::default(),
             memory_check: MemoryCheckState::default(),
             file_clipboard: None,
             image_preview: None,
@@ -1041,6 +1065,7 @@ impl App {
         self.create_entry = None;
         self.image_preview = None;
         self.memory_check = MemoryCheckState::default();
+        self.firmware_view = FirmwareViewState::default();
         self.output_view = OutputView::Build;
 
         let mut config_error = None;
@@ -1378,6 +1403,10 @@ impl App {
         let Some(doc) = self.tabs.get_mut(index) else {
             return;
         };
+        if doc.binary.is_some() {
+            self.set_toast("二进制文件始终只读", Severity::Info);
+            return;
+        }
         if !doc.read_only && doc.is_dirty() {
             self.set_toast("请先保存当前修改，再切换只读", Severity::Warning);
             return;
@@ -4918,6 +4947,54 @@ impl App {
         self.set_toast("内存布局已保存", Severity::Success);
     }
 
+    fn ensure_firmware_analysis(&mut self, force: bool) {
+        if !force
+            && self
+                .firmware_view
+                .checked_at
+                .is_some_and(|checked| checked.elapsed() < Duration::from_millis(800))
+        {
+            return;
+        }
+        self.firmware_view.checked_at = Some(Instant::now());
+        let Some(target) = self.debug_target() else {
+            self.firmware_view.path = None;
+            self.firmware_view.modified = None;
+            self.firmware_view.analysis = None;
+            self.firmware_view.error = Some("未找到固件文件；请先构建工程".to_owned());
+            return;
+        };
+        let modified = std::fs::metadata(&target)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok());
+        if !force
+            && self.firmware_view.path.as_ref() == Some(&target)
+            && self.firmware_view.modified == modified
+            && self.firmware_view.analysis.is_some()
+        {
+            return;
+        }
+        self.firmware_view.path = Some(target.clone());
+        self.firmware_view.modified = modified;
+        if !target.extension().is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("elf") || extension.eq_ignore_ascii_case("axf")
+        }) {
+            self.firmware_view.analysis = None;
+            self.firmware_view.error = Some("内存可视化需要 ELF/AXF 文件".to_owned());
+            return;
+        }
+        match crate::memory::analyze_elf(&target) {
+            Some(analysis) => {
+                self.firmware_view.analysis = Some(analysis);
+                self.firmware_view.error = None;
+            }
+            None => {
+                self.firmware_view.analysis = None;
+                self.firmware_view.error = Some("无法解析 ELF 符号表".to_owned());
+            }
+        }
+    }
+
     fn build_memory_usage(&mut self) -> Option<crate::memory::MemoryUsage> {
         if self.build.is_running() {
             return None;
@@ -7383,33 +7460,65 @@ impl App {
                             ui.set_min_height(ui.available_height());
                             if debug_view {
                                 self.show_debug_output(ui, actions, &debug_log, auto_scroll);
-                            } else if !self.build.log.is_empty() {
-                                ui.spacing_mut().item_spacing.y = 0.0;
-                                let row_height = 18.0;
-                                let filter = self.log_filter;
-                                let visible = if filter == LogFilter::All {
-                                    None
-                                } else {
-                                    Some(
-                                        (0..self.build.log.len())
-                                            .filter(|index| {
-                                                self.build.log.line_at(*index).is_some_and(|line| {
-                                                    filter.matches(line.severity)
-                                                })
-                                            })
-                                            .collect::<Vec<_>>(),
-                                    )
-                                };
-                                let row_count = visible
-                                    .as_ref()
-                                    .map_or(self.build.log.len(), |indices| indices.len());
-                                if row_count == 0 {
-                                    ui.label(
-                                        RichText::new("没有符合过滤条件的日志")
-                                            .size(11.0)
-                                            .color(theme::TEXT_FAINT),
-                                    );
-                                } else {
+                            } else {
+                                self.ensure_firmware_analysis(false);
+                                let total_width = ui.available_width();
+                                let body_height = ui.available_height();
+                                let mut side_width = self.firmware_view.side_width;
+                                if side_width <= 0.0 {
+                                    side_width = 380.0;
+                                }
+                                let max_side = (total_width * 0.55).max(280.0);
+                                let side_width = side_width.clamp(280.0, max_side);
+                                let handle_width = 6.0;
+                                let log_width =
+                                    (total_width - side_width - handle_width).max(180.0);
+                                let mut new_side = side_width;
+                                ui.horizontal(|ui| {
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(log_width, body_height),
+                                        Layout::top_down(Align::Min),
+                                        |ui| {
+                                            ui.set_min_size(egui::vec2(log_width, body_height));
+                                            ui.spacing_mut().item_spacing.y = 0.0;
+                                            if self.build.log.is_empty() {
+                                                ui.label(
+                                                    RichText::new("构建输出会显示在这里")
+                                                        .size(11.0)
+                                                        .color(theme::TEXT_FAINT),
+                                                );
+                                            } else {
+                                                let row_height = 18.0;
+                                                let filter = self.log_filter;
+                                                let visible = if filter == LogFilter::All {
+                                                    None
+                                                } else {
+                                                    Some(
+                                                        (0..self.build.log.len())
+                                                            .filter(|index| {
+                                                                self.build
+                                                                    .log
+                                                                    .line_at(*index)
+                                                                    .is_some_and(|line| {
+                                                                        filter
+                                                                            .matches(line.severity)
+                                                                    })
+                                                            })
+                                                            .collect::<Vec<_>>(),
+                                                    )
+                                                };
+                                                let row_count = visible
+                                                    .as_ref()
+                                                    .map_or(self.build.log.len(), |indices| {
+                                                        indices.len()
+                                                    });
+                                                if row_count == 0 {
+                                                    ui.label(
+                                                        RichText::new("没有符合过滤条件的日志")
+                                                            .size(11.0)
+                                                            .color(theme::TEXT_FAINT),
+                                                    );
+                                                } else {
                                     let mut scroll = ScrollArea::vertical()
                                         .id_salt("simple_embedded_build_log")
                                         .auto_shrink([false, false]);
@@ -7537,7 +7646,43 @@ impl App {
                                             }
                                         }
                                     });
-                                }
+                                                }
+                                            }
+                                        },
+                                    );
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(handle_width, body_height),
+                                        Sense::drag(),
+                                    );
+                                    let response = response
+                                        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                                    let color = if response.hovered() || response.dragged() {
+                                        theme::ACCENT
+                                    } else {
+                                        theme::BORDER_SOFT
+                                    };
+                                    ui.painter().rect_filled(
+                                        egui::Rect::from_center_size(
+                                            rect.center(),
+                                            egui::vec2(1.0, rect.height()),
+                                        ),
+                                        CornerRadius::ZERO,
+                                        color,
+                                    );
+                                    if response.dragged() {
+                                        new_side = (new_side - response.drag_delta().x)
+                                            .clamp(280.0, max_side);
+                                    }
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(new_side, body_height),
+                                        Layout::top_down(Align::Min),
+                                        |ui| {
+                                            ui.set_min_size(egui::vec2(new_side, body_height));
+                                            self.show_firmware_view(ui, actions);
+                                        },
+                                    );
+                                });
+                                self.firmware_view.side_width = new_side;
                             }
                         });
                 }
@@ -7564,6 +7709,421 @@ impl App {
             self.build.auto_scroll = auto_scroll;
             self.settings.save();
         }
+    }
+
+    fn current_stack_pointer(&self) -> Option<u64> {
+        if self.debug.session.is_none() || self.debug.running {
+            return None;
+        }
+        for name in ["sp", "msp", "psp"] {
+            if let Some(register) = self
+                .debug
+                .registers
+                .iter()
+                .find(|register| register.name.eq_ignore_ascii_case(name))
+            {
+                if let Some(value) = crate::memory::parse_number(&register.value) {
+                    return Some(value);
+                }
+            }
+        }
+        None
+    }
+
+    fn show_firmware_view(&mut self, ui: &mut egui::Ui, _actions: &mut Vec<Action>) {
+        if self.debug.session.is_some()
+            && !self.debug.running
+            && self.debug.watch_refresh.is_none()
+            && self
+                .debug
+                .last_watch_refresh
+                .is_none_or(|last| last.elapsed() >= Duration::from_secs(1))
+        {
+            self.refresh_debug_watch();
+        }
+        let mut refresh = false;
+        Frame::new()
+            .fill(theme::PANEL)
+            .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+            .corner_radius(6)
+            .inner_margin(Margin::symmetric(9, 7))
+            .show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("内存可视化")
+                            .size(12.5)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("刷新", theme::TEXT_FAINT))
+                            .on_hover_text("重新读取 ELF 符号")
+                            .clicked()
+                        {
+                            refresh = true;
+                        }
+                    });
+                });
+                if let Some(path) = self.firmware_view.path.as_ref() {
+                    ui.add(
+                        Label::new(
+                            RichText::new(util::file_name(path))
+                                .size(9.5)
+                                .color(theme::TEXT_FAINT),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(util::display_path(path));
+                }
+                if refresh {
+                    self.ensure_firmware_analysis(true);
+                }
+                if let Some(error) = self.firmware_view.error.as_ref() {
+                    ui.label(RichText::new(error).size(10.0).color(theme::WARNING));
+                }
+                let Some(analysis) = self.firmware_view.analysis.as_ref() else {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(
+                            "构建生成 ELF 后，这里显示全局变量分布、栈使用预估和 FreeRTOS 堆。",
+                        )
+                        .size(10.0)
+                        .color(theme::TEXT_FAINT),
+                    );
+                    return;
+                };
+                let ram = self
+                    .memory_layout
+                    .as_ref()
+                    .map(|layout| layout.layout.ram)
+                    .filter(|region| region.is_valid());
+                let sp = self.current_stack_pointer();
+                ui.add_space(4.0);
+                ScrollArea::vertical()
+                    .id_salt("simple_embedded_firmware_view_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        Self::show_global_distribution(ui, analysis);
+                        ui.add_space(8.0);
+                        Self::show_stack_estimate(ui, analysis, ram, sp);
+                        ui.add_space(8.0);
+                        Self::show_heap_usage(ui, analysis);
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("数据来自 ELF 符号；栈溢出为静态或暂停点预估")
+                                .size(9.0)
+                                .color(theme::TEXT_FAINT),
+                        );
+                    });
+            });
+    }
+
+    fn show_global_distribution(ui: &mut egui::Ui, analysis: &crate::memory::FirmwareAnalysis) {
+        const PALETTE: [Color32; 7] = [
+            theme::ACCENT,
+            theme::SUCCESS,
+            theme::WARNING,
+            theme::INFO,
+            Color32::from_rgb(190, 146, 226),
+            Color32::from_rgb(232, 139, 156),
+            Color32::from_rgb(139, 214, 198),
+        ];
+        ui.label(
+            RichText::new("全局变量分布")
+                .size(11.5)
+                .strong()
+                .color(theme::TEXT),
+        );
+        ui.label(
+            RichText::new(format!(
+                ".data {} · .bss {}",
+                crate::memory::format_size(analysis.data_size),
+                crate::memory::format_size(analysis.bss_size)
+            ))
+            .size(9.5)
+            .color(theme::TEXT_FAINT),
+        );
+        if !analysis.has_symbols {
+            ui.label(
+                RichText::new("ELF 未包含符号表，无法列出全局变量")
+                    .size(10.0)
+                    .color(theme::WARNING),
+            );
+            return;
+        }
+        if analysis.globals.is_empty() {
+            ui.label(
+                RichText::new("未在 .data / .bss 中找到带大小的全局变量")
+                    .size(10.0)
+                    .color(theme::TEXT_FAINT),
+            );
+            return;
+        }
+        let total = analysis
+            .globals
+            .iter()
+            .map(|symbol| symbol.size)
+            .sum::<u64>()
+            .max(1);
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 14.0), Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, CornerRadius::same(2), theme::SURFACE);
+        let mut left = rect.left();
+        for (index, symbol) in analysis.globals.iter().take(12).enumerate() {
+            let width = rect.width() * symbol.size as f32 / total as f32;
+            let right = (left + width.max(1.0)).min(rect.right());
+            if right <= left {
+                break;
+            }
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(left, rect.top()),
+                    egui::pos2(right, rect.bottom()),
+                ),
+                CornerRadius::same(1),
+                PALETTE[index % PALETTE.len()],
+            );
+            left = right;
+            if left >= rect.right() {
+                break;
+            }
+        }
+        response.on_hover_text(format!(
+            "{} 个 RAM 全局变量，共 {}",
+            analysis.globals.len(),
+            crate::memory::format_size(total)
+        ));
+        ui.add_space(3.0);
+        for (index, symbol) in analysis.globals.iter().take(14).enumerate() {
+            ui.horizontal(|ui| {
+                colored_dot(ui, PALETTE[index % PALETTE.len()], 5.0);
+                let name_width = (ui.available_width() - 102.0).max(60.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(name_width, 14.0),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.add(
+                            Label::new(
+                                RichText::new(&symbol.name)
+                                    .monospace()
+                                    .size(10.0)
+                                    .color(theme::TEXT),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&symbol.name);
+                    },
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(crate::memory::format_size(symbol.size))
+                            .monospace()
+                            .size(9.5)
+                            .color(theme::SUCCESS),
+                    );
+                    ui.label(
+                        RichText::new(crate::memory::format_hex(symbol.address))
+                            .monospace()
+                            .size(9.0)
+                            .color(theme::TEXT_FAINT),
+                    );
+                    ui.label(
+                        RichText::new(&symbol.section)
+                            .size(9.0)
+                            .color(theme::TEXT_FAINT),
+                    );
+                });
+            });
+        }
+        if analysis.globals.len() > 14 {
+            ui.label(
+                RichText::new(format!("还有 {} 个变量", analysis.globals.len() - 14))
+                    .size(9.0)
+                    .color(theme::TEXT_FAINT),
+            );
+        }
+    }
+
+    fn show_stack_estimate(
+        ui: &mut egui::Ui,
+        analysis: &crate::memory::FirmwareAnalysis,
+        ram: Option<crate::memory::Region>,
+        sp: Option<u64>,
+    ) {
+        ui.label(
+            RichText::new("栈使用预估")
+                .size(11.5)
+                .strong()
+                .color(theme::TEXT),
+        );
+        let (Some(top), Some(limit), Some(size)) = (
+            analysis.stack_top,
+            analysis.stack_limit,
+            analysis.stack_size,
+        ) else {
+            ui.label(
+                RichText::new("ELF 中未找到 _estack / _Min_Stack_Size，无法定位栈区")
+                    .size(10.0)
+                    .color(theme::TEXT_FAINT),
+            );
+            return;
+        };
+        if size == 0 {
+            ui.label(
+                RichText::new("栈大小配置为 0，无法计算使用率")
+                    .size(10.0)
+                    .color(theme::WARNING),
+            );
+            return;
+        }
+        let used = sp.and_then(|sp| analysis.stack_used(sp));
+        let ratio = used.map(|used| (used as f32 / size as f32).clamp(0.0, 1.0));
+        let overflow = sp.is_some_and(|sp| sp < limit);
+        let risky = ratio.is_some_and(|ratio| ratio > 0.8);
+        let color = if overflow {
+            theme::ERROR
+        } else if risky {
+            theme::WARNING
+        } else {
+            theme::ACCENT
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 12.0), Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, CornerRadius::same(2), theme::SURFACE);
+        if let Some(ratio) = ratio {
+            let width = (rect.width() * ratio).max(1.0);
+            painter.rect_filled(
+                egui::Rect::from_min_size(rect.min, egui::vec2(width, rect.height())),
+                CornerRadius::same(2),
+                color,
+            );
+        } else {
+            painter.rect_stroke(
+                rect,
+                CornerRadius::same(2),
+                Stroke::new(1.0_f32, theme::ACCENT_DARK),
+                egui::StrokeKind::Inside,
+            );
+        }
+        response.on_hover_text(format!(
+            "栈顶 {} · 栈底 {} · 预留 {}",
+            crate::memory::format_hex(top),
+            crate::memory::format_hex(limit),
+            crate::memory::format_size(size)
+        ));
+        if let Some(sp) = sp {
+            ui.label(
+                RichText::new(format!(
+                    "SP {} · 已用 {} / {}",
+                    crate::memory::format_hex(sp),
+                    crate::memory::format_size(used.unwrap_or(0)),
+                    crate::memory::format_size(size)
+                ))
+                .monospace()
+                .size(9.5)
+                .color(color),
+            );
+        } else {
+            ui.label(
+                RichText::new(format!(
+                    "栈顶 {} · 预留 {}",
+                    crate::memory::format_hex(top),
+                    crate::memory::format_size(size)
+                ))
+                .monospace()
+                .size(9.5)
+                .color(theme::TEXT_FAINT),
+            );
+            ui.label(
+                RichText::new("目标暂停后读取 SP，显示实时已用量")
+                    .size(9.0)
+                    .color(theme::TEXT_FAINT),
+            );
+        }
+        if let Some(ram) = ram {
+            let used_ram = analysis.data_size.saturating_add(analysis.bss_size);
+            let remaining = ram.size.saturating_sub(used_ram);
+            ui.label(
+                RichText::new(format!(
+                    "RAM {} · 静态剩余 {}",
+                    crate::memory::format_size(ram.size),
+                    crate::memory::format_size(remaining)
+                ))
+                .size(9.0)
+                .color(theme::TEXT_FAINT),
+            );
+            if size > remaining {
+                ui.label(
+                    RichText::new("风险：栈预留超过 RAM 剩余")
+                        .size(9.5)
+                        .color(theme::ERROR),
+                );
+            }
+        }
+        if overflow {
+            ui.label(
+                RichText::new("检测到 SP 已越过栈底，可能已经发生栈溢出")
+                    .size(9.5)
+                    .color(theme::ERROR),
+            );
+        } else if risky {
+            ui.label(
+                RichText::new("警告：当前栈使用已超过 80%")
+                    .size(9.5)
+                    .color(theme::WARNING),
+            );
+        } else if sp.is_some() {
+            ui.label(
+                RichText::new("当前 SP 未越过栈底")
+                    .size(9.0)
+                    .color(theme::SUCCESS),
+            );
+        }
+    }
+
+    fn show_heap_usage(ui: &mut egui::Ui, analysis: &crate::memory::FirmwareAnalysis) {
+        ui.label(
+            RichText::new("堆内存 (FreeRTOS)")
+                .size(11.5)
+                .strong()
+                .color(theme::TEXT),
+        );
+        let Some(size) = analysis.heap_size else {
+            ui.label(
+                RichText::new("未检测到 FreeRTOS 堆（ucHeap / .heap）")
+                    .size(10.0)
+                    .color(theme::TEXT_FAINT),
+            );
+            return;
+        };
+        let kind = analysis.heap_kind.as_deref().unwrap_or("FreeRTOS");
+        ui.label(
+            RichText::new(format!(
+                "{kind} · 堆区 {}",
+                crate::memory::format_size(size)
+            ))
+            .size(10.0)
+            .color(theme::TEXT_DIM),
+        );
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 12.0), Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, CornerRadius::same(2), theme::SURFACE);
+        painter.rect_filled(
+            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), rect.height())),
+            CornerRadius::same(2),
+            theme::ACCENT_SOFT,
+        );
+        response.on_hover_text("堆区大小来自 ucHeap / .heap 段");
+        ui.label(
+            RichText::new("运行时空闲和最高水位可在调试输出中查看")
+                .size(9.0)
+                .color(theme::TEXT_FAINT),
+        );
     }
 
     fn show_debug_output(

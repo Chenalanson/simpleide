@@ -120,11 +120,27 @@ pub struct Document {
     pub minimap_cache: Option<crate::minimap::Cache>,
     pub macro_issues: Vec<crate::macro_check::MacroIssue>,
     pub macro_issue_revision: u64,
+    /// Present for read-only binary files rendered as a hex dump in the editor.
+    pub binary: Option<crate::hexview::HexDump>,
 }
 
 impl Document {
     pub fn open(path: &Path, root: &Path, highlighter: &Highlighter) -> Result<Self, String> {
-        let loaded = read_text_file(path)?;
+        if is_binary_extension(path) {
+            let dump = crate::hexview::HexDump::open(path)?;
+            return Ok(Self::from_binary(path, root, dump));
+        }
+        let loaded = match read_text_file(path) {
+            Ok(loaded) => loaded,
+            Err(err) => {
+                if err.contains("二进制") {
+                    if let Ok(dump) = crate::hexview::HexDump::open(path) {
+                        return Ok(Self::from_binary(path, root, dump));
+                    }
+                }
+                return Err(err);
+            }
+        };
         let (syntax_name, language) = highlighter.detect(path);
         let buffer = EditorBuffer::new(loaded.text);
         Ok(Self {
@@ -147,7 +163,33 @@ impl Document {
             minimap_cache: None,
             macro_issues: Vec::new(),
             macro_issue_revision: u64::MAX,
+            binary: None,
         })
+    }
+
+    fn from_binary(path: &Path, root: &Path, dump: crate::hexview::HexDump) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            name: file_name(path),
+            rel_path: relative_display(root, path),
+            buffer: EditorBuffer::new(String::new()),
+            saved_revision: 0,
+            line_ending: LineEnding::Lf,
+            bom: false,
+            encoding: TextEncoding::Utf8,
+            syntax_name: None,
+            language: "二进制".to_owned(),
+            cursor_index: 0,
+            cursor_line: 1,
+            cursor_column: 1,
+            read_only: true,
+            bookmarks: BTreeSet::new(),
+            layout_cache: highlight::new_cache(),
+            minimap_cache: None,
+            macro_issues: Vec::new(),
+            macro_issue_revision: u64::MAX,
+            binary: Some(dump),
+        }
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -155,6 +197,9 @@ impl Document {
     }
 
     pub fn save(&mut self) -> Result<(), String> {
+        if self.binary.is_some() {
+            return Err("二进制文件不支持保存".to_owned());
+        }
         let revision_before_save = self.buffer.revision();
         write_text_file(
             &self.path,
@@ -179,12 +224,67 @@ impl Document {
     }
 }
 
+fn is_binary_extension(path: &Path) -> bool {
+    let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "bin"
+            | "elf"
+            | "axf"
+            | "o"
+            | "obj"
+            | "a"
+            | "lib"
+            | "so"
+            | "dll"
+            | "exe"
+            | "pack"
+            | "zip"
+            | "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "bmp"
+            | "webp"
+            | "ico"
+            | "tif"
+            | "tiff"
+            | "pdf"
+            | "7z"
+            | "gz"
+            | "tar"
+            | "xz"
+            | "woff"
+            | "woff2"
+            | "ttf"
+            | "otf"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn buffer() -> EditorBuffer {
         EditorBuffer::new("abc\ndef".to_owned())
+    }
+
+    #[test]
+    fn opens_binary_files_as_readonly_hex_dumps() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("firmware.bin");
+        std::fs::write(&path, [0x00, 0x41, 0xff, 0x7f]).unwrap();
+        let highlighter = Highlighter::new();
+        let mut document = Document::open(&path, dir.path(), &highlighter).unwrap();
+        assert!(document.read_only);
+        assert!(!document.is_dirty());
+        assert_eq!(
+            document.binary.as_ref().unwrap().data,
+            vec![0x00, 0x41, 0xff, 0x7f]
+        );
+        assert!(document.save().is_err());
     }
 
     #[test]

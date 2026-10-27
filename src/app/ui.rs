@@ -18,6 +18,7 @@ impl App {
                 doc.language.clone(),
                 doc.is_dirty(),
                 doc.read_only,
+                doc.binary.is_some(),
             )
         });
         egui::Panel::bottom("simple_embedded_status_bar")
@@ -33,121 +34,137 @@ impl App {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     let text_color = theme::TEXT_FAINT;
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if let Some((_, _, _, _, _, dirty, read_only)) = info {
-                            let save_color = if dirty {
-                                theme::ACCENT
-                            } else {
-                                theme::TEXT_FAINT
-                            };
-                            if ui
-                                .add(small_flat_button("保存", save_color))
-                                .on_hover_text("保存当前文件 (Ctrl+S)")
-                                .clicked()
-                            {
-                                actions.push(Action::SaveActive);
-                            }
-                            let wrap_color = if self.settings.word_wrap {
-                                theme::ACCENT
-                            } else {
-                                theme::TEXT_FAINT
-                            };
-                            if ui
-                                .add(small_flat_button("自动换行", wrap_color))
-                                .on_hover_text("切换长行自动换行")
-                                .clicked()
-                            {
-                                actions.push(Action::ToggleWrap);
-                            }
-                            if ui
-                                .add(small_flat_button("格式化", theme::TEXT_DIM))
-                                .on_hover_text("用 clang-format 格式化当前文件")
-                                .clicked()
-                            {
-                                actions.push(Action::FormatDocument);
-                            }
-                            if ui
-                                .add(small_flat_button("符号", theme::TEXT_DIM))
-                                .on_hover_text("工程符号搜索 (Ctrl+Shift+O)")
-                                .clicked()
-                            {
-                                actions.push(Action::OpenSymbols);
-                            }
-                            if ui
-                                .add(small_flat_button("数组", theme::TEXT_DIM))
-                                .on_hover_text("生成 C 数组 (Ctrl+Shift+A)")
-                                .clicked()
-                            {
-                                actions.push(Action::OpenArrayGenerator);
-                            }
-                            if ui
-                                .add(small_flat_button("寄存器", theme::TEXT_DIM))
-                                .on_hover_text("外设寄存器浏览 (Ctrl+Shift+R)")
-                                .clicked()
-                            {
-                                actions.push(Action::OpenRegisters);
-                            }
-                            let read_only_color = if read_only {
-                                theme::WARNING
-                            } else {
-                                theme::TEXT_FAINT
-                            };
-                            if ui
-                                .add(small_flat_button("只读", read_only_color))
-                                .on_hover_text("切换只读")
-                                .clicked()
-                            {
-                                actions.push(Action::ToggleReadOnly);
+                        if let Some((_, _, _, _, _, dirty, read_only, binary)) = info {
+                            if !binary {
+                                let save_color = if dirty {
+                                    theme::ACCENT
+                                } else {
+                                    theme::TEXT_FAINT
+                                };
+                                if ui
+                                    .add(small_flat_button("保存", save_color))
+                                    .on_hover_text("保存当前文件 (Ctrl+S)")
+                                    .clicked()
+                                {
+                                    actions.push(Action::SaveActive);
+                                }
+                                let wrap_color = if self.settings.word_wrap {
+                                    theme::ACCENT
+                                } else {
+                                    theme::TEXT_FAINT
+                                };
+                                if ui
+                                    .add(small_flat_button("自动换行", wrap_color))
+                                    .on_hover_text("切换长行自动换行")
+                                    .clicked()
+                                {
+                                    actions.push(Action::ToggleWrap);
+                                }
+                                if ui
+                                    .add(small_flat_button("格式化", theme::TEXT_DIM))
+                                    .on_hover_text("用 clang-format 格式化当前文件")
+                                    .clicked()
+                                {
+                                    actions.push(Action::FormatDocument);
+                                }
+                                if ui
+                                    .add(small_flat_button("符号", theme::TEXT_DIM))
+                                    .on_hover_text("工程符号搜索 (Ctrl+Shift+O)")
+                                    .clicked()
+                                {
+                                    actions.push(Action::OpenSymbols);
+                                }
+                                if ui
+                                    .add(small_flat_button("数组", theme::TEXT_DIM))
+                                    .on_hover_text("生成 C 数组 (Ctrl+Shift+A)")
+                                    .clicked()
+                                {
+                                    actions.push(Action::OpenArrayGenerator);
+                                }
+                                if ui
+                                    .add(small_flat_button("寄存器", theme::TEXT_DIM))
+                                    .on_hover_text("外设寄存器浏览 (Ctrl+Shift+R)")
+                                    .clicked()
+                                {
+                                    actions.push(Action::OpenRegisters);
+                                }
+                                let read_only_color = if read_only {
+                                    theme::WARNING
+                                } else {
+                                    theme::TEXT_FAINT
+                                };
+                                if ui
+                                    .add(small_flat_button("只读", read_only_color))
+                                    .on_hover_text("切换只读")
+                                    .clicked()
+                                {
+                                    actions.push(Action::ToggleReadOnly);
+                                }
                             }
                         }
-                        if let Some((line, column, encoding, newline, language, _, _)) = info {
+                        if let Some((line, column, encoding, newline, language, _, _, binary)) =
+                            info
+                        {
                             ui.add_space(8.0);
                             ui.label(RichText::new(language).size(10.5).color(theme::INFO));
-                            ui.add_space(6.0);
-                            ui.label(
-                                RichText::new(format!("行尾: {newline}"))
-                                    .size(10.5)
-                                    .color(text_color),
-                            );
-                            ui.add_space(6.0);
-                            ui.scope(|ui| {
-                                let visuals = ui.visuals_mut();
-                                visuals.widgets.inactive.weak_bg_fill = theme::SURFACE;
-                                visuals.widgets.inactive.bg_fill = theme::SURFACE;
-                                visuals.widgets.hovered.weak_bg_fill = theme::HOVER;
-                                visuals.widgets.hovered.bg_fill = theme::HOVER;
-                                visuals.widgets.open.weak_bg_fill = theme::SURFACE;
-                                visuals.widgets.open.bg_fill = theme::SURFACE;
-                                ui.menu_button(
-                                    RichText::new(encoding.label()).size(10.5).color(text_color),
-                                    |ui| {
-                                        for value in [
-                                            crate::util::TextEncoding::Utf8,
-                                            crate::util::TextEncoding::Gbk,
-                                        ] {
-                                            if ui
-                                                .selectable_label(encoding == value, value.label())
-                                                .clicked()
-                                            {
-                                                actions.push(Action::SetEncoding(value));
-                                                ui.close();
-                                            }
-                                        }
-                                    },
+                            if binary {
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new("只读十六进制").size(10.5).color(text_color),
                                 );
-                            });
-                            ui.add_space(6.0);
-                            let indent = if self.settings.use_spaces {
-                                format!("缩进: 空格 {}", self.settings.indent_width)
                             } else {
-                                format!("缩进: Tab {}", self.settings.indent_width)
-                            };
-                            ui.label(RichText::new(indent).size(10.5).color(text_color));
-                            ui.add_space(6.0);
-                            ui.label(
-                                RichText::new(format!("行 {line}，列 {column}"))
-                                    .size(10.5)
-                                    .color(text_color),
-                            );
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new(format!("行尾: {newline}"))
+                                        .size(10.5)
+                                        .color(text_color),
+                                );
+                                ui.add_space(6.0);
+                                ui.scope(|ui| {
+                                    let visuals = ui.visuals_mut();
+                                    visuals.widgets.inactive.weak_bg_fill = theme::SURFACE;
+                                    visuals.widgets.inactive.bg_fill = theme::SURFACE;
+                                    visuals.widgets.hovered.weak_bg_fill = theme::HOVER;
+                                    visuals.widgets.hovered.bg_fill = theme::HOVER;
+                                    visuals.widgets.open.weak_bg_fill = theme::SURFACE;
+                                    visuals.widgets.open.bg_fill = theme::SURFACE;
+                                    ui.menu_button(
+                                        RichText::new(encoding.label())
+                                            .size(10.5)
+                                            .color(text_color),
+                                        |ui| {
+                                            for value in [
+                                                crate::util::TextEncoding::Utf8,
+                                                crate::util::TextEncoding::Gbk,
+                                            ] {
+                                                if ui
+                                                    .selectable_label(
+                                                        encoding == value,
+                                                        value.label(),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    actions.push(Action::SetEncoding(value));
+                                                    ui.close();
+                                                }
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.add_space(6.0);
+                                let indent = if self.settings.use_spaces {
+                                    format!("缩进: 空格 {}", self.settings.indent_width)
+                                } else {
+                                    format!("缩进: Tab {}", self.settings.indent_width)
+                                };
+                                ui.label(RichText::new(indent).size(10.5).color(text_color));
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new(format!("行 {line}，列 {column}"))
+                                        .size(10.5)
+                                        .color(text_color),
+                                );
+                            }
                         } else {
                             ui.label(RichText::new("就绪").size(10.5).color(text_color));
                         }
@@ -4980,6 +4997,67 @@ impl App {
         }
     }
 
+    fn show_binary_editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        pane_index: usize,
+        actions: &mut Vec<Action>,
+    ) {
+        let Some(doc) = self.tabs.get(pane_index) else {
+            return;
+        };
+        let Some(dump) = doc.binary.as_ref() else {
+            return;
+        };
+        let name = doc.name.clone();
+        let path = doc.path.clone();
+        let size = dump.data.len();
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("二进制 · {name}"))
+                    .size(13.0)
+                    .strong()
+                    .color(theme::TEXT),
+            );
+            ui.label(
+                RichText::new(format!("{size} 字节 · 只读"))
+                    .size(10.0)
+                    .color(theme::TEXT_FAINT),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add(small_flat_button("独立窗口", theme::TEXT_DIM))
+                    .on_hover_text("在独立十六进制窗口中打开")
+                    .clicked()
+                {
+                    actions.push(Action::OpenHex(path.clone()));
+                }
+            });
+        });
+        ui.separator();
+        if size == 0 {
+            ui.label(RichText::new("空文件").size(11.5).color(theme::TEXT_FAINT));
+            return;
+        }
+        ScrollArea::vertical()
+            .id_salt(("simple_embedded_binary_editor", path))
+            .auto_shrink([false, false])
+            .show_rows(ui, 18.0, dump.row_count(), |ui, range| {
+                ui.set_min_width(560.0);
+                for index in range {
+                    if let Some(row) = dump.row(index) {
+                        ui.label(
+                            RichText::new(row)
+                                .monospace()
+                                .size(11.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                    }
+                }
+            });
+    }
+
     fn show_code_editor(
         &mut self,
         ui: &mut egui::Ui,
@@ -4987,6 +5065,14 @@ impl App {
         pane_slot: Option<usize>,
         actions: &mut Vec<Action>,
     ) {
+        if self
+            .tabs
+            .get(pane_index)
+            .is_some_and(|doc| doc.binary.is_some())
+        {
+            self.show_binary_editor(ui, pane_index, actions);
+            return;
+        }
         let is_active_pane = self.active == Some(pane_index);
         if is_active_pane && !self.symbols.scanned {
             self.ensure_symbols();
