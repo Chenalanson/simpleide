@@ -31,10 +31,10 @@ impl TodoKind {
 
     pub fn color(self) -> eframe::egui::Color32 {
         match self {
-            Self::Todo => theme::INFO,
-            Self::Fixme => theme::ERROR,
-            Self::Hack => theme::WARNING,
-            Self::Note => theme::TEXT_DIM,
+            Self::Todo => theme::info(),
+            Self::Fixme => theme::error(),
+            Self::Hack => theme::warning(),
+            Self::Note => theme::text_dim(),
         }
     }
 }

@@ -4,7 +4,7 @@ use super::*;
 use crate::config::autodetect;
 use eframe::egui::{
     self, Align, Align2, Button, Checkbox, Color32, FontId, Frame, Id, Label, Layout, Margin,
-    RadioButton, RichText, ScrollArea, Sense, Shape, Stroke, TextEdit,
+    RadioButton, Rect, RichText, ScrollArea, Sense, Shape, Stroke, TextEdit,
 };
 
 impl App {
@@ -26,20 +26,20 @@ impl App {
             .exact_size(30.0)
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
+                    .fill(theme::panel())
                     .inner_margin(Margin::symmetric(10, 0)),
             )
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    let text_color = theme::TEXT_FAINT;
+                    let text_color = theme::text_faint();
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if let Some((_, _, _, _, _, dirty, read_only, binary)) = info {
                             if !binary {
                                 let save_color = if dirty {
-                                    theme::ACCENT
+                                    theme::accent()
                                 } else {
-                                    theme::TEXT_FAINT
+                                    theme::text_faint()
                                 };
                                 if ui
                                     .add(small_flat_button("保存", save_color))
@@ -49,9 +49,9 @@ impl App {
                                     actions.push(Action::SaveActive);
                                 }
                                 let wrap_color = if self.settings.word_wrap {
-                                    theme::ACCENT
+                                    theme::accent()
                                 } else {
-                                    theme::TEXT_FAINT
+                                    theme::text_faint()
                                 };
                                 if ui
                                     .add(small_flat_button("自动换行", wrap_color))
@@ -61,37 +61,37 @@ impl App {
                                     actions.push(Action::ToggleWrap);
                                 }
                                 if ui
-                                    .add(small_flat_button("格式化", theme::TEXT_DIM))
+                                    .add(small_flat_button("格式化", theme::text_dim()))
                                     .on_hover_text("用 clang-format 格式化当前文件")
                                     .clicked()
                                 {
                                     actions.push(Action::FormatDocument);
                                 }
                                 if ui
-                                    .add(small_flat_button("符号", theme::TEXT_DIM))
+                                    .add(small_flat_button("符号", theme::text_dim()))
                                     .on_hover_text("工程符号搜索 (Ctrl+Shift+O)")
                                     .clicked()
                                 {
                                     actions.push(Action::OpenSymbols);
                                 }
                                 if ui
-                                    .add(small_flat_button("数组", theme::TEXT_DIM))
+                                    .add(small_flat_button("数组", theme::text_dim()))
                                     .on_hover_text("生成 C 数组 (Ctrl+Shift+A)")
                                     .clicked()
                                 {
                                     actions.push(Action::OpenArrayGenerator);
                                 }
                                 if ui
-                                    .add(small_flat_button("寄存器", theme::TEXT_DIM))
+                                    .add(small_flat_button("寄存器", theme::text_dim()))
                                     .on_hover_text("外设寄存器浏览 (Ctrl+Shift+R)")
                                     .clicked()
                                 {
                                     actions.push(Action::OpenRegisters);
                                 }
                                 let read_only_color = if read_only {
-                                    theme::WARNING
+                                    theme::warning()
                                 } else {
-                                    theme::TEXT_FAINT
+                                    theme::text_faint()
                                 };
                                 if ui
                                     .add(small_flat_button("只读", read_only_color))
@@ -106,7 +106,7 @@ impl App {
                             info
                         {
                             ui.add_space(8.0);
-                            ui.label(RichText::new(language).size(10.5).color(theme::INFO));
+                            ui.label(RichText::new(language).size(10.5).color(theme::info()));
                             if binary {
                                 ui.add_space(6.0);
                                 ui.label(
@@ -122,12 +122,12 @@ impl App {
                                 ui.add_space(6.0);
                                 ui.scope(|ui| {
                                     let visuals = ui.visuals_mut();
-                                    visuals.widgets.inactive.weak_bg_fill = theme::SURFACE;
-                                    visuals.widgets.inactive.bg_fill = theme::SURFACE;
-                                    visuals.widgets.hovered.weak_bg_fill = theme::HOVER;
-                                    visuals.widgets.hovered.bg_fill = theme::HOVER;
-                                    visuals.widgets.open.weak_bg_fill = theme::SURFACE;
-                                    visuals.widgets.open.bg_fill = theme::SURFACE;
+                                    visuals.widgets.inactive.weak_bg_fill = theme::surface();
+                                    visuals.widgets.inactive.bg_fill = theme::surface();
+                                    visuals.widgets.hovered.weak_bg_fill = theme::hover();
+                                    visuals.widgets.hovered.bg_fill = theme::hover();
+                                    visuals.widgets.open.weak_bg_fill = theme::surface();
+                                    visuals.widgets.open.bg_fill = theme::surface();
                                     ui.menu_button(
                                         RichText::new(encoding.label())
                                             .size(10.5)
@@ -198,7 +198,7 @@ impl App {
             .resizable(true)
             .default_size(self.settings.left_panel_width)
             .size_range(300.0..=520.0)
-            .frame(Frame::new().fill(theme::GUTTER).inner_margin(Margin {
+            .frame(Frame::new().fill(theme::gutter()).inner_margin(Margin {
                 left: 3,
                 right: 0,
                 top: 3,
@@ -209,7 +209,7 @@ impl App {
                 ui.painter().rect(
                     ui.max_rect(),
                     CornerRadius::same(8),
-                    theme::PANEL,
+                    theme::panel(),
                     Stroke::NONE,
                     egui::StrokeKind::Inside,
                 );
@@ -227,17 +227,17 @@ impl App {
                             .map(|(_, path)| path.as_str())
                             .unwrap_or("选择工程文件夹");
                         Frame::new()
-                            .fill(theme::PANEL_RAISED)
-                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                            .fill(theme::panel_raised())
+                            .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                             .corner_radius(6)
                             .inner_margin(Margin::symmetric(9, 7))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(card_name).size(14.0).strong().color(
                                         if has_project {
-                                            theme::TEXT
+                                            theme::text()
                                         } else {
-                                            theme::TEXT_DIM
+                                            theme::text_dim()
                                         },
                                     ));
                                     ui.add_space(8.0);
@@ -245,7 +245,7 @@ impl App {
                                         Label::new(
                                             RichText::new(card_path)
                                                 .size(11.5)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         )
                                         .truncate(),
                                     );
@@ -254,12 +254,20 @@ impl App {
                                 ui.add_space(3.0);
                                 let (dot_color, builder_text, builder_color) = if has_project {
                                     if has_command {
-                                        (theme::SUCCESS, mode.clone(), theme::TEXT_DIM)
+                                        (theme::success(), mode.clone(), theme::text_dim())
                                     } else {
-                                        (theme::WARNING, "尚未配置构建".to_owned(), theme::WARNING)
+                                        (
+                                            theme::warning(),
+                                            "尚未配置构建".to_owned(),
+                                            theme::warning(),
+                                        )
                                     }
                                 } else {
-                                    (theme::WARNING, "构建器 · 未配置".to_owned(), theme::WARNING)
+                                    (
+                                        theme::warning(),
+                                        "构建器 · 未配置".to_owned(),
+                                        theme::warning(),
+                                    )
                                 };
                                 ui.horizontal(|ui| {
                                     colored_dot(ui, dot_color, 5.0);
@@ -273,7 +281,7 @@ impl App {
                                         ui.label(
                                             RichText::new(device)
                                                 .size(17.25)
-                                                .color(theme::TEXT_DIM),
+                                                .color(theme::text_dim()),
                                         )
                                         .on_hover_text("从 Makefile / .uvprojx 检测到的芯片型号");
                                     }
@@ -292,10 +300,10 @@ impl App {
                                         egui::Button::new(
                                             RichText::new(left_text)
                                                 .size(12.5)
-                                                .color(theme::ACCENT),
+                                                .color(theme::accent()),
                                         )
-                                        .fill(theme::SURFACE)
-                                        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                                        .fill(theme::surface())
+                                        .stroke(Stroke::new(1.0_f32, theme::border()))
                                         .corner_radius(6)
                                     };
                                     if ui
@@ -311,10 +319,10 @@ impl App {
                                     }
                                     let config = if has_project {
                                         egui::Button::new(
-                                            RichText::new("配置").size(12.5).color(theme::ACCENT),
+                                            RichText::new("配置").size(12.5).color(theme::accent()),
                                         )
-                                        .fill(theme::SURFACE)
-                                        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                                        .fill(theme::surface())
+                                        .stroke(Stroke::new(1.0_f32, theme::border()))
                                         .corner_radius(6)
                                     } else {
                                         theme::secondary_button("配置")
@@ -328,10 +336,12 @@ impl App {
                                     }
                                     let workspace = if has_project {
                                         egui::Button::new(
-                                            RichText::new("工作区").size(12.5).color(theme::ACCENT),
+                                            RichText::new("工作区")
+                                                .size(12.5)
+                                                .color(theme::accent()),
                                         )
-                                        .fill(theme::SURFACE)
-                                        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                                        .fill(theme::surface())
+                                        .stroke(Stroke::new(1.0_f32, theme::border()))
                                         .corner_radius(6)
                                     } else {
                                         theme::secondary_button("工作区")
@@ -409,7 +419,7 @@ impl App {
                                     ui.painter().rect_filled(
                                         bar_rect,
                                         CornerRadius::same(1),
-                                        theme::ACCENT,
+                                        theme::accent(),
                                     );
                                     if ui
                                         .add(
@@ -417,7 +427,7 @@ impl App {
                                                 RichText::new("资源管理器")
                                                     .size(12.0)
                                                     .strong()
-                                                    .color(theme::TEXT_DIM),
+                                                    .color(theme::text_dim()),
                                             )
                                             .frame(false),
                                         )
@@ -434,7 +444,7 @@ impl App {
                                                         Button::new(
                                                             RichText::new("刷新")
                                                                 .size(12.0)
-                                                                .color(theme::TEXT_FAINT),
+                                                                .color(theme::text_faint()),
                                                         )
                                                         .frame(false),
                                                     )
@@ -444,9 +454,9 @@ impl App {
                                                     actions.push(Action::RefreshTree);
                                                 }
                                                 let hidden_color = if show_hidden {
-                                                    theme::ACCENT
+                                                    theme::accent()
                                                 } else {
-                                                    theme::TEXT_FAINT
+                                                    theme::text_faint()
                                                 };
                                                 if ui
                                                     .add(
@@ -471,7 +481,7 @@ impl App {
                                                         Button::new(
                                                             RichText::new("Git")
                                                                 .size(12.0)
-                                                                .color(theme::TEXT_FAINT),
+                                                                .color(theme::text_faint()),
                                                         )
                                                         .frame(false),
                                                     )
@@ -485,7 +495,7 @@ impl App {
                                                         Button::new(
                                                             RichText::new("TODO")
                                                                 .size(12.0)
-                                                                .color(theme::TEXT_FAINT),
+                                                                .color(theme::text_faint()),
                                                         )
                                                         .frame(false),
                                                     )
@@ -532,7 +542,7 @@ impl App {
                                                     ui.label(
                                                         RichText::new("工程文件会显示在这里")
                                                             .size(11.0)
-                                                            .color(theme::TEXT_FAINT),
+                                                            .color(theme::text_faint()),
                                                     );
                                                 });
                                             }
@@ -686,21 +696,21 @@ impl App {
                         RichText::new(&project_name)
                             .size(11.5)
                             .strong()
-                            .color(theme::TEXT_DIM),
+                            .color(theme::text_dim()),
                     )
                     .on_hover_text("当前工程");
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui
-                            .add(small_flat_button("刷新", theme::TEXT_FAINT))
+                            .add(small_flat_button("刷新", theme::text_faint()))
                             .on_hover_text("重新读取目录")
                             .clicked()
                         {
                             actions.push(Action::RefreshTree);
                         }
                         let hidden_color = if self.settings.show_hidden {
-                            theme::ACCENT
+                            theme::accent()
                         } else {
-                            theme::TEXT_FAINT
+                            theme::text_faint()
                         };
                         if ui
                             .add(small_flat_button("隐藏文件", hidden_color))
@@ -721,7 +731,7 @@ impl App {
                     ui.label(
                         RichText::new("未打开工程。按 Ctrl+Shift+Enter 退出沉浸模式后再导入工程。")
                             .size(11.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                 } else {
                     let tree_height = (ui.available_height() - 48.0).max(160.0);
@@ -741,7 +751,7 @@ impl App {
                 ui.label(
                     RichText::new("Ctrl+Shift+Enter 退出沉浸模式")
                         .size(9.5)
-                        .color(theme::TEXT_FAINT),
+                        .color(theme::text_faint()),
                 );
             });
         if !open {
@@ -772,7 +782,7 @@ impl App {
                 response.on_hover_text_at_pointer(
                     RichText::new("在 配置 → 构建 中修改")
                         .size(10.5)
-                        .color(theme::TEXT_DIM),
+                        .color(theme::text_dim()),
                 );
             }
             if toolchain_mismatch {
@@ -781,7 +791,7 @@ impl App {
                     ui.label(
                         RichText::new("构建命令与所选工具链不一致")
                             .size(9.0)
-                            .color(theme::WARNING),
+                            .color(theme::warning()),
                     );
                 });
             }
@@ -830,13 +840,15 @@ impl App {
                             Label::new(
                                 RichText::new("构建选项")
                                     .size(11.0)
-                                    .color(theme::TEXT_FAINT),
+                                    .color(theme::text_faint()),
                             ),
                         );
                         if let Some(first) = option_lines.first() {
                             let response = ui.add(
-                                Label::new(RichText::new(first).size(11.5).color(theme::TEXT_DIM))
-                                    .truncate(),
+                                Label::new(
+                                    RichText::new(first).size(11.5).color(theme::text_dim()),
+                                )
+                                .truncate(),
                             );
                             response.on_hover_text(first);
                         }
@@ -845,7 +857,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.add_space(78.0);
                             let response = ui.add(
-                                Label::new(RichText::new(line).size(11.5).color(theme::TEXT_DIM))
+                                Label::new(RichText::new(line).size(11.5).color(theme::text_dim()))
                                     .truncate(),
                             );
                             response.on_hover_text(line);
@@ -875,11 +887,15 @@ impl App {
             &mut add_support_pack,
             |ui| {
                 if self.support_packs.is_empty() {
-                    ui.label(RichText::new("未添加").size(11.0).color(theme::TEXT_FAINT));
+                    ui.label(
+                        RichText::new("未添加")
+                            .size(11.0)
+                            .color(theme::text_faint()),
+                    );
                     ui.label(
                         RichText::new("点击右侧 + 选择 .pack / .pdsc")
                             .size(9.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                 } else {
                     for (index, pack) in self.support_packs.iter().enumerate() {
@@ -894,9 +910,9 @@ impl App {
                             colored_dot(
                                 ui,
                                 if pack.error.is_none() {
-                                    theme::SUCCESS
+                                    theme::success()
                                 } else {
-                                    theme::WARNING
+                                    theme::warning()
                                 },
                                 4.0,
                             );
@@ -904,20 +920,22 @@ impl App {
                                 RichText::new(&pack.name)
                                     .size(11.5)
                                     .strong()
-                                    .color(theme::TEXT),
+                                    .color(theme::text()),
                             );
                             if let Some(version) = &pack.version {
-                                ui.label(RichText::new(version).size(9.5).color(theme::TEXT_FAINT));
+                                ui.label(
+                                    RichText::new(version).size(9.5).color(theme::text_faint()),
+                                );
                             }
                             if external {
-                                ui.label(RichText::new("Keil 安装").size(8.5).color(theme::INFO));
+                                ui.label(RichText::new("Keil 安装").size(8.5).color(theme::info()));
                             }
                         });
                         let response = ui.add(
                             Label::new(
                                 RichText::new(&pack.file_name)
                                     .size(9.0)
-                                    .color(theme::TEXT_FAINT),
+                                    .color(theme::text_faint()),
                             )
                             .truncate(),
                         );
@@ -926,23 +944,23 @@ impl App {
                             ui.label(
                                 RichText::new(format!("厂商：{vendor}"))
                                     .size(9.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             );
                         }
                         ui.label(
                             RichText::new(pack.device_summary())
                                 .size(9.5)
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         );
                         if pack.svd_count > 0 {
                             ui.label(
                                 RichText::new(format!("SVD：{} 个", pack.svd_count))
                                     .size(9.0)
-                                    .color(theme::TEXT_FAINT),
+                                    .color(theme::text_faint()),
                             );
                         }
                         if let Some(error) = &pack.error {
-                            ui.label(RichText::new(error).size(9.0).color(theme::WARNING));
+                            ui.label(RichText::new(error).size(9.0).color(theme::warning()));
                         }
                         if external {
                             ui.add_space(3.0);
@@ -970,14 +988,14 @@ impl App {
                     Label::new(
                         RichText::new("烧录工具")
                             .size(11.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     ),
                 );
                 egui::ComboBox::from_id_salt("simple_embedded_flash_tool")
                     .selected_text(
                         RichText::new(tool.label())
                             .size(11.5)
-                            .color(theme::TEXT_DIM),
+                            .color(theme::text_dim()),
                     )
                     .width(160.0)
                     .show_ui(ui, |ui| {
@@ -1000,7 +1018,7 @@ impl App {
                         Label::new(
                             RichText::new("工具路径")
                                 .size(11.0)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                         ),
                     );
                     let short = if current.is_empty() || current.eq_ignore_ascii_case("openocd") {
@@ -1012,7 +1030,7 @@ impl App {
                             .unwrap_or_else(|| current.clone())
                     };
                     let response = egui::ComboBox::from_id_salt("simple_embedded_openocd_path")
-                        .selected_text(RichText::new(short).size(11.5).color(theme::TEXT_DIM))
+                        .selected_text(RichText::new(short).size(11.5).color(theme::text_dim()))
                         .width(160.0)
                         .show_ui(ui, |ui| {
                             for candidate in flash::openocd_candidates(&current) {
@@ -1030,7 +1048,7 @@ impl App {
                         current.as_str()
                     });
                     if ui
-                        .add(small_flat_button("浏览", theme::TEXT_FAINT))
+                        .add(small_flat_button("浏览", theme::text_faint()))
                         .on_hover_text("选择 openocd 可执行文件")
                         .clicked()
                     {
@@ -1050,7 +1068,7 @@ impl App {
                     ui.label(
                         RichText::new("未找到 OpenOCD，请选择可执行文件")
                             .size(9.0)
-                            .color(theme::WARNING),
+                            .color(theme::warning()),
                     );
                 }
 
@@ -1098,7 +1116,7 @@ impl App {
                         Label::new(
                             RichText::new("工具路径")
                                 .size(11.0)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                         ),
                     );
                     let short = if current.is_empty() || current.eq_ignore_ascii_case("pyocd") {
@@ -1110,7 +1128,7 @@ impl App {
                             .unwrap_or_else(|| current.clone())
                     };
                     let response = egui::ComboBox::from_id_salt("simple_embedded_pyocd_path")
-                        .selected_text(RichText::new(short).size(11.5).color(theme::TEXT_DIM))
+                        .selected_text(RichText::new(short).size(11.5).color(theme::text_dim()))
                         .width(160.0)
                         .show_ui(ui, |ui| {
                             for candidate in flash::pyocd_candidates(&current) {
@@ -1128,7 +1146,7 @@ impl App {
                         current.as_str()
                     });
                     if ui
-                        .add(small_flat_button("浏览", theme::TEXT_FAINT))
+                        .add(small_flat_button("浏览", theme::text_faint()))
                         .on_hover_text("选择 pyocd 可执行文件")
                         .clicked()
                     {
@@ -1148,7 +1166,7 @@ impl App {
                     ui.label(
                         RichText::new("未找到 pyOCD，请选择可执行文件")
                             .size(9.0)
-                            .color(theme::WARNING),
+                            .color(theme::warning()),
                     );
                 }
 
@@ -1301,7 +1319,7 @@ impl App {
         egui::CentralPanel::default()
             .frame(
                 Frame::new()
-                    .fill(theme::GUTTER)
+                    .fill(theme::gutter())
                     .inner_margin(Margin::same(4)),
             )
             .show_inside(ui, |ui| {
@@ -1309,7 +1327,7 @@ impl App {
                 ui.painter().rect(
                     ui.max_rect(),
                     CornerRadius::same(8),
-                    theme::EDITOR_BG,
+                    self.code_theme().bg,
                     Stroke::NONE,
                     egui::StrokeKind::Inside,
                 );
@@ -1326,7 +1344,7 @@ impl App {
                         Align2::CENTER_CENTER,
                         hint,
                         FontId::proportional(11.5),
-                        theme::TEXT_FAINT,
+                        theme::text_faint(),
                     );
                     return;
                 }
@@ -1385,7 +1403,7 @@ impl App {
                                 ui.painter().rect_filled(
                                     gap_rect,
                                     CornerRadius::ZERO,
-                                    theme::GUTTER,
+                                    theme::gutter(),
                                 );
                                 self.show_code_editor(ui, secondary, Some(1), actions);
                             }
@@ -1409,7 +1427,7 @@ impl App {
                 if self.goto_line.open {
                     self.show_goto_overlay(&ctx, editor_rect);
                 }
-                paint_bottom_corners(ui, editor_rect, 8.0, theme::GUTTER);
+                paint_bottom_corners(ui, editor_rect, 8.0, theme::gutter());
             });
     }
 
@@ -1426,8 +1444,8 @@ impl App {
             .fixed_pos(position)
             .show(ctx, |ui| {
                 Frame::new()
-                    .fill(theme::PANEL_RAISED)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel_raised())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(6)
                     .shadow(egui::epaint::Shadow {
                         offset: [0, 6],
@@ -1456,14 +1474,14 @@ impl App {
                         }
                         ui.add_space(4.0);
                         if let Some(error) = &self.goto_line.error {
-                            ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                            ui.label(RichText::new(error).size(10.5).color(theme::error()));
                         } else {
                             ui.label(
                                 RichText::new(format!(
                                     "键入要跳转的行号（从 1 到 {line_count}）。"
                                 ))
                                 .size(10.5)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                             );
                         }
                     });
@@ -1510,8 +1528,8 @@ impl App {
             .fixed_pos(position)
             .show(ctx, |ui| {
                 Frame::new()
-                    .fill(theme::PANEL_RAISED)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel_raised())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(6)
                     .shadow(egui::epaint::Shadow {
                         offset: [0, 6],
@@ -1529,7 +1547,7 @@ impl App {
 
     fn show_tab_strip(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         Frame::new()
-            .fill(theme::PANEL)
+            .fill(theme::panel())
             .corner_radius(CornerRadius {
                 nw: 8,
                 ne: 8,
@@ -1553,7 +1571,7 @@ impl App {
                                 let galley = ui.painter().layout_no_wrap(
                                     doc.name.clone(),
                                     font.clone(),
-                                    theme::TEXT,
+                                    theme::text(),
                                 );
                                 let width = (galley.size().x + 48.0).clamp(108.0, 224.0);
                                 let (rect, response) =
@@ -1573,7 +1591,7 @@ impl App {
                                     painter.rect_filled(
                                         rect,
                                         CornerRadius::same(5),
-                                        theme::EDITOR_BG,
+                                        theme::editor_bg(),
                                     );
                                     painter.rect_filled(
                                         egui::Rect::from_min_size(
@@ -1581,13 +1599,13 @@ impl App {
                                             egui::vec2(rect.width() - 10.0, 2.0),
                                         ),
                                         CornerRadius::same(1),
-                                        theme::ACCENT,
+                                        theme::accent(),
                                     );
                                 } else if response.hovered() {
                                     painter.rect_filled(
                                         rect,
                                         CornerRadius::same(5),
-                                        theme::SURFACE,
+                                        theme::surface(),
                                     );
                                 }
 
@@ -1596,9 +1614,9 @@ impl App {
                                     egui::pos2(rect.right() - 34.0, rect.bottom()),
                                 );
                                 let text_color = if is_active || response.hovered() {
-                                    theme::TEXT
+                                    theme::text()
                                 } else {
-                                    theme::TEXT_DIM
+                                    theme::text_dim()
                                 };
                                 ui.painter_at(text_rect).text(
                                     egui::pos2(text_rect.left(), rect.center().y - 1.0),
@@ -1612,16 +1630,16 @@ impl App {
                                     painter.circle_filled(
                                         egui::pos2(rect.right() - 27.0, rect.center().y),
                                         2.6,
-                                        theme::WARNING,
+                                        theme::warning(),
                                     );
                                 }
 
                                 let close_color = if close_response.hovered() {
-                                    theme::ERROR
+                                    theme::error()
                                 } else if is_active || response.hovered() {
-                                    theme::TEXT_DIM
+                                    theme::text_dim()
                                 } else {
-                                    theme::TEXT_FAINT.gamma_multiply(0.55)
+                                    theme::text_faint().gamma_multiply(0.55)
                                 };
                                 let center = close_rect.center();
                                 painter.line_segment(
@@ -1719,7 +1737,7 @@ impl App {
                                             Button::new(
                                                 RichText::new("拆分和移动")
                                                     .size(11.5)
-                                                    .color(theme::TEXT),
+                                                    .color(theme::text()),
                                             )
                                             .right_text(
                                                 egui::containers::menu::SubMenuButton::RIGHT_ARROW,
@@ -1805,7 +1823,7 @@ impl App {
         let dirty = doc.is_dirty();
 
         Frame::new()
-            .fill(theme::EDITOR_BG)
+            .fill(theme::editor_bg())
             .inner_margin(Margin::symmetric(12, 4))
             .show(ui, |ui| {
                 ui.spacing_mut().interact_size.y = 24.0;
@@ -1814,13 +1832,13 @@ impl App {
                         Label::new(
                             RichText::new(&breadcrumb)
                                 .size(12.0)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                         )
                         .truncate(),
                     );
                     response.on_hover_text(&full_path);
                     if dirty {
-                        ui.label(RichText::new("● 未保存").size(11.0).color(theme::WARNING));
+                        ui.label(RichText::new("● 未保存").size(11.0).color(theme::warning()));
                     }
                 });
             });
@@ -1884,9 +1902,9 @@ impl App {
             format!("{}/{}", self.find.active + 1, self.find.matches.len())
         };
         let status_color = if error_text.is_some() {
-            theme::ERROR
+            theme::error()
         } else {
-            theme::TEXT_FAINT
+            theme::text_faint()
         };
 
         const ROW_HEIGHT: f32 = 24.0;
@@ -1918,13 +1936,13 @@ impl App {
                 ui.painter().rect_filled(
                     egui::Rect::from_center_size(chevron_rect.center(), egui::vec2(18.0, 22.0)),
                     CornerRadius::same(3),
-                    theme::SURFACE,
+                    theme::surface(),
                 );
             }
             let chevron_color = if chevron.hovered() {
-                theme::TEXT
+                theme::text()
             } else {
-                theme::TEXT_DIM
+                theme::text_dim()
             };
             let center = chevron_rect.center();
             let chevron_stroke = Stroke::new(1.3_f32, chevron_color);
@@ -2063,8 +2081,11 @@ impl App {
                             .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .on_hover_text("保留大小写 (Alt+P)");
                         if ab.hovered() {
-                            ui.painter()
-                                .rect_filled(ab_rect, CornerRadius::same(3), theme::HOVER);
+                            ui.painter().rect_filled(
+                                ab_rect,
+                                CornerRadius::same(3),
+                                theme::hover(),
+                            );
                         }
                         ui.painter().text(
                             ab_rect.center(),
@@ -2072,9 +2093,9 @@ impl App {
                             "AB",
                             FontId::proportional(10.5),
                             if self.find.preserve_case {
-                                theme::ACCENT
+                                theme::accent()
                             } else {
-                                theme::TEXT_DIM
+                                theme::text_dim()
                             },
                         );
                         if ab.clicked() {
@@ -2121,21 +2142,21 @@ impl App {
             .min_height(420.0)
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .inner_margin(Margin::same(12))
                     .corner_radius(6),
             )
             .show(ctx, |ui| {
                 ui.set_min_width(720.0);
                 ui.set_min_height(380.0);
-                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.visuals_mut().override_text_color = Some(theme::text());
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("全工程搜索")
                             .size(16.0)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if window_close_button(ui) {
@@ -2149,10 +2170,10 @@ impl App {
                         TextEdit::singleline(&mut self.project_search.query)
                             .id(Id::new("simple_embedded_project_search_query"))
                             .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
+                            .text_color(theme::text())
+                            .background_color(theme::bg())
                             .desired_width(300.0)
-                            .hint_text(RichText::new("搜索内容").color(theme::TEXT_FAINT)),
+                            .hint_text(RichText::new("搜索内容").color(theme::text_faint())),
                     );
                     if self.project_search.focus_query {
                         query.request_focus();
@@ -2167,7 +2188,7 @@ impl App {
                     if ui
                         .selectable_label(
                             self.project_search.case_sensitive,
-                            RichText::new("Aa").size(11.0).color(theme::TEXT_DIM),
+                            RichText::new("Aa").size(11.0).color(theme::text_dim()),
                         )
                         .on_hover_text("区分大小写")
                         .clicked()
@@ -2177,7 +2198,7 @@ impl App {
                     if ui
                         .selectable_label(
                             self.project_search.use_regex,
-                            RichText::new(".*").size(11.0).color(theme::TEXT_DIM),
+                            RichText::new(".*").size(11.0).color(theme::text_dim()),
                         )
                         .on_hover_text("正则表达式")
                         .clicked()
@@ -2188,7 +2209,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if let Some(error) = &self.project_search.error {
-                        ui.label(RichText::new(error).size(11.0).color(theme::ERROR));
+                        ui.label(RichText::new(error).size(11.0).color(theme::error()));
                     } else if self.project_search.searched {
                         ui.label(
                             RichText::new(format!(
@@ -2197,20 +2218,20 @@ impl App {
                                 self.project_search.scanned_files
                             ))
                             .size(11.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                         );
                         if self.project_search.truncated {
                             ui.label(
                                 RichText::new("结果过多，已截断")
                                     .size(11.0)
-                                    .color(theme::WARNING),
+                                    .color(theme::warning()),
                             );
                         }
                     } else {
                         ui.label(
                             RichText::new("输入内容后按 Enter 或点击搜索")
                                 .size(11.0)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                         );
                     }
                 });
@@ -2220,7 +2241,7 @@ impl App {
                         ui.label(
                             RichText::new("没有匹配项")
                                 .size(11.5)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                         );
                     }
                 } else {
@@ -2244,7 +2265,7 @@ impl App {
                                     format!("{}:{}:{}    {}", path, hit.line, hit.column, preview);
                                 let response = ui.selectable_label(
                                     false,
-                                    RichText::new(label).size(11.5).color(theme::TEXT_DIM),
+                                    RichText::new(label).size(11.5).color(theme::text_dim()),
                                 );
                                 if response.clicked() {
                                     clicked = Some(hit.clone());
@@ -2281,27 +2302,30 @@ impl App {
             .min_height(360.0)
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .inner_margin(Margin::same(12))
                     .corner_radius(6),
             )
             .show(ctx, |ui| {
                 ui.set_min_width(600.0);
                 ui.set_min_height(340.0);
-                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.visuals_mut().override_text_color = Some(theme::text());
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("Git 状态")
                             .size(16.0)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if window_close_button(ui) {
                             open = false;
                         }
-                        if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
+                        if ui
+                            .add(small_flat_button("刷新", theme::text_dim()))
+                            .clicked()
+                        {
                             refresh = true;
                         }
                     });
@@ -2315,7 +2339,7 @@ impl App {
                                 .unwrap_or_else(|| "当前工程不是 Git 仓库".to_owned()),
                         )
                         .size(11.5)
-                        .color(theme::TEXT_FAINT),
+                        .color(theme::text_faint()),
                     );
                 } else {
                     ui.horizontal(|ui| {
@@ -2323,13 +2347,13 @@ impl App {
                             ui.label(
                                 RichText::new(format!("分支 {}", git.branch))
                                     .size(11.5)
-                                    .color(theme::ACCENT),
+                                    .color(theme::accent()),
                             );
                         }
                         ui.label(
                             RichText::new(format!("{} 个变更", git.files.len()))
                                 .size(11.5)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                         );
                     });
                     ui.separator();
@@ -2337,7 +2361,7 @@ impl App {
                         ui.label(
                             RichText::new("工作区干净")
                                 .size(11.5)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                         );
                     } else {
                         ScrollArea::vertical()
@@ -2408,27 +2432,30 @@ impl App {
             .min_height(360.0)
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .inner_margin(Margin::same(12))
                     .corner_radius(6),
             )
             .show(ctx, |ui| {
                 ui.set_min_width(660.0);
                 ui.set_min_height(330.0);
-                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.visuals_mut().override_text_color = Some(theme::text());
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("TODO / 注释")
                             .size(16.0)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if window_close_button(ui) {
                             open = false;
                         }
-                        if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
+                        if ui
+                            .add(small_flat_button("刷新", theme::text_dim()))
+                            .clicked()
+                        {
                             refresh = true;
                         }
                     });
@@ -2438,7 +2465,7 @@ impl App {
                     ui.label(
                         RichText::new(format!("{} 条", filtered.len()))
                             .size(11.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                     for (value, label) in [
                         (None, "全部"),
@@ -2449,9 +2476,9 @@ impl App {
                     ] {
                         let active = self.todo.filter == value;
                         let color = if active {
-                            value.map_or(theme::ACCENT, TodoKind::color)
+                            value.map_or(theme::accent(), TodoKind::color)
                         } else {
-                            theme::TEXT_FAINT
+                            theme::text_faint()
                         };
                         if ui
                             .selectable_label(active, RichText::new(label).size(11.0).color(color))
@@ -2464,18 +2491,18 @@ impl App {
                         ui.label(
                             RichText::new("结果过多，已截断")
                                 .size(11.0)
-                                .color(theme::WARNING),
+                                .color(theme::warning()),
                         );
                     }
                 });
                 ui.separator();
                 if let Some(error) = &self.todo.error {
-                    ui.label(RichText::new(error).size(11.5).color(theme::ERROR));
+                    ui.label(RichText::new(error).size(11.5).color(theme::error()));
                 } else if filtered.is_empty() {
                     ui.label(
                         RichText::new("没有找到 TODO / FIXME 注释")
                             .size(11.5)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                 } else {
                     ScrollArea::vertical()
@@ -2555,27 +2582,30 @@ impl App {
             .min_height(360.0)
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .inner_margin(Margin::same(12))
                     .corner_radius(6),
             )
             .show(ctx, |ui| {
                 ui.set_min_width(660.0);
                 ui.set_min_height(330.0);
-                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.visuals_mut().override_text_color = Some(theme::text());
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("符号搜索")
                             .size(16.0)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if window_close_button(ui) {
                             open = false;
                         }
-                        if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
+                        if ui
+                            .add(small_flat_button("刷新", theme::text_dim()))
+                            .clicked()
+                        {
                             refresh = true;
                         }
                     });
@@ -2586,32 +2616,34 @@ impl App {
                         TextEdit::singleline(&mut self.symbols.query)
                             .id(Id::new("simple_embedded_symbol_filter"))
                             .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
+                            .text_color(theme::text())
+                            .background_color(theme::bg())
                             .desired_width(300.0)
-                            .hint_text(RichText::new("按名称或路径过滤").color(theme::TEXT_FAINT)),
+                            .hint_text(
+                                RichText::new("按名称或路径过滤").color(theme::text_faint()),
+                            ),
                     );
                     ui.label(
                         RichText::new(format!("{} 个符号", filtered.len()))
                             .size(11.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                     if self.symbols.truncated {
                         ui.label(
                             RichText::new("索引过多，已截断")
                                 .size(11.0)
-                                .color(theme::WARNING),
+                                .color(theme::warning()),
                         );
                     }
                 });
                 ui.separator();
                 if let Some(error) = &self.symbols.error {
-                    ui.label(RichText::new(error).size(11.5).color(theme::ERROR));
+                    ui.label(RichText::new(error).size(11.5).color(theme::error()));
                 } else if filtered.is_empty() {
                     ui.label(
                         RichText::new("没有匹配的符号")
                             .size(11.5)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                 } else {
                     ScrollArea::vertical()
@@ -2676,33 +2708,33 @@ impl App {
             .min_height(360.0)
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .inner_margin(Margin::same(12))
                     .corner_radius(6),
             )
             .show(ctx, |ui| {
                 ui.set_min_width(720.0);
                 ui.set_min_height(330.0);
-                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.visuals_mut().override_text_color = Some(theme::text());
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(format!("十六进制 · {name}"))
                             .size(16.0)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     ui.label(
                         RichText::new(format!("{size} 字节"))
                             .size(11.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if window_close_button(ui) {
                             open = false;
                         }
                         if ui
-                            .add(small_flat_button("生成数组", theme::TEXT_DIM))
+                            .add(small_flat_button("生成数组", theme::text_dim()))
                             .on_hover_text("把这批字节生成 C 数组")
                             .clicked()
                         {
@@ -2710,12 +2742,16 @@ impl App {
                         }
                     });
                 });
-                ui.label(RichText::new(&path).size(10.5).color(theme::TEXT_FAINT));
+                ui.label(RichText::new(&path).size(10.5).color(theme::text_faint()));
                 ui.separator();
                 if let Some(error) = &self.hex.error {
-                    ui.label(RichText::new(error).size(11.5).color(theme::ERROR));
+                    ui.label(RichText::new(error).size(11.5).color(theme::error()));
                 } else if size == 0 {
-                    ui.label(RichText::new("空文件").size(11.5).color(theme::TEXT_FAINT));
+                    ui.label(
+                        RichText::new("空文件")
+                            .size(11.5)
+                            .color(theme::text_faint()),
+                    );
                 } else {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ScrollArea::vertical()
@@ -2728,7 +2764,7 @@ impl App {
                                         RichText::new(row)
                                             .monospace()
                                             .size(12.0)
-                                            .color(theme::TEXT_DIM),
+                                            .color(theme::text_dim()),
                                     );
                                 }
                             }
@@ -2777,21 +2813,21 @@ impl App {
             .min_height(420.0)
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .inner_margin(Margin::same(12))
                     .corner_radius(6),
             )
             .show(ctx, |ui| {
                 ui.set_min_width(740.0);
                 ui.set_min_height(390.0);
-                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.visuals_mut().override_text_color = Some(theme::text());
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("生成 C 数组")
                             .size(16.0)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     ui.label(
                         RichText::new(format!(
@@ -2800,13 +2836,13 @@ impl App {
                             self.array.source.len()
                         ))
                         .size(11.0)
-                        .color(theme::TEXT_FAINT),
+                        .color(theme::text_faint()),
                     );
                     if self.array.truncated {
                         ui.label(
                             RichText::new("已截断到 8 KB")
                                 .size(11.0)
-                                .color(theme::WARNING),
+                                .color(theme::warning()),
                         );
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -2817,13 +2853,13 @@ impl App {
                 });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("变量名").size(11.5).color(theme::TEXT_DIM));
+                    ui.label(RichText::new("变量名").size(11.5).color(theme::text_dim()));
                     ui.add(
                         TextEdit::singleline(&mut self.array.name)
                             .id(Id::new("simple_embedded_array_name"))
                             .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
+                            .text_color(theme::text())
+                            .background_color(theme::bg())
                             .desired_width(220.0),
                     );
                     ui.checkbox(&mut self.array.hex, "十六进制");
@@ -2843,7 +2879,7 @@ impl App {
                             RichText::new(&preview)
                                 .monospace()
                                 .size(12.0)
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         );
                     });
             });
@@ -2881,34 +2917,37 @@ impl App {
             .min_height(360.0)
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .inner_margin(Margin::same(12))
                     .corner_radius(6),
             )
             .show(ctx, |ui| {
                 ui.set_min_width(740.0);
                 ui.set_min_height(330.0);
-                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.visuals_mut().override_text_color = Some(theme::text());
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("寄存器")
                             .size(16.0)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     if !self.registers.source.is_empty() {
                         ui.label(
                             RichText::new(&self.registers.source)
                                 .size(11.0)
-                                .color(theme::ACCENT),
+                                .color(theme::accent()),
                         );
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if window_close_button(ui) {
                             open = false;
                         }
-                        if ui.add(small_flat_button("刷新", theme::TEXT_DIM)).clicked() {
+                        if ui
+                            .add(small_flat_button("刷新", theme::text_dim()))
+                            .clicked()
+                        {
                             refresh = true;
                         }
                     });
@@ -2919,34 +2958,34 @@ impl App {
                         TextEdit::singleline(&mut self.registers.query)
                             .id(Id::new("simple_embedded_register_filter"))
                             .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
+                            .text_color(theme::text())
+                            .background_color(theme::bg())
                             .desired_width(300.0)
                             .hint_text(
-                                RichText::new("按名称、地址或说明过滤").color(theme::TEXT_FAINT),
+                                RichText::new("按名称、地址或说明过滤").color(theme::text_faint()),
                             ),
                     );
                     ui.label(
                         RichText::new(format!("{} 项", filtered.len()))
                             .size(11.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                     if self.registers.truncated {
                         ui.label(
                             RichText::new("结果过多，已截断")
                                 .size(11.0)
-                                .color(theme::WARNING),
+                                .color(theme::warning()),
                         );
                     }
                 });
                 ui.separator();
                 if let Some(error) = &self.registers.error {
-                    ui.label(RichText::new(error).size(11.5).color(theme::ERROR));
+                    ui.label(RichText::new(error).size(11.5).color(theme::error()));
                 } else if filtered.is_empty() {
                     ui.label(
                         RichText::new("未找到 SVD 文件或 *_BASE / *_ADDR 寄存器宏")
                             .size(11.5)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                 } else {
                     ScrollArea::vertical()
@@ -2966,7 +3005,7 @@ impl App {
                                         RichText::new(label)
                                             .size(11.5)
                                             .monospace()
-                                            .color(theme::ACCENT),
+                                            .color(theme::accent()),
                                     )
                                     .on_hover_text(
                                         item.path
@@ -3006,8 +3045,8 @@ impl App {
         let modal = egui::Modal::new(Id::new("simple_embedded_create_entry_modal"))
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(20, 16)),
             )
@@ -3019,7 +3058,7 @@ impl App {
                     RichText::new(draft.kind.title())
                         .size(18.0)
                         .strong()
-                        .color(theme::TEXT),
+                        .color(theme::text()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
@@ -3031,7 +3070,7 @@ impl App {
             ui.label(
                 RichText::new(format!("位置：{}", util::display_path(&draft.dir)))
                     .size(10.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
             ui.add_space(8.0);
             let hint = match draft.kind {
@@ -3050,7 +3089,7 @@ impl App {
             }
             if let Some(error) = &draft.error {
                 ui.add_space(5.0);
-                ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                ui.label(RichText::new(error).size(10.5).color(theme::error()));
             }
             if (response.has_focus() || response.lost_focus())
                 && ui.input(|input| input.key_pressed(egui::Key::Enter))
@@ -3085,8 +3124,8 @@ impl App {
         let modal = egui::Modal::new(Id::new("simple_embedded_rename_entry_modal"))
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(20, 16)),
             )
@@ -3098,7 +3137,7 @@ impl App {
                     RichText::new("重命名")
                         .size(18.0)
                         .strong()
-                        .color(theme::TEXT),
+                        .color(theme::text()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
@@ -3110,7 +3149,7 @@ impl App {
             ui.label(
                 RichText::new(format!("位置：{}", util::display_path(&draft.path)))
                     .size(10.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
             ui.add_space(8.0);
             let response = ui.add(
@@ -3125,7 +3164,7 @@ impl App {
             }
             if let Some(error) = &draft.error {
                 ui.add_space(5.0);
-                ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                ui.label(RichText::new(error).size(10.5).color(theme::error()));
             }
             if (response.has_focus() || response.lost_focus())
                 && ui.input(|input| input.key_pressed(egui::Key::Enter))
@@ -3160,8 +3199,8 @@ impl App {
         let modal = egui::Modal::new(Id::new("simple_embedded_delete_entry_modal"))
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(20, 16)),
             )
@@ -3177,7 +3216,7 @@ impl App {
                     })
                     .size(18.0)
                     .strong()
-                    .color(theme::TEXT),
+                    .color(theme::text()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
@@ -3192,21 +3231,21 @@ impl App {
                     util::display_path(&draft.path)
                 ))
                 .size(12.0)
-                .color(theme::TEXT),
+                .color(theme::text()),
             );
             if draft.is_dir {
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("文件夹中的所有内容都会一并删除。")
                         .size(10.5)
-                        .color(theme::WARNING),
+                        .color(theme::warning()),
                 );
             }
             ui.add_space(4.0);
             ui.label(
                 RichText::new("此操作不可撤销。")
                     .size(10.5)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -3242,8 +3281,8 @@ impl App {
         let modal = egui::Modal::new(Id::new("simple_embedded_memory_layout_modal"))
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(20, 16)),
             )
@@ -3255,7 +3294,7 @@ impl App {
                     RichText::new("内存布局")
                         .size(18.0)
                         .strong()
-                        .color(theme::TEXT),
+                        .color(theme::text()),
                 );
                 ui.label(
                     RichText::new(format!(
@@ -3271,7 +3310,7 @@ impl App {
                         }
                     ))
                     .size(10.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
@@ -3283,7 +3322,7 @@ impl App {
             ui.label(
                 RichText::new("地址和大小支持 0x08000000、65536、64K、1M 等写法；Default 勾选的区域计入总量。")
                     .size(10.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
             ui.add_space(8.0);
 
@@ -3323,7 +3362,7 @@ impl App {
                 ui.label(
                     RichText::new("下载起始地址")
                         .size(11.0)
-                        .color(theme::TEXT_DIM),
+                        .color(theme::text_dim()),
                 );
                 let response = ui.add(
                     TextEdit::singleline(&mut draft.download_address)
@@ -3340,11 +3379,11 @@ impl App {
                     "烧录 .bin 时使用此地址；.hex / .elf / .axf 使用文件内记录的地址。修改内存布局不会自动改写链接脚本。",
                 )
                 .size(9.5)
-                .color(theme::TEXT_FAINT),
+                .color(theme::text_faint()),
             );
             if let Some(error) = &draft.error {
                 ui.add_space(5.0);
-                ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                ui.label(RichText::new(error).size(10.5).color(theme::error()));
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -3409,8 +3448,8 @@ impl App {
             .min_size([420.0, 260.0])
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(14, 12)),
             )
@@ -3422,9 +3461,9 @@ impl App {
                     ] {
                         let active = self.memory_check.tab == tab;
                         let color = if active {
-                            theme::ACCENT
+                            theme::accent()
                         } else {
-                            theme::TEXT_DIM
+                            theme::text_dim()
                         };
                         if ui.add(small_flat_button(label, color)).clicked() {
                             self.memory_check.tab = tab;
@@ -3439,9 +3478,9 @@ impl App {
                             })
                             .size(9.5)
                             .color(if session_present {
-                                theme::SUCCESS
+                                theme::success()
                             } else {
-                                theme::TEXT_FAINT
+                                theme::text_faint()
                             }),
                         );
                     });
@@ -3455,7 +3494,7 @@ impl App {
                             RichText::new("数组与内存安全扫描")
                                 .size(14.0)
                                 .strong()
-                                .color(theme::TEXT),
+                                .color(theme::text()),
                         );
                         ui.label(
                             RichText::new(format!(
@@ -3465,11 +3504,11 @@ impl App {
                                 self.memory_check.findings.len()
                             ))
                             .size(10.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui
-                                .add(small_flat_button("重新扫描", theme::ACCENT))
+                                .add(small_flat_button("重新扫描", theme::accent()))
                                 .clicked()
                             {
                                 rescan = true;
@@ -3479,7 +3518,7 @@ impl App {
                     ui.label(
                         RichText::new("工程打开后即可使用；静态扫描查找常量下标越界、危险字符串函数、重复释放、可疑 malloc 和返回局部数组。它不替代 ASAN/Valgrind。")
                             .size(9.5)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                     ui.add_space(5.0);
                     ui.add(
@@ -3490,7 +3529,7 @@ impl App {
                     );
                     ui.add_space(4.0);
                     if let Some(error) = &self.memory_check.error {
-                        ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                        ui.label(RichText::new(error).size(10.5).color(theme::error()));
                     }
                     let filter = self.memory_check.query.trim().to_lowercase();
                     let findings = self
@@ -3520,15 +3559,15 @@ impl App {
                                         "未发现明显的数组越界或内存错误模式。复杂宏、跨文件作用域和运行时数据仍可能有问题。",
                                     )
                                     .size(11.0)
-                                    .color(theme::TEXT_FAINT),
+                                    .color(theme::text_faint()),
                                 );
                                 return;
                             }
                             for finding in findings {
                                 let color = match finding.severity {
-                                    crate::memory_check::Severity::Error => theme::ERROR,
-                                    crate::memory_check::Severity::Warning => theme::WARNING,
-                                    crate::memory_check::Severity::Info => theme::ACCENT,
+                                    crate::memory_check::Severity::Error => theme::error(),
+                                    crate::memory_check::Severity::Warning => theme::warning(),
+                                    crate::memory_check::Severity::Info => theme::accent(),
                                 };
                                 ui.horizontal(|ui| {
                                     colored_dot(ui, color, 4.0);
@@ -3551,12 +3590,12 @@ impl App {
                                     ui.label(
                                         RichText::new(finding.category)
                                             .size(9.5)
-                                            .color(theme::TEXT_FAINT),
+                                            .color(theme::text_faint()),
                                     );
                                     ui.label(
                                         RichText::new(&finding.message)
                                             .size(10.5)
-                                            .color(theme::TEXT),
+                                            .color(theme::text()),
                                     );
                                 });
                                 if !finding.snippet.is_empty() {
@@ -3564,7 +3603,7 @@ impl App {
                                         RichText::new(format!("    {}", finding.snippet))
                                             .monospace()
                                             .size(9.0)
-                                            .color(theme::TEXT_FAINT),
+                                            .color(theme::text_faint()),
                                     );
                                 }
                                 ui.add_space(3.0);
@@ -3577,7 +3616,7 @@ impl App {
                             RichText::new("硬件 watchpoint")
                                 .size(14.0)
                                 .strong()
-                                .color(theme::TEXT),
+                                .color(theme::text()),
                         )
                         .on_hover_text_at_pointer(
                             "Cortex-M 通常支持 2-4 个硬件 watchpoint；GDB 会优先使用硬件比较器。命中后目标自动暂停并记录时间、新旧值、位置和调用栈。",
@@ -3588,12 +3627,12 @@ impl App {
                                 self.memory_check.watchpoints.len()
                             ))
                             .size(10.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if !self.memory_check.watchpoints.is_empty()
                                 && ui
-                                    .add(small_flat_button("全部删除", theme::ERROR))
+                                    .add(small_flat_button("全部删除", theme::error()))
                                     .clicked()
                             {
                                 clear_watch = true;
@@ -3608,7 +3647,7 @@ impl App {
                                 &mut auto_start,
                                 RichText::new("调试时自动启动动态监测")
                                     .size(10.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             )
                             .on_hover_text(
                                 "启动调试会话时自动打开此面板，并重新启用已保存的 watchpoint",
@@ -3626,7 +3665,7 @@ impl App {
                                 .iter()
                                 .any(|watchpoint| watchpoint.number.is_none())
                             && ui
-                                .add(small_flat_button("重新启用监测点", theme::ACCENT))
+                                .add(small_flat_button("重新启用监测点", theme::accent()))
                                 .clicked()
                         {
                             rearm_watch = true;
@@ -3637,7 +3676,7 @@ impl App {
                             .iter()
                             .any(|watchpoint| !watchpoint.history.is_empty())
                             && ui
-                                .add(small_flat_button("清空记录", theme::TEXT_FAINT))
+                                .add(small_flat_button("清空记录", theme::text_faint()))
                                 .clicked()
                         {
                             clear_history = true;
@@ -3649,7 +3688,7 @@ impl App {
                             RichText::new("动态监测需要调试会话")
                                 .size(13.0)
                                 .strong()
-                                .color(theme::TEXT),
+                                .color(theme::text()),
                         );
                         ui.add_space(8.0);
                         if ui
@@ -3703,17 +3742,17 @@ impl App {
                             ui.label(
                                 RichText::new("调试正在启动，请稍候…")
                                     .size(9.5)
-                                    .color(theme::TEXT_FAINT),
+                                    .color(theme::text_faint()),
                             );
                         } else if session_running {
                             ui.label(
                                 RichText::new("目标正在运行；请先按 F5 暂停，再添加 watchpoint。")
                                     .size(9.5)
-                                    .color(theme::WARNING),
+                                    .color(theme::warning()),
                             );
                         }
                         if let Some(error) = &self.memory_check.watch_error {
-                            ui.label(RichText::new(error).size(10.0).color(theme::ERROR));
+                            ui.label(RichText::new(error).size(10.0).color(theme::error()));
                         }
                         ui.add_space(4.0);
                         ui.add(
@@ -3748,7 +3787,7 @@ impl App {
                                             "没有匹配的 watchpoint。"
                                         })
                                         .size(11.0)
-                                        .color(theme::TEXT_FAINT),
+                                        .color(theme::text_faint()),
                                     );
                                     if self.memory_check.watchpoints.is_empty() {
                                         ui.label(
@@ -3756,7 +3795,7 @@ impl App {
                                                 "支持你在文件中定义的全局 / 静态变量、结构体成员和数组元素；局部变量需要在所属函数暂停时添加。",
                                             )
                                             .size(9.5)
-                                            .color(theme::TEXT_FAINT),
+                                            .color(theme::text_faint()),
                                         );
                                     }
                                     return;
@@ -3764,9 +3803,9 @@ impl App {
                                 for (index, watchpoint) in watchpoints {
                                     ui.horizontal(|ui| {
                                         let color = if watchpoint.hardware == Some(false) {
-                                            theme::WARNING
+                                            theme::warning()
                                         } else {
-                                            theme::ACCENT
+                                            theme::accent()
                                         };
                                         colored_dot(ui, color, 4.0);
                                         let number = watchpoint
@@ -3777,19 +3816,19 @@ impl App {
                                             RichText::new(number)
                                                 .monospace()
                                                 .size(10.0)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         );
                                         ui.label(
                                             RichText::new(watchpoint.kind.label())
                                                 .size(9.5)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         );
                                         ui.add(
                                             Label::new(
                                                 RichText::new(&watchpoint.expression)
                                                     .monospace()
                                                     .size(11.5)
-                                                    .color(theme::TEXT),
+                                                    .color(theme::text()),
                                             )
                                             .truncate(),
                                         );
@@ -3797,13 +3836,13 @@ impl App {
                                             ui.label(
                                                 RichText::new("软件")
                                                     .size(9.0)
-                                                    .color(theme::WARNING),
+                                                    .color(theme::warning()),
                                             );
                                         }
                                         ui.label(
                                             RichText::new(format!("命中 {} 次", watchpoint.hits))
                                                 .size(9.5)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         );
                                         if let (Some(old), Some(new)) =
                                             (&watchpoint.old_value, &watchpoint.new_value)
@@ -3812,14 +3851,14 @@ impl App {
                                                 RichText::new(format!("{old} -> {new}"))
                                                     .monospace()
                                                     .size(9.5)
-                                                    .color(theme::SUCCESS),
+                                                    .color(theme::success()),
                                             );
                                         }
                                         ui.with_layout(
                                             Layout::right_to_left(Align::Center),
                                             |ui| {
                                                 if ui
-                                                    .add(small_flat_button("删除", theme::ERROR))
+                                                    .add(small_flat_button("删除", theme::error()))
                                                     .clicked()
                                                 {
                                                     remove_watch = Some(index);
@@ -3834,7 +3873,7 @@ impl App {
                                                 watchpoint.history.len()
                                             ))
                                             .size(10.0)
-                                            .color(theme::TEXT_DIM),
+                                            .color(theme::text_dim()),
                                         )
                                         .id_salt(("simple_watch_history", index))
                                         .default_open(true)
@@ -3851,7 +3890,7 @@ impl App {
                                                         RichText::new(&event.time)
                                                             .monospace()
                                                             .size(9.5)
-                                                            .color(theme::TEXT_FAINT),
+                                                            .color(theme::text_faint()),
                                                     );
                                                     let old = event
                                                         .old_value
@@ -3865,7 +3904,7 @@ impl App {
                                                         RichText::new(format!("{old} -> {new}"))
                                                             .monospace()
                                                             .size(9.5)
-                                                            .color(theme::SUCCESS),
+                                                            .color(theme::success()),
                                                     );
                                                     if let Some(location) = &event.location {
                                                         ui.add(
@@ -3874,7 +3913,7 @@ impl App {
                                                                     "位置：{location}"
                                                                 ))
                                                                 .size(9.5)
-                                                                .color(theme::TEXT_DIM),
+                                                                .color(theme::text_dim()),
                                                             )
                                                             .truncate(),
                                                         )
@@ -3885,7 +3924,7 @@ impl App {
                                                     egui::CollapsingHeader::new(
                                                         RichText::new("调用栈")
                                                             .size(9.5)
-                                                            .color(theme::TEXT_FAINT),
+                                                            .color(theme::text_faint()),
                                                     )
                                                     .id_salt((
                                                         "simple_watch_stack",
@@ -3899,7 +3938,7 @@ impl App {
                                                                 RichText::new(frame)
                                                                     .monospace()
                                                                     .size(9.0)
-                                                                    .color(theme::TEXT_FAINT),
+                                                                    .color(theme::text_faint()),
                                                             );
                                                         }
                                                     });
@@ -3954,21 +3993,21 @@ impl App {
             .min_size([320.0, 240.0])
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(8)
                     .inner_margin(Margin::same(8)),
             )
             .show(ctx, |ui| {
                 if let Some(error) = &state.error {
-                    ui.label(RichText::new(error).size(11.0).color(theme::ERROR));
+                    ui.label(RichText::new(error).size(11.0).color(theme::error()));
                     return;
                 }
                 let Some(texture) = &state.texture else {
                     ui.label(
                         RichText::new("无法预览该图片")
                             .size(11.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                     return;
                 };
@@ -3984,7 +4023,7 @@ impl App {
                     ui.label(
                         RichText::new(format!("{} × {} · {:.0}%", width, height, scale * 100.0))
                             .size(10.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                 });
             });
@@ -4005,8 +4044,8 @@ impl App {
             self.debug.watch_refresh.is_some()
         };
         Frame::new()
-            .fill(theme::PANEL)
-            .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+            .fill(theme::panel())
+            .stroke(Stroke::new(1.0_f32, theme::border_soft()))
             .corner_radius(6)
             .inner_margin(Margin::symmetric(8, 6))
             .show(ui, |ui| {
@@ -4039,9 +4078,9 @@ impl App {
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let color = if pending {
-                            theme::TEXT_FAINT
+                            theme::text_faint()
                         } else {
-                            theme::TEXT_DIM
+                            theme::text_dim()
                         };
                         if ui
                             .add_enabled(
@@ -4059,7 +4098,7 @@ impl App {
                         }
                         ui.checkbox(
                             &mut auto,
-                            RichText::new("自动").size(10.5).color(theme::TEXT_DIM),
+                            RichText::new("自动").size(10.5).color(theme::text_dim()),
                         )
                         .on_hover_text("目标停止时每 1.2 秒刷新");
                     });
@@ -4085,7 +4124,7 @@ impl App {
                                     .hint_text("变量/表达式，留空用光标处"),
                             );
                             if ui
-                                .add(small_flat_button("添加", theme::ACCENT))
+                                .add(small_flat_button("添加", theme::accent()))
                                 .clicked()
                             {
                                 add_watch = true;
@@ -4117,7 +4156,7 @@ impl App {
                                             "还没有监视变量。输入表达式，或把光标放在变量上点“添加”。",
                                         )
                                         .size(10.5)
-                                        .color(theme::TEXT_FAINT),
+                                        .color(theme::text_faint()),
                                     );
                                     return;
                                 }
@@ -4125,7 +4164,7 @@ impl App {
                                     ui.label(
                                         RichText::new("没有匹配的变量")
                                             .size(10.5)
-                                            .color(theme::TEXT_FAINT),
+                                            .color(theme::text_faint()),
                                     );
                                     return;
                                 }
@@ -4143,7 +4182,7 @@ impl App {
                                         Label::new(
                                             RichText::new("名称")
                                                 .size(10.0)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         ),
                                     );
                                     ui.add_sized(
@@ -4151,7 +4190,7 @@ impl App {
                                         Label::new(
                                             RichText::new("值")
                                                 .size(10.0)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         ),
                                     );
                                     ui.add_sized(
@@ -4159,7 +4198,7 @@ impl App {
                                         Label::new(
                                             RichText::new("类型")
                                                 .size(10.0)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         ),
                                     );
                                     ui.add_space(remove_width);
@@ -4175,9 +4214,9 @@ impl App {
                                         || value_text.contains("Cannot")
                                         || value_text.contains("error")
                                     {
-                                        theme::ERROR
+                                        theme::error()
                                     } else {
-                                        theme::TEXT_DIM
+                                        theme::text_dim()
                                     };
                                     let type_name = if watch.type_name.is_empty() {
                                         "-"
@@ -4190,7 +4229,7 @@ impl App {
                                             Label::new(
                                                 RichText::new(&watch.expr)
                                                     .size(10.5)
-                                                    .color(theme::TEXT),
+                                                    .color(theme::text()),
                                             )
                                             .truncate(),
                                         );
@@ -4211,7 +4250,7 @@ impl App {
                                             Label::new(
                                                 RichText::new(type_name)
                                                     .size(9.5)
-                                                    .color(theme::TEXT_FAINT),
+                                                    .color(theme::text_faint()),
                                             )
                                             .truncate(),
                                         );
@@ -4222,7 +4261,7 @@ impl App {
                                                 Button::new(
                                                     RichText::new("×")
                                                         .size(12.0)
-                                                        .color(theme::TEXT_FAINT),
+                                                        .color(theme::text_faint()),
                                                 )
                                                 .frame(false)
                                                 .corner_radius(3),
@@ -4267,7 +4306,7 @@ impl App {
                                             "启动调试后显示 CPU 寄存器；目标停止时会自动刷新。",
                                         )
                                         .size(10.5)
-                                        .color(theme::TEXT_FAINT),
+                                        .color(theme::text_faint()),
                                     );
                                     return;
                                 }
@@ -4275,7 +4314,7 @@ impl App {
                                     ui.label(
                                         RichText::new("没有匹配的寄存器")
                                             .size(10.5)
-                                            .color(theme::TEXT_FAINT),
+                                            .color(theme::text_faint()),
                                     );
                                     return;
                                 }
@@ -4289,7 +4328,7 @@ impl App {
                                         Label::new(
                                             RichText::new("寄存器")
                                                 .size(10.0)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         ),
                                     );
                                     ui.add_sized(
@@ -4297,7 +4336,7 @@ impl App {
                                         Label::new(
                                             RichText::new("值")
                                                 .size(10.0)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         ),
                                     );
                                 });
@@ -4309,7 +4348,7 @@ impl App {
                                                 RichText::new(&register.name)
                                                     .monospace()
                                                     .size(10.5)
-                                                    .color(theme::TEXT),
+                                                    .color(theme::text()),
                                             )
                                             .truncate(),
                                         );
@@ -4320,7 +4359,7 @@ impl App {
                                                 RichText::new(&register.value)
                                                     .monospace()
                                                     .size(10.5)
-                                                    .color(theme::TEXT_DIM),
+                                                    .color(theme::text_dim()),
                                             )
                                             .truncate(),
                                         );
@@ -4346,7 +4385,7 @@ impl App {
                             let message = self.registers.error.as_deref().unwrap_or(
                                 "未找到 SVD/寄存器定义；请把芯片支持包（.pack）放到工程根目录",
                             );
-                            ui.label(RichText::new(message).size(11.5).color(theme::WARNING));
+                            ui.label(RichText::new(message).size(11.5).color(theme::warning()));
                             return;
                         }
                         let filter = self.debug.peripheral_filter.trim().to_lowercase();
@@ -4377,7 +4416,7 @@ impl App {
                             ui.label(
                                 RichText::new(&self.registers.source)
                                     .size(10.5)
-                                    .color(theme::TEXT_FAINT),
+                                    .color(theme::text_faint()),
                             );
                             ui.label(
                                 RichText::new(format!(
@@ -4385,11 +4424,11 @@ impl App {
                                     groups.len()
                                 ))
                                 .size(10.0)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if ui
-                                    .add(small_flat_button("折叠全部", theme::TEXT_DIM))
+                                    .add(small_flat_button("折叠全部", theme::text_dim()))
                                     .clicked()
                                 {
                                     self.debug.peripheral_open.clear();
@@ -4399,7 +4438,7 @@ impl App {
                                     refresh = true;
                                 }
                                 if ui
-                                    .add(small_flat_button("展开全部", theme::TEXT_DIM))
+                                    .add(small_flat_button("展开全部", theme::text_dim()))
                                     .clicked()
                                 {
                                     for group in groups.keys() {
@@ -4414,7 +4453,7 @@ impl App {
                         ui.label(
                             RichText::new("点击外设名称展开/折叠；搜索时自动展开匹配分组。")
                                 .size(9.5)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                         );
                         ui.add_space(4.0);
                         let remaining = ui.available_height();
@@ -4430,7 +4469,7 @@ impl App {
                                     ui.label(
                                         RichText::new("没有匹配的外设寄存器")
                                             .size(11.5)
-                                            .color(theme::TEXT_FAINT),
+                                            .color(theme::text_faint()),
                                     );
                                     return;
                                 }
@@ -4446,7 +4485,7 @@ impl App {
                                             Label::new(
                                                 RichText::new(label)
                                                     .size(10.5)
-                                                    .color(theme::TEXT_FAINT),
+                                                    .color(theme::text_faint()),
                                             ),
                                         );
                                     }
@@ -4457,9 +4496,9 @@ impl App {
                                         || self.debug.peripheral_open.contains(group);
                                     let arrow = if open { "v" } else { ">" };
                                     let color = if open {
-                                        theme::ACCENT
+                                        theme::accent()
                                     } else {
-                                        theme::TEXT
+                                        theme::text()
                                     };
                                     let (header_rect, header_response) = ui.allocate_exact_size(
                                         egui::vec2(ui.available_width(), 22.0),
@@ -4479,7 +4518,7 @@ impl App {
                                             Align2::RIGHT_CENTER,
                                             format!("{} 个", items.len()),
                                             FontId::proportional(9.5),
-                                            theme::TEXT_FAINT,
+                                            theme::text_faint(),
                                         );
                                     }
                                     if header_response
@@ -4506,7 +4545,7 @@ impl App {
                                                     RichText::new(name)
                                                         .monospace()
                                                         .size(11.5)
-                                                        .color(theme::TEXT),
+                                                        .color(theme::text()),
                                                 )
                                                 .truncate(),
                                             );
@@ -4521,15 +4560,15 @@ impl App {
                                                     RichText::new(format!("0x{address:08X}"))
                                                         .monospace()
                                                         .size(10.5)
-                                                        .color(theme::TEXT_FAINT),
+                                                        .color(theme::text_faint()),
                                                 ),
                                             );
                                             let color = if value == "无法读取" {
-                                                theme::ERROR
+                                                theme::error()
                                             } else if value == "—" {
-                                                theme::TEXT_FAINT
+                                                theme::text_faint()
                                             } else {
-                                                theme::SUCCESS
+                                                theme::success()
                                             };
                                             ui.add_sized(
                                                 [value_width, 22.0],
@@ -4612,19 +4651,19 @@ impl App {
         let has_session = self.debug.session.is_some();
         let starting = self.debug.starting;
         let (status_color, status) = if self.debug.error.is_some() {
-            (theme::ERROR, "错误")
+            (theme::error(), "错误")
         } else if starting {
-            (theme::ACCENT, "启动中")
+            (theme::accent(), "启动中")
         } else if has_session {
             if !process_running {
-                (theme::TEXT_FAINT, "已停止")
+                (theme::text_faint(), "已停止")
             } else if target_running {
-                (theme::ACCENT, "运行中")
+                (theme::accent(), "运行中")
             } else {
-                (theme::SUCCESS, "已暂停")
+                (theme::success(), "已暂停")
             }
         } else {
-            (theme::TEXT_FAINT, "未启动")
+            (theme::text_faint(), "未启动")
         };
         let target_path = self.debug.target.clone();
         let target_name = target_path
@@ -4649,8 +4688,8 @@ impl App {
             .fixed_pos(position)
             .show(ctx, |ui| {
                 Frame::new()
-                    .fill(theme::PANEL_RAISED)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel_raised())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(8)
                     .inner_margin(Margin::symmetric(10, 7))
                     .show(ui, |ui| {
@@ -4658,13 +4697,18 @@ impl App {
                         ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
                         ui.horizontal(|ui| {
                             colored_dot(ui, status_color, 6.0);
-                            ui.label(RichText::new("调试").size(12.5).strong().color(theme::TEXT));
+                            ui.label(
+                                RichText::new("调试")
+                                    .size(12.5)
+                                    .strong()
+                                    .color(theme::text()),
+                            );
                             ui.label(RichText::new(status).size(10.5).color(status_color));
                             let target = ui.add(
                                 Label::new(
                                     RichText::new(target_name.clone())
                                         .size(10.5)
-                                        .color(theme::TEXT_FAINT),
+                                        .color(theme::text_faint()),
                                 )
                                 .truncate(),
                             );
@@ -4678,7 +4722,7 @@ impl App {
                             });
                         });
                         if let Some(error) = &self.debug.error {
-                            ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                            ui.label(RichText::new(error).size(10.5).color(theme::error()));
                         }
                         ui.horizontal(|ui| {
                             if debug_icon_button(
@@ -4757,7 +4801,7 @@ impl App {
                                 ui.label(
                                     RichText::new(format!("{breakpoints} 断点"))
                                         .size(10.0)
-                                        .color(theme::TEXT_FAINT),
+                                        .color(theme::text_faint()),
                                 );
                             });
                         });
@@ -4806,8 +4850,8 @@ impl App {
             .show(ctx, |ui| {
                 ui.set_width(width);
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(6)
                     .shadow(ui.style().visuals.popup_shadow)
                     .inner_margin(Margin::symmetric(4, 4))
@@ -4830,13 +4874,13 @@ impl App {
                                         ui.painter().rect_filled(
                                             rect,
                                             CornerRadius::same(3),
-                                            Color32::from_rgb(36, 84, 108),
+                                            theme::accent_soft(),
                                         );
                                     } else if response.hovered() {
                                         ui.painter().rect_filled(
                                             rect,
                                             CornerRadius::same(3),
-                                            Color32::from_rgb(28, 49, 63),
+                                            theme::hover(),
                                         );
                                     }
                                     let name = item.name.chars().take(40).collect::<String>();
@@ -4845,7 +4889,7 @@ impl App {
                                         Align2::LEFT_CENTER,
                                         name,
                                         FontId::monospace(12.0),
-                                        theme::TEXT,
+                                        theme::text(),
                                     );
                                     ui.painter().text(
                                         egui::pos2(rect.right() - 6.0, rect.center().y),
@@ -4887,26 +4931,26 @@ impl App {
             .default_size([540.0, 260.0])
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .inner_margin(Margin::same(12))
                     .corner_radius(6),
             )
             .show(ctx, |ui| {
                 ui.set_min_width(500.0);
                 ui.set_min_height(190.0);
-                ui.visuals_mut().override_text_color = Some(theme::TEXT);
+                ui.visuals_mut().override_text_color = Some(theme::text());
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("列编辑")
                             .size(16.0)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     ui.label(
                         RichText::new(&self.column_edit.source_label)
                             .size(11.0)
-                            .color(theme::ACCENT),
+                            .color(theme::accent()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if window_close_button(ui) {
@@ -4919,13 +4963,13 @@ impl App {
                     ui.label(
                         RichText::new("列号")
                             .size(11.5)
-                            .color(theme::TEXT_DIM),
+                            .color(theme::text_dim()),
                     );
                     ui.add(egui::DragValue::new(&mut self.column_edit.column).range(1..=999));
                     ui.label(
                         RichText::new("操作")
                             .size(11.5)
-                            .color(theme::TEXT_DIM),
+                            .color(theme::text_dim()),
                     );
                     egui::ComboBox::from_id_salt("simple_embedded_column_operation")
                         .selected_text(self.column_edit.operation.label())
@@ -4947,7 +4991,7 @@ impl App {
                         ui.label(
                             RichText::new("字符数")
                                 .size(11.5)
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         );
                         ui.add(
                             egui::DragValue::new(&mut self.column_edit.count).range(1..=999),
@@ -4958,18 +5002,18 @@ impl App {
                     ui.label(
                         RichText::new("内容")
                             .size(11.5)
-                            .color(theme::TEXT_DIM),
+                            .color(theme::text_dim()),
                     );
                     ui.add(
                         TextEdit::singleline(&mut self.column_edit.insert)
                             .id(Id::new("simple_embedded_column_insert"))
                             .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
+                            .text_color(theme::text())
+                            .background_color(theme::bg())
                             .desired_width(340.0)
                             .hint_text(
                                 RichText::new("插入/替换的文本")
-                                    .color(theme::TEXT_FAINT),
+                                    .color(theme::text_faint()),
                             ),
                     );
                 });
@@ -4979,7 +5023,7 @@ impl App {
                         "会对选中的每一行在同一列执行操作；短行自动补空格。没有选区时作用于当前行。",
                     )
                     .size(10.5)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
                 );
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -5018,16 +5062,16 @@ impl App {
                 RichText::new(format!("二进制 · {name}"))
                     .size(13.0)
                     .strong()
-                    .color(theme::TEXT),
+                    .color(theme::text()),
             );
             ui.label(
                 RichText::new(format!("{size} 字节 · 只读"))
                     .size(10.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
-                    .add(small_flat_button("独立窗口", theme::TEXT_DIM))
+                    .add(small_flat_button("独立窗口", theme::text_dim()))
                     .on_hover_text("在独立十六进制窗口中打开")
                     .clicked()
                 {
@@ -5037,7 +5081,11 @@ impl App {
         });
         ui.separator();
         if size == 0 {
-            ui.label(RichText::new("空文件").size(11.5).color(theme::TEXT_FAINT));
+            ui.label(
+                RichText::new("空文件")
+                    .size(11.5)
+                    .color(theme::text_faint()),
+            );
             return;
         }
         ScrollArea::vertical()
@@ -5051,7 +5099,7 @@ impl App {
                             RichText::new(row)
                                 .monospace()
                                 .size(11.5)
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         );
                     }
                 }
@@ -5073,6 +5121,7 @@ impl App {
             self.show_binary_editor(ui, pane_index, actions);
             return;
         }
+        let code_theme = *self.code_theme();
         let is_active_pane = self.active == Some(pane_index);
         if is_active_pane && !self.symbols.scanned {
             self.ensure_symbols();
@@ -5337,6 +5386,7 @@ impl App {
                     wrap_width: effective_wrap,
                     font_id: font_id.clone(),
                     decorations_key,
+                    theme_key: code_theme.key(),
                     search_ranges: &search_ranges,
                 },
                 &cache,
@@ -5362,6 +5412,10 @@ impl App {
                             .max_height(ui.available_height())
                             .show(ui, |ui| {
                                 ui.set_min_width(viewport_width.max(80.0));
+                                let old_selection = ui.visuals().selection;
+                                ui.visuals_mut().selection.bg_fill = code_theme.selection;
+                                ui.visuals_mut().selection.stroke =
+                                    Stroke::new(1.0_f32, code_theme.text);
                                 let output = TextEdit::multiline(&mut doc.buffer)
                                     .id(editor_id)
                                     .code_editor()
@@ -5373,6 +5427,7 @@ impl App {
                                         f32::INFINITY
                                     })
                                     .desired_rows(rows)
+                                    .background_color(code_theme.bg)
                                     .frame(Frame::new().inner_margin(Margin {
                                         left: text_margin_left,
                                         right: 14,
@@ -5382,6 +5437,7 @@ impl App {
                                     .layouter(&mut layouter)
                                     .hint_text("开始输入代码…")
                                     .show(ui);
+                                ui.visuals_mut().selection = old_selection;
 
                                 if let Some(cursor_range) = output.cursor_range {
                                     doc.update_cursor(cursor_range.primary.index);
@@ -5422,10 +5478,20 @@ impl App {
                         crate::minimap::View {
                             text: doc.buffer.as_string(),
                             revision: doc.buffer.revision(),
+                            theme_key: code_theme.key(),
+                            colors: crate::minimap::Colors {
+                                comment: code_theme.comment,
+                                preproc: code_theme.function,
+                                string: code_theme.string,
+                                keyword: code_theme.keyword,
+                                normal: code_theme.text,
+                            },
                             scroll: output,
                             width: minimap_width,
                             height: full_height,
                             line_count,
+                            background: code_theme.bg,
+                            foreground: code_theme.text,
                         },
                         &mut doc.minimap_cache,
                     );
@@ -5528,7 +5594,7 @@ impl App {
                                 egui::pos2(x2.max(x1 + 1.0), top + height),
                             ),
                             CornerRadius::ZERO,
-                            Color32::from_rgba_unmultiplied(88, 196, 221, 55),
+                            theme::with_alpha(code_theme.keyword, 55),
                         );
                     }
                 }
@@ -5587,7 +5653,7 @@ impl App {
                             egui::pos2(x, viewport.top()),
                             egui::pos2(x, viewport.bottom()),
                         ],
-                        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(91, 103, 120, 90)),
+                        Stroke::new(1.0_f32, theme::with_alpha(code_theme.comment, 90)),
                     );
                 }
             }
@@ -5607,7 +5673,7 @@ impl App {
                         painter.rect_filled(
                             rect.expand(0.5),
                             CornerRadius::same(2),
-                            Color32::from_rgba_unmultiplied(88, 196, 221, 45),
+                            theme::with_alpha(code_theme.keyword, 45),
                         );
                         painter.rect_filled(
                             egui::Rect::from_min_max(
@@ -5615,13 +5681,13 @@ impl App {
                                 egui::pos2(rect.right(), rect.bottom()),
                             ),
                             CornerRadius::ZERO,
-                            theme::ACCENT,
+                            theme::accent(),
                         );
                     }
                 }
             }
             if show_whitespace {
-                let color = Color32::from_rgba_unmultiplied(145, 157, 174, 120);
+                let color = theme::with_alpha(code_theme.comment, 120);
                 for row in &galley.rows {
                     let row_top = galley_pos.y + row.pos.y;
                     if row_top + row.size.y < viewport.top() || row_top > viewport.bottom() {
@@ -5671,13 +5737,13 @@ impl App {
                     }
                 }
             }
-            painter.rect_filled(gutter_rect, CornerRadius::ZERO, theme::EDITOR_BG);
+            painter.rect_filled(gutter_rect, CornerRadius::ZERO, code_theme.bg);
             painter.line_segment(
                 [
                     egui::pos2(gutter_rect.right(), gutter_rect.top()),
                     egui::pos2(gutter_rect.right(), gutter_rect.bottom()),
                 ],
-                Stroke::new(1.0_f32, theme::BORDER_SOFT),
+                Stroke::new(1.0_f32, code_theme.selection),
             );
 
             let mut line_no = 1usize;
@@ -5686,6 +5752,21 @@ impl App {
                 let top = galley_pos.y + row.pos.y;
                 let bottom = top + row.size.y;
                 if starts_line && bottom >= viewport.top() && top <= viewport.bottom() {
+                    if line_no == doc.cursor_line {
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(gutter_rect.left(), top),
+                                egui::pos2(viewport.right(), bottom),
+                            ),
+                            CornerRadius::ZERO,
+                            Color32::from_rgba_unmultiplied(
+                                code_theme.line_highlight.r(),
+                                code_theme.line_highlight.g(),
+                                code_theme.line_highlight.b(),
+                                78,
+                            ),
+                        );
+                    }
                     if debug_line == Some(line_no) {
                         painter.rect_filled(
                             egui::Rect::from_min_max(
@@ -5693,13 +5774,23 @@ impl App {
                                 egui::pos2(viewport.right(), bottom),
                             ),
                             CornerRadius::ZERO,
-                            Color32::from_rgba_unmultiplied(255, 196, 0, 26),
+                            theme::with_alpha(theme::warning(), 30),
+                        );
+                    }
+                    if line_no == doc.cursor_line {
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(gutter_rect.left(), top),
+                                egui::pos2(gutter_rect.right(), bottom),
+                            ),
+                            CornerRadius::ZERO,
+                            code_theme.line_highlight,
                         );
                     }
                     let color = if line_no == doc.cursor_line {
-                        theme::TEXT
+                        code_theme.text
                     } else {
-                        theme::TEXT_FAINT
+                        code_theme.comment
                     };
                     let display_no = if relative_line_numbers && line_no != doc.cursor_line {
                         line_no.abs_diff(doc.cursor_line)
@@ -5720,7 +5811,7 @@ impl App {
                                 egui::vec2(2.0, (row.size.y - 6.0).max(4.0)),
                             ),
                             CornerRadius::same(1),
-                            theme::ACCENT,
+                            theme::accent(),
                         );
                     }
                     if breakpoints
@@ -5730,7 +5821,7 @@ impl App {
                         painter.circle_filled(
                             egui::pos2(gutter_rect.left() + 13.0, top + row.size.y * 0.5),
                             3.0,
-                            theme::ERROR,
+                            theme::error(),
                         );
                     }
                     if debug_line == Some(line_no) {
@@ -5741,7 +5832,7 @@ impl App {
                                 egui::pos2(gutter_rect.left() + 3.0, center + 5.0),
                                 egui::pos2(gutter_rect.left() + 9.0, center),
                             ],
-                            theme::WARNING,
+                            theme::warning(),
                             Stroke::NONE,
                         ));
                     }
@@ -5752,14 +5843,14 @@ impl App {
                                 egui::vec2(2.0, (row.size.y - 6.0).max(4.0)),
                             ),
                             CornerRadius::same(1),
-                            theme::WARNING,
+                            theme::warning(),
                         );
                     }
                     if let Some(severity) = markers.get(&line_no) {
                         let color = if *severity == Severity::Error {
-                            theme::ERROR
+                            theme::error()
                         } else {
-                            theme::WARNING
+                            theme::warning()
                         };
                         painter.rect_filled(
                             egui::Rect::from_min_size(
@@ -5900,8 +5991,8 @@ impl App {
         let modal = egui::Modal::new(Id::new("simple_embedded_build_options_modal"))
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(20, 16)),
             )
@@ -5913,7 +6004,7 @@ impl App {
                     RichText::new("构建选项")
                         .size(18.0)
                         .strong()
-                        .color(theme::TEXT),
+                        .color(theme::text()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
@@ -5944,7 +6035,7 @@ impl App {
                                     &mut draft.use_microlib,
                                     RichText::new("Use MicroLIB")
                                         .size(11.5)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::text_dim()),
                                 );
                                 ui.add_space(2.0);
                             }
@@ -5959,7 +6050,7 @@ impl App {
                                     &mut draft.use_microlib,
                                     RichText::new("Use MicroLIB")
                                         .size(11.5)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::text_dim()),
                                 )
                                 .on_hover_text(
                                     "newlib-nano 浮点选项的总开关；勾选后才能启用下面的 printf/scanf 选项",
@@ -5973,7 +6064,7 @@ impl App {
                                         ui.label(
                                             RichText::new("newlib-nano 浮点支持")
                                                 .size(11.5)
-                                                .color(theme::TEXT_DIM),
+                                                .color(theme::text_dim()),
                                         );
                                         ui.checkbox(
                                             &mut draft.printf_float,
@@ -5981,7 +6072,7 @@ impl App {
                                                 "printf / sprintf 支持 %f（-u _printf_float）",
                                             )
                                             .size(11.5)
-                                            .color(theme::TEXT_DIM),
+                                            .color(theme::text_dim()),
                                         )
                                         .on_hover_text(
                                             "newlib-nano 为了省体积默认裁掉浮点格式化，%f 会空白或打印 0。勾选后链接时加入 -u _printf_float，体积会增加几 KB",
@@ -5992,7 +6083,7 @@ impl App {
                                                 "scanf / sscanf 支持 %f（-u _scanf_float）",
                                             )
                                             .size(11.5)
-                                            .color(theme::TEXT_DIM),
+                                            .color(theme::text_dim()),
                                         )
                                         .on_hover_text(
                                             "让 newlib-nano 的 scanf/sscanf 能读取浮点数；链接时加入 -u _scanf_float",
@@ -6005,14 +6096,14 @@ impl App {
                                 ui.label(
                                     RichText::new("当前工具链没有专用的 newlib-nano / MicroLIB 开关；通用选项仍会保存。")
                                         .size(9.5)
-                                        .color(theme::TEXT_FAINT),
+                                        .color(theme::text_faint()),
                                 );
                             }
                             ui.checkbox(
                                 &mut draft.big_endian,
                                 RichText::new("Big Endian")
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             );
                             combo_row(
                                 ui,
@@ -6057,38 +6148,38 @@ impl App {
                                     &mut draft.lto,
                                     RichText::new("Link Time Optimization (LTO)")
                                         .size(11.5)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::text_dim()),
                                 );
                             }
                             ui.checkbox(
                                 &mut draft.function_sections,
                                 RichText::new("One ELF Section per Function")
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             );
                             if arm_compiler {
                                 ui.checkbox(
                                     &mut draft.split_load_store,
                                     RichText::new("Split Load and Store Multiple")
                                         .size(11.5)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::text_dim()),
                                 );
                             }
                             ui.checkbox(
                                 &mut draft.plain_char_signed,
                                 RichText::new("Plain Char is Signed")
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             );
                             ui.checkbox(
                                 &mut draft.short_enums,
                                 RichText::new("enum/wchar is short type")
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             );
                             ui.checkbox(
                                 &mut draft.rtti,
-                                RichText::new("use RTTI").size(11.5).color(theme::TEXT_DIM),
+                                RichText::new("use RTTI").size(11.5).color(theme::text_dim()),
                             );
                         }
                         BuildOptionsTab::Assembler => {
@@ -6105,25 +6196,25 @@ impl App {
                                 ui.label(
                                     RichText::new("汇编器：GAS（GCC 工具链）")
                                         .size(11.5)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::text_dim()),
                                 );
                             }
                             ui.label(
                                 RichText::new("汇编器附加选项")
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             );
                             Frame::new()
-                                .fill(theme::BG)
-                                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                                .fill(theme::bg())
+                                .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                                 .corner_radius(6)
                                 .inner_margin(Margin::symmetric(6, 5))
                                 .show(ui, |ui| {
                                     ui.add(
                                         TextEdit::multiline(&mut draft.assembler_options)
                                             .font(FontId::monospace(12.0))
-                                            .text_color(theme::TEXT)
-                                            .background_color(theme::BG)
+                                            .text_color(theme::text())
+                                            .background_color(theme::bg())
                                             .hint_text(if arm_compiler {
                                                 "例如 --diag_suppress=L6329"
                                             } else {
@@ -6147,7 +6238,7 @@ impl App {
                                     &mut draft.linker_no_binary,
                                     RichText::new("不生成 Hex/Bin/S19 等二进制文件")
                                         .size(11.5)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::text_dim()),
                                 );
                                 option_list_editor(
                                     ui,
@@ -6161,19 +6252,19 @@ impl App {
                             ui.label(
                                 RichText::new("链接器附加选项")
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             );
                             Frame::new()
-                                .fill(theme::BG)
-                                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                                .fill(theme::bg())
+                                .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                                 .corner_radius(6)
                                 .inner_margin(Margin::symmetric(6, 5))
                                 .show(ui, |ui| {
                                     ui.add(
                                         TextEdit::multiline(&mut draft.linker_options)
                                             .font(FontId::monospace(12.0))
-                                            .text_color(theme::TEXT)
-                                            .background_color(theme::BG)
+                                            .text_color(theme::text())
+                                            .background_color(theme::bg())
                                             .hint_text(if arm_compiler {
                                                 "例如 --diag_suppress=L6329"
                                             } else {
@@ -6221,8 +6312,8 @@ impl App {
         let modal = egui::Modal::new(Id::new("simple_embedded_flash_modal"))
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(20, 16)),
             )
@@ -6234,7 +6325,7 @@ impl App {
                     RichText::new("烧录配置")
                         .size(18.0)
                         .strong()
-                        .color(theme::TEXT),
+                        .color(theme::text()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
@@ -6246,7 +6337,7 @@ impl App {
             ui.label(
                 RichText::new("保存在工程 .simple-embedded/settings.json；烧录始终在本地工程目录执行。")
                     .size(10.5)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
             ui.add_space(10.0);
 
@@ -6282,7 +6373,7 @@ impl App {
                             "命令在工程根目录执行，留空则烧录按钮禁用；需要自行保证工具在 PATH 中。",
                         )
                         .size(9.5)
-                        .color(theme::TEXT_FAINT),
+                        .color(theme::text_faint()),
                     );
                 }
                 FlashTool::OpenOcd => {
@@ -6314,7 +6405,7 @@ impl App {
                             Label::new(
                                 RichText::new("接口配置")
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             ),
                         );
                         let current = draft.openocd.interface_config.trim().to_owned();
@@ -6328,7 +6419,7 @@ impl App {
                         let mut chosen = current.clone();
                         egui::ComboBox::from_id_salt("simple_embedded_openocd_interface")
                             .selected_text(
-                                RichText::new(selected).size(11.0).color(theme::TEXT_DIM),
+                                RichText::new(selected).size(11.0).color(theme::text_dim()),
                             )
                             .width(220.0)
                             .show_ui(ui, |ui| {
@@ -6344,7 +6435,7 @@ impl App {
                             draft.openocd.interface_config = chosen;
                         }
                         if ui
-                            .add(small_flat_button("自动检测", theme::ACCENT))
+                            .add(small_flat_button("自动检测", theme::accent()))
                             .on_hover_text("检测已连接的 ST-Link / DAPLink / J-Link")
                             .clicked()
                         {
@@ -6384,7 +6475,7 @@ impl App {
                             ui.label(
                                 RichText::new(message)
                                     .size(9.5)
-                                    .color(if *ok { theme::SUCCESS } else { theme::WARNING }),
+                                    .color(if *ok { theme::success() } else { theme::warning() }),
                             );
                         });
                     }
@@ -6394,7 +6485,7 @@ impl App {
                             "程序文件支持 ${ExecutableName}、${ProjectName}、${workspaceFolder}；芯片/接口只写文件名时自动补 target/ 或 interface/。",
                         )
                         .size(9.5)
-                        .color(theme::TEXT_FAINT),
+                        .color(theme::text_faint()),
                     );
                     if root.as_deref().is_some_and(|root| {
                         !flash::openocd_available(&draft.openocd.executable, root)
@@ -6405,7 +6496,7 @@ impl App {
                                 "当前路径未找到 OpenOCD；可以点“浏览”选择 openocd.exe，或稍后再安装。",
                             )
                             .size(9.5)
-                            .color(theme::WARNING),
+                            .color(theme::warning()),
                         );
                     }
                     if let Some(root) = &root {
@@ -6413,14 +6504,14 @@ impl App {
                         ui.label(
                             RichText::new("命令预览")
                                 .size(10.5)
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         );
                         ui.add_space(3.0);
                         match flash::preview(&draft.openocd, root, download_address.as_deref()) {
                             Ok(command) => {
                                 Frame::new()
-                                    .fill(theme::BG)
-                                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                                    .fill(theme::bg())
+                                    .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                                     .corner_radius(6)
                                     .inner_margin(Margin::symmetric(7, 5))
                                     .show(ui, |ui| {
@@ -6429,7 +6520,7 @@ impl App {
                                                 RichText::new(command)
                                                     .size(10.5)
                                                     .monospace()
-                                                    .color(theme::TEXT_DIM),
+                                                    .color(theme::text_dim()),
                                             )
                                             .wrap(),
                                         );
@@ -6439,7 +6530,7 @@ impl App {
                                 ui.label(
                                     RichText::new(format!("命令预览不可用：{err}"))
                                         .size(9.5)
-                                        .color(theme::WARNING),
+                                        .color(theme::warning()),
                                 );
                             }
                         }
@@ -6481,7 +6572,7 @@ impl App {
                             "目标芯片来自工程芯片名时自动转小写；Pack 可留空，程序文件支持 ${ExecutableName} 等变量。",
                         )
                         .size(9.5)
-                        .color(theme::TEXT_FAINT),
+                        .color(theme::text_faint()),
                     );
                     if root
                         .as_deref()
@@ -6493,7 +6584,7 @@ impl App {
                                 "当前路径未找到 pyOCD；可以点“浏览”选择 pyocd.exe，或先运行 pip install pyocd。",
                             )
                             .size(9.5)
-                            .color(theme::WARNING),
+                            .color(theme::warning()),
                         );
                     }
                     if let Some(root) = &root {
@@ -6501,7 +6592,7 @@ impl App {
                         ui.label(
                             RichText::new("命令预览")
                                 .size(10.5)
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         );
                         ui.add_space(3.0);
                         match flash::preview_pyocd(
@@ -6511,8 +6602,8 @@ impl App {
                         ) {
                             Ok(command) => {
                                 Frame::new()
-                                    .fill(theme::BG)
-                                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                                    .fill(theme::bg())
+                                    .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                                     .corner_radius(6)
                                     .inner_margin(Margin::symmetric(7, 5))
                                     .show(ui, |ui| {
@@ -6521,7 +6612,7 @@ impl App {
                                                 RichText::new(command)
                                                     .size(10.5)
                                                     .monospace()
-                                                    .color(theme::TEXT_DIM),
+                                                    .color(theme::text_dim()),
                                             )
                                             .wrap(),
                                         );
@@ -6531,7 +6622,7 @@ impl App {
                                 ui.label(
                                     RichText::new(format!("命令预览不可用：{err}"))
                                         .size(9.5)
-                                        .color(theme::WARNING),
+                                        .color(theme::warning()),
                                 );
                             }
                         }
@@ -6541,7 +6632,7 @@ impl App {
 
             if let Some(error) = &draft.error {
                 ui.add_space(8.0);
-                ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                ui.label(RichText::new(error).size(10.5).color(theme::error()));
             }
 
             ui.add_space(12.0);
@@ -6601,8 +6692,8 @@ impl App {
         let modal = egui::Modal::new(Id::new("simple_embedded_meta_modal"))
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(20, 16)),
             )
@@ -6614,7 +6705,7 @@ impl App {
                     RichText::new("编辑 C/C++ 属性")
                         .size(18.0)
                         .strong()
-                        .color(theme::TEXT),
+                        .color(theme::text()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
@@ -6627,20 +6718,20 @@ impl App {
             ui.label(
                 RichText::new("包含目录（每行一个）")
                     .size(11.0)
-                    .color(theme::TEXT_DIM),
+                    .color(theme::text_dim()),
             );
             ui.add_space(3.0);
             Frame::new()
-                .fill(theme::BG)
-                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .fill(theme::bg())
+                .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                 .corner_radius(6)
                 .inner_margin(Margin::symmetric(6, 5))
                 .show(ui, |ui| {
                     ui.add(
                         TextEdit::multiline(&mut draft.includes)
                             .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
+                            .text_color(theme::text())
+                            .background_color(theme::bg())
                             .hint_text("例如 ../Core/Inc")
                             .desired_rows(5)
                             .desired_width(f32::INFINITY),
@@ -6651,20 +6742,20 @@ impl App {
             ui.label(
                 RichText::new("库搜索目录（每行一个）")
                     .size(11.0)
-                    .color(theme::TEXT_DIM),
+                    .color(theme::text_dim()),
             );
             ui.add_space(3.0);
             Frame::new()
-                .fill(theme::BG)
-                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .fill(theme::bg())
+                .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                 .corner_radius(6)
                 .inner_margin(Margin::symmetric(6, 5))
                 .show(ui, |ui| {
                     ui.add(
                         TextEdit::multiline(&mut draft.library_dirs)
                             .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
+                            .text_color(theme::text())
+                            .background_color(theme::bg())
                             .hint_text("例如 lib")
                             .desired_rows(3)
                             .desired_width(f32::INFINITY),
@@ -6675,20 +6766,20 @@ impl App {
             ui.label(
                 RichText::new("预处理器定义（每行一个）")
                     .size(11.0)
-                    .color(theme::TEXT_DIM),
+                    .color(theme::text_dim()),
             );
             ui.add_space(3.0);
             Frame::new()
-                .fill(theme::BG)
-                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .fill(theme::bg())
+                .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                 .corner_radius(6)
                 .inner_margin(Margin::symmetric(6, 5))
                 .show(ui, |ui| {
                     ui.add(
                         TextEdit::multiline(&mut draft.defines)
                             .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
+                            .text_color(theme::text())
+                            .background_color(theme::bg())
                             .hint_text("例如 USE_HAL_DRIVER")
                             .desired_rows(4)
                             .desired_width(f32::INFINITY),
@@ -6697,7 +6788,7 @@ impl App {
 
             if let Some(note) = &draft.note {
                 ui.add_space(8.0);
-                ui.label(RichText::new(note).size(10.5).color(theme::WARNING));
+                ui.label(RichText::new(note).size(10.5).color(theme::warning()));
             }
 
             ui.add_space(12.0);
@@ -6743,8 +6834,8 @@ impl App {
         let modal = egui::Modal::new(Id::new("simple_embedded_meta_add_modal"))
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(20, 16)),
             )
@@ -6756,7 +6847,7 @@ impl App {
                     RichText::new(format!("添加{}", draft.field.label()))
                         .size(16.0)
                         .strong()
-                        .color(theme::TEXT),
+                        .color(theme::text()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
@@ -6768,20 +6859,20 @@ impl App {
             ui.label(
                 RichText::new("保存在工程 .simple-embedded/settings.json；Makefile 工程会按差异同步，Keil .uvprojx 不会被修改。")
                     .size(10.5)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
             ui.add_space(10.0);
             Frame::new()
-                .fill(theme::BG)
-                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .fill(theme::bg())
+                .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                 .corner_radius(6)
                 .inner_margin(Margin::symmetric(7, 5))
                 .show(ui, |ui| {
                     let response = ui.add(
                         TextEdit::singleline(&mut draft.value)
                             .font(FontId::monospace(12.0))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
+                            .text_color(theme::text())
+                            .background_color(theme::bg())
                             .hint_text(match draft.field {
                                 MetaListField::Includes => "例如 ../Core/Inc",
                                 MetaListField::LibraryDirs => "例如 lib",
@@ -6829,8 +6920,8 @@ impl App {
         let modal = egui::Modal::new(Id::new("simple_embedded_settings_modal"))
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(20, 16)),
             )
@@ -6842,7 +6933,7 @@ impl App {
                     RichText::new("配置")
                         .size(18.0)
                         .strong()
-                        .color(theme::TEXT),
+                        .color(theme::text()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if window_close_button(ui) {
@@ -6882,7 +6973,7 @@ impl App {
                                 Label::new(
                                     RichText::new("工具链")
                                         .size(10.5)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::text_dim()),
                                 ),
                             );
                             let effective = draft.config.effective_toolchain(&self.project_meta);
@@ -6893,7 +6984,7 @@ impl App {
                             };
                             egui::ComboBox::from_id_salt("simple_embedded_settings_toolchain")
                                 .selected_text(
-                                    RichText::new(selected).size(11.0).color(theme::TEXT_DIM),
+                                    RichText::new(selected).size(11.0).color(theme::text_dim()),
                                 )
                                 .width(230.0)
                                 .show_ui(ui, |ui| {
@@ -6946,7 +7037,7 @@ impl App {
                             if let Some(note) = &draft.note {
                                 ui.add(
                                     Label::new(
-                                        RichText::new(note).size(9.0).color(theme::SUCCESS),
+                                        RichText::new(note).size(9.0).color(theme::success()),
                                     )
                                     .wrap(),
                                 )
@@ -6961,7 +7052,7 @@ impl App {
                                 Label::new(
                                     RichText::new("构建位置")
                                         .size(10.5)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::text_dim()),
                                 ),
                             );
                             if segment_button(
@@ -6983,8 +7074,8 @@ impl App {
                         if draft.config.target == BuildTarget::Ssh {
                             ui.add_space(8.0);
                             Frame::new()
-                                .fill(theme::BG)
-                                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                                .fill(theme::bg())
+                                .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                                 .corner_radius(7)
                                 .inner_margin(Margin::symmetric(12, 9))
                                 .show(ui, |ui| {
@@ -7001,7 +7092,7 @@ impl App {
                                             Label::new(
                                                 RichText::new("SSH 端口")
                                                     .size(10.5)
-                                                    .color(theme::TEXT_DIM),
+                                                    .color(theme::text_dim()),
                                             ),
                                         );
                                         ui.add(
@@ -7012,7 +7103,7 @@ impl App {
                                         ui.label(
                                             RichText::new("默认 22")
                                                 .size(9.0)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         );
                                     });
                                     ui.add_space(3.0);
@@ -7028,7 +7119,7 @@ impl App {
                                             "使用 OpenSSH BatchMode，请提前配置好 SSH key 免密登录。命令会先 cd 到远程目录。",
                                         )
                                         .size(9.0)
-                                        .color(theme::WARNING),
+                                        .color(theme::warning()),
                                     );
                                 });
                         }
@@ -7058,7 +7149,7 @@ impl App {
                                     "Flash 始终在本地工程目录执行；留空则烧录按钮禁用。",
                                 )
                                 .size(9.0)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                             );
                         }
 
@@ -7069,7 +7160,7 @@ impl App {
                                 Label::new(
                                     RichText::new("并行任务数")
                                         .size(10.5)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::text_dim()),
                                 ),
                             );
                             ui.add(
@@ -7078,7 +7169,7 @@ impl App {
                                     .speed(1),
                             );
                             if ui
-                                .add(small_flat_button("使用 CPU 核心数", theme::TEXT_FAINT))
+                                .add(small_flat_button("使用 CPU 核心数", theme::text_faint()))
                                 .on_hover_text("把并行任务数设置为本机逻辑核心数")
                                 .clicked()
                             {
@@ -7095,7 +7186,7 @@ impl App {
                                 Label::new(
                                     RichText::new("工具链路径")
                                         .size(10.5)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::text_dim()),
                                 ),
                             )
                             .on_hover_text(
@@ -7114,17 +7205,17 @@ impl App {
                                         [ui.available_width(), input_height],
                                         TextEdit::multiline(&mut draft.extra_paths_text)
                                             .font(FontId::monospace(10.5))
-                                            .text_color(theme::TEXT)
-                                            .background_color(theme::BG)
+                                            .text_color(theme::text())
+                                            .background_color(theme::bg())
                                             .hint_text("例如 C:\\toolchain\\bin")
                                             .desired_rows(5)
                                             .desired_width(f32::INFINITY)
                                             .frame(
                                                 Frame::new()
-                                                    .fill(theme::BG)
+                                                    .fill(theme::bg())
                                                     .stroke(Stroke::new(
                                                         1.0_f32,
-                                                        theme::BORDER_SOFT,
+                                                        theme::border_soft(),
                                                     ))
                                                     .corner_radius(5)
                                                     .inner_margin(Margin::symmetric(4, 3)),
@@ -7137,7 +7228,7 @@ impl App {
                         ui.label(
                             RichText::new("打开一个工程文件夹后，即可配置构建与烧录命令。")
                                 .size(11.0)
-                                .color(theme::WARNING),
+                                .color(theme::warning()),
                         );
                     }
                     }
@@ -7160,7 +7251,7 @@ impl App {
                         ui.label(
                             RichText::new("换行标尺")
                                 .size(11.5)
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         );
                         egui::ComboBox::from_id_salt("simple_embedded_ruler_column")
                             .selected_text(match draft.ruler_column {
@@ -7193,7 +7284,7 @@ impl App {
                         ui.label(
                             RichText::new("clang-format")
                                 .size(11.5)
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         );
                         ui.add(
                             TextEdit::singleline(&mut draft.clang_format_path)
@@ -7209,7 +7300,7 @@ impl App {
                             ui.label(
                                 RichText::new("调试程序")
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             )
                             .on_hover_text(
                                 "留空时会从 build/、Debug/、Release/、out/ 中查找最新的 ELF/AXF/EXE",
@@ -7240,7 +7331,7 @@ impl App {
                             ui.label(
                                 RichText::new("gdb 路径")
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             )
                             .on_hover_text(
                                 "gdb 路径可以填 arm-none-eabi-gdb.exe，也可以直接填它的 bin 目录。ARM 目标会复用烧录配置中的 OpenOCD / pyOCD 参数，自动启动 GDB server 后连接 arm-none-eabi-gdb；主机 EXE 使用普通 gdb。",
@@ -7295,7 +7386,7 @@ impl App {
                                     "当前烧录工具是“自定义命令”。调试 ARM 目标前，请先在“工程信息 → 烧录配置”选择 OpenOCD 或 pyOCD。",
                                 )
                                 .size(9.5)
-                                .color(theme::WARNING),
+                                .color(theme::warning()),
                             );
                         }
                     }
@@ -7327,7 +7418,7 @@ impl App {
                             ui.label(
                                 RichText::new("额外忽略规则")
                                     .size(11.5)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             );
                             ui.add(
                                 TextEdit::singleline(&mut draft.ignore_patterns)
@@ -7342,14 +7433,14 @@ impl App {
                                 settings_path().display()
                             ))
                             .size(9.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                         );
                     }
                 });
 
             if let Some(error) = &draft.error {
                 ui.add_space(6.0);
-                ui.label(RichText::new(error).size(10.5).color(theme::ERROR));
+                ui.label(RichText::new(error).size(10.5).color(theme::error()));
             }
 
             ui.add_space(10.0);
@@ -7450,6 +7541,192 @@ impl App {
         } else {
             self.settings_draft = Some(draft);
         }
+    }
+
+    pub(super) fn show_theme_settings_modal(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.theme_settings.take() else {
+            return;
+        };
+        let mut close = false;
+        let mut save = false;
+        let mut preview: Option<String> = None;
+
+        let modal = egui::Modal::new(Id::new("simple_embedded_theme_settings_modal"))
+            .frame(
+                Frame::new()
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(20, 16)),
+            )
+            .backdrop_color(Color32::from_black_alpha(170));
+        modal.show(ctx, |ui| {
+            ui.set_width(900.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("设置")
+                        .size(18.0)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if window_close_button(ui) {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(10.0);
+
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(150.0, 424.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        ui.add_space(2.0);
+                        ui.label(RichText::new("外观").size(10.0).color(theme::text_faint()));
+                        ui.add_space(6.0);
+                        theme_menu_item(ui, "编辑器主题", true);
+                    },
+                );
+                ui.add_space(10.0);
+                let (line_rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 424.0), Sense::hover());
+                ui.painter().rect_filled(
+                    Rect::from_min_max(
+                        egui::pos2(line_rect.center().x, line_rect.top() + 1.0),
+                        egui::pos2(line_rect.center().x + 1.0, line_rect.bottom() - 1.0),
+                    ),
+                    CornerRadius::same(1),
+                    theme::border_soft(),
+                );
+                ui.add_space(12.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 424.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        ui.label(
+                            RichText::new("编辑器主题")
+                                .size(15.0)
+                                .strong()
+                                .color(theme::text()),
+                        );
+                        ui.add_space(2.0);
+                        ui.label(
+                            RichText::new(
+                                "选择应用配色，点击主题即可预览；代码、面板、菜单和标题栏会一起切换。",
+                            )
+                            .size(10.0)
+                            .color(theme::text_faint()),
+                        );
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                TextEdit::singleline(&mut draft.filter)
+                                    .hint_text("搜索主题名称或色值")
+                                    .desired_width(260.0),
+                            );
+                            let current = crate::codetheme::by_name(&draft.selected)
+                                .unwrap_or(crate::codetheme::default_theme());
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(format!("当前：{}", current.name))
+                                    .size(10.5)
+                                    .color(theme::text_dim()),
+                            );
+                        });
+                        ui.add_space(8.0);
+
+                        let needle = draft.filter.trim().to_lowercase();
+                        let matches: Vec<&'static crate::codetheme::CodeTheme> =
+                            crate::codetheme::THEMES
+                                .iter()
+                                .filter(|item| theme_matches(item, &needle))
+                                .collect();
+                        let dark: Vec<_> =
+                            matches.iter().copied().filter(|item| item.dark).collect();
+                        let light: Vec<_> =
+                            matches.iter().copied().filter(|item| !item.dark).collect();
+
+                        ScrollArea::vertical()
+                            .id_salt("simple_embedded_theme_scroll")
+                            .max_height(340.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                if matches.is_empty() {
+                                    ui.add_space(20.0);
+                                    ui.label(
+                                        RichText::new("没有匹配的主题")
+                                            .size(11.0)
+                                            .color(theme::text_faint()),
+                                    );
+                                    return;
+                                }
+                                let card_width = ((ui.available_width() - 12.0) / 2.0).max(200.0);
+                                if !dark.is_empty() {
+                                    theme_group_header(ui, "暗色", dark.len());
+                                    theme_grid(
+                                        ui,
+                                        "dark",
+                                        &dark,
+                                        &mut draft.selected,
+                                        card_width,
+                                        &mut preview,
+                                    );
+                                }
+                                if !light.is_empty() {
+                                    if !dark.is_empty() {
+                                        ui.add_space(10.0);
+                                    }
+                                    theme_group_header(ui, "亮色", light.len());
+                                    theme_grid(
+                                        ui,
+                                        "light",
+                                        &light,
+                                        &mut draft.selected,
+                                        card_width,
+                                        &mut preview,
+                                    );
+                                }
+                            });
+                    },
+                );
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                if ui.add(theme::secondary_button("恢复默认")).clicked() {
+                    let fallback = crate::codetheme::default_theme().name.to_owned();
+                    draft.selected = fallback.clone();
+                    preview = Some(fallback);
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(theme::primary_button("保存")).clicked() {
+                        save = true;
+                    }
+                    if ui.add(theme::secondary_button("取消")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+
+        if let Some(name) = preview {
+            self.set_editor_theme(ctx, &name);
+        }
+        if close {
+            self.set_editor_theme(ctx, &draft.original);
+            self.theme_settings = None;
+            return;
+        }
+        if save {
+            self.apply_editor_theme(ctx, &draft.selected);
+            self.theme_settings = None;
+            return;
+        }
+        self.theme_settings = Some(draft);
     }
 }
 
@@ -7583,14 +7860,14 @@ fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool, openness: f32) {
                 }
                 let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
                 ui.painter()
-                    .rect_filled(bar_rect, CornerRadius::same(1), theme::ACCENT);
+                    .rect_filled(bar_rect, CornerRadius::same(1), theme::accent());
                 if ui
                     .add(
                         Button::new(
                             RichText::new("工程信息")
                                 .size(12.5)
                                 .strong()
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         )
                         .frame(false),
                     )
@@ -7624,7 +7901,7 @@ fn tree_action_to_action(action: TreeAction) -> Action {
 
 fn section_chevron(ui: &mut egui::Ui, openness: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::click());
-    paint_chevron_openness(ui.painter(), rect, openness, theme::ACCENT);
+    paint_chevron_openness(ui.painter(), rect, openness, theme::accent());
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -7636,18 +7913,22 @@ fn option_tab(
 ) {
     let active = *selected == tab;
     let button = Button::new(RichText::new(label).size(11.5).strong().color(if active {
-        theme::ON_ACCENT
+        theme::on_accent()
     } else {
-        theme::TEXT_DIM
+        theme::text_dim()
     }))
     .fill(if active {
-        theme::ACCENT
+        theme::accent()
     } else {
-        theme::SURFACE
+        theme::surface()
     })
     .stroke(Stroke::new(
         1.0_f32,
-        if active { theme::ACCENT } else { theme::BORDER },
+        if active {
+            theme::accent()
+        } else {
+            theme::border()
+        },
     ))
     .corner_radius(5)
     .min_size(egui::vec2(128.0, 30.0));
@@ -7658,14 +7939,14 @@ fn option_tab(
 
 fn option_list_editor(ui: &mut egui::Ui, label: &str, items: &mut Vec<String>) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(11.5).color(theme::TEXT_DIM));
+        ui.label(RichText::new(label).size(11.5).color(theme::text_dim()));
         let add = Button::new(
             RichText::new("添加")
                 .size(11.5)
                 .strong()
-                .color(theme::ON_ACCENT),
+                .color(theme::text_on(theme::success())),
         )
-        .fill(theme::SUCCESS)
+        .fill(theme::success())
         .stroke(Stroke::NONE)
         .corner_radius(5)
         .min_size(egui::vec2(48.0, 24.0));
@@ -7678,24 +7959,29 @@ fn option_list_editor(ui: &mut egui::Ui, label: &str, items: &mut Vec<String>) {
     for (index, item) in items.iter_mut().enumerate() {
         ui.horizontal(|ui| {
             Frame::new()
-                .fill(theme::BG)
-                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .fill(theme::bg())
+                .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                 .corner_radius(5)
                 .inner_margin(Margin::symmetric(6, 3))
                 .show(ui, |ui| {
                     ui.add(
                         TextEdit::singleline(item)
                             .font(FontId::monospace(11.5))
-                            .text_color(theme::TEXT)
-                            .background_color(theme::BG)
+                            .text_color(theme::text())
+                            .background_color(theme::bg())
                             .desired_width(470.0),
                     );
                 });
-            let delete = Button::new(RichText::new("删除").size(11.0).strong().color(theme::TEXT))
-                .fill(theme::ERROR.gamma_multiply(0.75))
-                .stroke(Stroke::NONE)
-                .corner_radius(5)
-                .min_size(egui::vec2(46.0, 24.0));
+            let delete = Button::new(
+                RichText::new("删除")
+                    .size(11.0)
+                    .strong()
+                    .color(theme::text()),
+            )
+            .fill(theme::error().gamma_multiply(0.75))
+            .stroke(Stroke::NONE)
+            .corner_radius(5)
+            .min_size(egui::vec2(46.0, 24.0));
             if ui.add(delete).clicked() {
                 remove = Some(index);
             }
@@ -7705,7 +7991,11 @@ fn option_list_editor(ui: &mut egui::Ui, label: &str, items: &mut Vec<String>) {
         items.remove(index);
     }
     if items.is_empty() {
-        ui.label(RichText::new("未添加").size(10.5).color(theme::TEXT_FAINT));
+        ui.label(
+            RichText::new("未添加")
+                .size(10.5)
+                .color(theme::text_faint()),
+        );
     }
 }
 
@@ -7713,19 +8003,19 @@ fn option_text_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.horizontal(|ui| {
         ui.add_sized(
             [120.0, 24.0],
-            Label::new(RichText::new(label).size(11.5).color(theme::TEXT_DIM)),
+            Label::new(RichText::new(label).size(11.5).color(theme::text_dim())),
         );
         Frame::new()
-            .fill(theme::BG)
-            .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+            .fill(theme::bg())
+            .stroke(Stroke::new(1.0_f32, theme::border_soft()))
             .corner_radius(5)
             .inner_margin(Margin::symmetric(6, 3))
             .show(ui, |ui| {
                 ui.add(
                     TextEdit::singleline(value)
                         .font(FontId::monospace(11.5))
-                        .text_color(theme::TEXT)
-                        .background_color(theme::BG)
+                        .text_color(theme::text())
+                        .background_color(theme::bg())
                         .desired_width(330.0),
                 );
             });
@@ -7742,7 +8032,7 @@ fn combo_row(
     ui.horizontal(|ui| {
         ui.add_sized(
             [120.0, 26.0],
-            Label::new(RichText::new(label).size(11.5).color(theme::TEXT_DIM)),
+            Label::new(RichText::new(label).size(11.5).color(theme::text_dim())),
         );
         egui::ComboBox::from_id_salt(id_source)
             .selected_text(RichText::new(value.as_str()).size(11.5))
@@ -7818,9 +8108,9 @@ fn meta_group_impl(
     );
     let hovered = ui.rect_contains_pointer(fill_rect);
     let fill = if selected {
-        Color32::from_rgb(36, 84, 108)
+        theme::accent_soft()
     } else if hovered {
-        Color32::from_rgb(28, 49, 63)
+        theme::hover()
     } else {
         Color32::TRANSPARENT
     };
@@ -7835,11 +8125,11 @@ fn meta_group_impl(
         |ui| {
             ui.style_mut().interaction.selectable_labels = false;
             let (chevron_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::hover());
-            paint_chevron_openness(ui.painter(), chevron_rect, openness, theme::ACCENT);
+            paint_chevron_openness(ui.painter(), chevron_rect, openness, theme::accent());
             ui.label(RichText::new(title).size(12.5).strong().color(if selected {
-                theme::TEXT
+                theme::text()
             } else {
-                theme::TEXT_DIM
+                theme::text_dim()
             }));
         },
     );
@@ -7863,12 +8153,12 @@ fn meta_group_impl(
                 ui.painter().rect_filled(
                     plus_rect,
                     CornerRadius::same(4),
-                    Color32::from_rgb(28, 55, 43),
+                    theme::with_alpha(theme::success(), 36),
                 );
             }
             let center = plus_rect.center();
             let arm = 5.0;
-            let stroke = Stroke::new(2.4_f32, theme::SUCCESS);
+            let stroke = Stroke::new(2.4_f32, theme::success());
             ui.painter().line_segment(
                 [
                     egui::pos2(center.x - arm, center.y),
@@ -7945,10 +8235,11 @@ fn meta_row_response(
         |ui| {
             ui.add_sized(
                 [70.0, 18.0],
-                Label::new(RichText::new(label).size(11.0).color(theme::TEXT_FAINT)),
+                Label::new(RichText::new(label).size(11.0).color(theme::text_faint())),
             );
-            let response = ui
-                .add(Label::new(RichText::new(value).size(11.5).color(theme::TEXT_DIM)).truncate());
+            let response = ui.add(
+                Label::new(RichText::new(value).size(11.5).color(theme::text_dim())).truncate(),
+            );
             value_response = Some(if value_tooltip {
                 response.on_hover_text(value)
             } else {
@@ -7992,9 +8283,9 @@ fn meta_editable_list(
     );
     let hovered = ui.rect_contains_pointer(fill_rect);
     let fill = if selected {
-        Color32::from_rgb(36, 84, 108)
+        theme::accent_soft()
     } else if hovered {
-        Color32::from_rgb(28, 49, 63)
+        theme::hover()
     } else {
         Color32::TRANSPARENT
     };
@@ -8010,11 +8301,11 @@ fn meta_editable_list(
         |ui| {
             ui.style_mut().interaction.selectable_labels = false;
             let (chevron_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::hover());
-            paint_chevron_openness(ui.painter(), chevron_rect, openness, theme::ACCENT);
+            paint_chevron_openness(ui.painter(), chevron_rect, openness, theme::accent());
             ui.label(RichText::new(label).size(11.0).color(if selected {
-                theme::TEXT
+                theme::text()
             } else {
-                theme::TEXT_FAINT
+                theme::text_faint()
             }));
             let plus_width = 22.0;
             let remaining = ui.available_width();
@@ -8046,7 +8337,11 @@ fn meta_editable_list(
         if items.is_empty() {
             ui.horizontal(|ui| {
                 ui.add_space(14.0);
-                ui.label(RichText::new("未检测").size(11.0).color(theme::TEXT_FAINT));
+                ui.label(
+                    RichText::new("未检测")
+                        .size(11.0)
+                        .color(theme::text_faint()),
+                );
             });
         } else {
             for item in items {
@@ -8057,7 +8352,7 @@ fn meta_editable_list(
                             RichText::new(format!("• {item}"))
                                 .monospace()
                                 .size(11.0)
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         )
                         .truncate(),
                     );
@@ -8072,12 +8367,15 @@ fn paint_plus_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(28, 55, 43));
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(4),
+            theme::with_alpha(theme::success(), 36),
+        );
     }
     let center = rect.center();
     let arm = 5.0;
-    let stroke = Stroke::new(2.4_f32, theme::SUCCESS);
+    let stroke = Stroke::new(2.4_f32, theme::success());
     ui.painter().line_segment(
         [
             egui::pos2(center.x - arm, center.y),
@@ -8106,25 +8404,25 @@ fn settings_tab_button(
     let active = selected == tab;
     if active {
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(5), theme::ACCENT_SOFT);
+            .rect_filled(rect, CornerRadius::same(5), theme::accent_soft());
         ui.painter().rect_filled(
             egui::Rect::from_min_max(
                 egui::pos2(rect.left() + 7.0, rect.bottom() - 2.0),
                 egui::pos2(rect.right() - 7.0, rect.bottom()),
             ),
             CornerRadius::same(1),
-            theme::ACCENT,
+            theme::accent(),
         );
     } else if response.hovered() {
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(5), theme::SURFACE);
+            .rect_filled(rect, CornerRadius::same(5), theme::surface());
     }
     let color = if active {
-        theme::ACCENT
+        theme::accent()
     } else if response.hovered() {
-        theme::TEXT
+        theme::text()
     } else {
-        theme::TEXT_DIM
+        theme::text_dim()
     };
     ui.painter().text(
         rect.center(),
@@ -8136,11 +8434,234 @@ fn settings_tab_button(
     response.clicked()
 }
 
+fn theme_menu_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if selected {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(5), theme::accent_soft());
+        ui.painter().rect_filled(
+            Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
+            CornerRadius::same(2),
+            theme::accent(),
+        );
+    } else if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(5), theme::surface());
+    }
+    let color = if selected {
+        theme::accent()
+    } else if response.hovered() {
+        theme::text()
+    } else {
+        theme::text_dim()
+    };
+    ui.painter().text(
+        egui::pos2(rect.left() + 14.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(11.5),
+        color,
+    );
+    response
+}
+
+fn theme_matches(theme: &crate::codetheme::CodeTheme, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if theme.name.to_lowercase().contains(needle) {
+        return true;
+    }
+    [
+        theme.bg,
+        theme.text,
+        theme.comment,
+        theme.keyword,
+        theme.string,
+        theme.number,
+        theme.function,
+        theme.selection,
+        theme.line_highlight,
+    ]
+    .iter()
+    .any(|color| crate::codetheme::hex(*color).contains(needle))
+}
+
+fn theme_group_header(ui: &mut egui::Ui, label: &str, count: usize) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 13.0), Sense::hover());
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(1), theme::accent());
+        ui.label(
+            RichText::new(label)
+                .size(11.5)
+                .strong()
+                .color(theme::text_dim()),
+        );
+        ui.label(
+            RichText::new(format!("{count} 套"))
+                .size(9.5)
+                .color(theme::text_faint()),
+        );
+    });
+    ui.add_space(6.0);
+}
+
+fn theme_grid(
+    ui: &mut egui::Ui,
+    id: &str,
+    themes: &[&'static crate::codetheme::CodeTheme],
+    selected: &mut String,
+    card_width: f32,
+    preview: &mut Option<String>,
+) {
+    egui::Grid::new(("simple_embedded_theme_grid", id))
+        .num_columns(2)
+        .spacing([10.0, 8.0])
+        .show(ui, |ui| {
+            for (index, item) in themes.iter().enumerate() {
+                let response = theme_card(ui, item, item.name == selected.as_str(), card_width);
+                if response.clicked() {
+                    *selected = item.name.to_owned();
+                    *preview = Some(item.name.to_owned());
+                }
+                if index % 2 == 1 {
+                    ui.end_row();
+                }
+            }
+        });
+}
+
+fn theme_card(
+    ui: &mut egui::Ui,
+    theme: &crate::codetheme::CodeTheme,
+    selected: bool,
+    width: f32,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 88.0), Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let painter = ui.painter_at(rect);
+    let border = if selected {
+        Stroke::new(1.5_f32, theme.keyword)
+    } else if response.hovered() {
+        Stroke::new(1.0_f32, theme.text.gamma_multiply(0.55))
+    } else {
+        Stroke::new(1.0_f32, theme.text.gamma_multiply(0.22))
+    };
+    painter.rect(
+        rect,
+        CornerRadius::same(7),
+        theme.bg,
+        border,
+        egui::StrokeKind::Inside,
+    );
+    if selected {
+        painter.rect_filled(
+            Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
+            CornerRadius {
+                nw: 7,
+                sw: 7,
+                ne: 0,
+                se: 0,
+            },
+            theme.keyword,
+        );
+    }
+    painter.text(
+        egui::pos2(rect.left() + 10.0, rect.top() + 7.0),
+        Align2::LEFT_TOP,
+        theme.name,
+        FontId::proportional(12.0),
+        theme.text,
+    );
+    painter.text(
+        egui::pos2(rect.right() - 9.0, rect.top() + 8.0),
+        Align2::RIGHT_TOP,
+        if theme.dark { "暗色" } else { "亮色" },
+        FontId::proportional(9.0),
+        theme.comment,
+    );
+
+    let font = FontId::monospace(9.0);
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = (width - 20.0).max(40.0);
+    let mut push = |text: &str, color: Color32| {
+        job.append(
+            text,
+            0.0,
+            egui::TextFormat {
+                font_id: font.clone(),
+                color,
+                ..Default::default()
+            },
+        );
+    };
+    push("void ", theme.keyword);
+    push("main", theme.function);
+    push("() { ", theme.text);
+    push("// init", theme.comment);
+    push("\n    ", theme.text);
+    push("uint32_t", theme.keyword);
+    push(" value = ", theme.text);
+    push("42", theme.number);
+    push("; ", theme.text);
+    push("\"ok\"", theme.string);
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    painter.galley(
+        egui::pos2(rect.left() + 10.0, rect.top() + 27.0),
+        galley,
+        theme.text,
+    );
+
+    let colors = [
+        theme.bg,
+        theme.text,
+        theme.comment,
+        theme.keyword,
+        theme.string,
+        theme.number,
+        theme.function,
+        theme.selection,
+        theme.line_highlight,
+    ];
+    let chip_top = rect.bottom() - 21.0;
+    let gap = 3.0;
+    let chip_width = ((rect.width() - 20.0 - gap * 8.0) / 9.0).max(6.0);
+    for (index, color) in colors.iter().enumerate() {
+        let x = rect.left() + 10.0 + index as f32 * (chip_width + gap);
+        let chip = Rect::from_min_size(egui::pos2(x, chip_top), egui::vec2(chip_width, 11.0));
+        painter.rect_filled(chip, CornerRadius::same(2), *color);
+        painter.rect_stroke(
+            chip,
+            CornerRadius::same(2),
+            Stroke::new(0.5_f32, theme.text.gamma_multiply(0.18)),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    response.on_hover_text(format!(
+        "{} · {}\n背景 {}　文字 {}\n注释 {}　关键字 {}\n字符串 {}　数字 {}\n函数 {}　选区 {}\n行高亮 {}",
+        theme.name,
+        if theme.dark { "暗色" } else { "亮色" },
+        crate::codetheme::hex(theme.bg),
+        crate::codetheme::hex(theme.text),
+        crate::codetheme::hex(theme.comment),
+        crate::codetheme::hex(theme.keyword),
+        crate::codetheme::hex(theme.string),
+        crate::codetheme::hex(theme.number),
+        crate::codetheme::hex(theme.function),
+        crate::codetheme::hex(theme.selection),
+        crate::codetheme::hex(theme.line_highlight),
+    ))
+}
+
 fn settings_path_row(ui: &mut egui::Ui, label: &str, value: &mut String, title: &str, hint: &str) {
     ui.horizontal(|ui| {
         ui.add_sized(
             [86.0, 22.0],
-            Label::new(RichText::new(label).size(10.5).color(theme::TEXT_DIM)),
+            Label::new(RichText::new(label).size(10.5).color(theme::text_dim())),
         );
         ui.add(
             TextEdit::singleline(value)
@@ -8167,26 +8688,26 @@ fn settings_section(ui: &mut egui::Ui, title: &str) -> egui::Response {
         RichText::new(title)
             .size(11.0)
             .strong()
-            .color(theme::TEXT_DIM),
+            .color(theme::text_dim()),
     )
 }
 
 fn segment_button(ui: &mut egui::Ui, selected: bool, text: &str) -> bool {
     ui.add(
         Button::new(RichText::new(text).size(10.5).color(if selected {
-            theme::ON_ACCENT
+            theme::on_accent()
         } else {
-            theme::TEXT_DIM
+            theme::text_dim()
         }))
         .fill(if selected {
-            theme::ACCENT
+            theme::accent()
         } else {
-            theme::SURFACE
+            theme::surface()
         })
         .stroke(if selected {
             Stroke::NONE
         } else {
-            Stroke::new(1.0_f32, theme::BORDER)
+            Stroke::new(1.0_f32, theme::border())
         })
         .corner_radius(5)
         .min_size(egui::vec2(74.0, 25.0)),
@@ -8214,14 +8735,14 @@ fn form_line_with_margin(
     ui.horizontal(|ui| {
         ui.add_sized(
             [86.0, 26.0],
-            Label::new(RichText::new(label).size(10.5).color(theme::TEXT_DIM)),
+            Label::new(RichText::new(label).size(10.5).color(theme::text_dim())),
         );
         ui.add_sized(
             [width, 26.0],
             TextEdit::singleline(value)
                 .font(FontId::monospace(11.0))
-                .text_color(theme::TEXT)
-                .background_color(theme::BG)
+                .text_color(theme::text())
+                .background_color(theme::bg())
                 .hint_text(hint),
         );
     });
@@ -8262,8 +8783,8 @@ impl App {
         let modal = egui::Modal::new(Id::new("simple_embedded_unsaved_modal"))
             .frame(
                 Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(20, 16)),
             )
@@ -8271,27 +8792,32 @@ impl App {
         let response = modal.show(ctx, |ui| {
             ui.set_width(440.0);
             ui.horizontal(|ui| {
-                colored_dot(ui, theme::WARNING, 8.0);
-                ui.label(RichText::new(title).size(16.0).strong().color(theme::TEXT));
+                colored_dot(ui, theme::warning(), 8.0);
+                ui.label(
+                    RichText::new(title)
+                        .size(16.0)
+                        .strong()
+                        .color(theme::text()),
+                );
             });
             ui.add_space(10.0);
-            ui.label(RichText::new(body).size(12.0).color(theme::TEXT_DIM));
+            ui.label(RichText::new(body).size(12.0).color(theme::text_dim()));
             ui.add_space(4.0);
             ui.label(
                 RichText::new("未命名的外部修改不会被覆盖，但未保存内容会丢失。")
                     .size(9.5)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
 
             if let Some(error) = &dialog.error {
                 ui.add_space(8.0);
                 Frame::new()
-                    .fill(theme::ERROR.gamma_multiply(0.08))
-                    .stroke(Stroke::new(1.0_f32, theme::ERROR.gamma_multiply(0.4)))
+                    .fill(theme::error().gamma_multiply(0.08))
+                    .stroke(Stroke::new(1.0_f32, theme::error().gamma_multiply(0.4)))
                     .corner_radius(5)
                     .inner_margin(Margin::symmetric(9, 6))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(error).size(10.0).color(theme::ERROR));
+                        ui.label(RichText::new(error).size(10.0).color(theme::error()));
                     });
             }
 
@@ -8307,9 +8833,9 @@ impl App {
                         save = true;
                     }
                     let discard_button =
-                        Button::new(RichText::new("放弃更改").size(12.0).color(theme::ERROR))
-                            .fill(theme::SURFACE)
-                            .stroke(Stroke::new(1.0_f32, theme::ERROR.gamma_multiply(0.35)))
+                        Button::new(RichText::new("放弃更改").size(12.0).color(theme::error()))
+                            .fill(theme::surface())
+                            .stroke(Stroke::new(1.0_f32, theme::error().gamma_multiply(0.35)))
                             .corner_radius(6)
                             .min_size(egui::vec2(0.0, 28.0));
                     if ui
@@ -8373,7 +8899,7 @@ impl App {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 Frame::new()
-                    .fill(theme::PANEL_RAISED)
+                    .fill(theme::panel_raised())
                     .stroke(Stroke::new(1.0_f32, color.gamma_multiply(0.65)))
                     .corner_radius(7)
                     .inner_margin(Margin::symmetric(14, 10))
@@ -8390,7 +8916,7 @@ impl App {
                             };
                             ui.label(RichText::new(icon).size(10.5).strong().color(color));
                             ui.add(
-                                Label::new(RichText::new(&message).size(12.5).color(theme::TEXT))
+                                Label::new(RichText::new(&message).size(12.5).color(theme::text()))
                                     .wrap(),
                             );
                         });
@@ -8400,11 +8926,15 @@ impl App {
 }
 
 fn tab_menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
-    let mut button = Button::new(RichText::new(label).size(11.5).color(theme::TEXT))
+    let mut button = Button::new(RichText::new(label).size(11.5).color(theme::text()))
         .frame(true)
         .min_size(egui::vec2(264.0, 24.0));
     if !shortcut.is_empty() {
-        button = button.shortcut_text(RichText::new(shortcut).size(10.0).color(theme::TEXT_FAINT));
+        button = button.shortcut_text(
+            RichText::new(shortcut)
+                .size(10.0)
+                .color(theme::text_faint()),
+        );
     }
     ui.add(button).clicked()
 }
@@ -8412,12 +8942,12 @@ fn tab_menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
 fn debug_side_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     ui.add(
         Button::new(RichText::new(label).size(11.5).color(if active {
-            theme::ACCENT
+            theme::accent()
         } else {
-            theme::TEXT_FAINT
+            theme::text_faint()
         }))
         .fill(if active {
-            theme::ACCENT_SOFT
+            theme::accent_soft()
         } else {
             Color32::TRANSPARENT
         })
@@ -8435,16 +8965,16 @@ fn window_close_button(ui: &mut egui::Ui) -> bool {
         .on_hover_text("关闭");
     if response.hovered() {
         ui.painter()
-            .rect_filled(rect.shrink(1.0), CornerRadius::same(3), theme::SURFACE);
+            .rect_filled(rect.shrink(1.0), CornerRadius::same(3), theme::surface());
     }
     paint_find_glyph(
         ui.painter(),
         rect,
         FindGlyph::Close,
         if response.hovered() {
-            theme::TEXT
+            theme::text()
         } else {
-            theme::TEXT_DIM
+            theme::text_dim()
         },
     );
     response.clicked()
@@ -8457,7 +8987,12 @@ fn memory_column(
     regions: &mut [crate::config::MemoryRegionConfig],
 ) {
     ui.vertical_centered(|ui| {
-        ui.label(RichText::new(title).size(12.0).strong().color(theme::TEXT));
+        ui.label(
+            RichText::new(title)
+                .size(12.0)
+                .strong()
+                .color(theme::text()),
+        );
     });
     ui.add_space(5.0);
     let mut startup = None;
@@ -8483,7 +9018,7 @@ fn memory_section(
     regions: &mut [crate::config::MemoryRegionConfig],
 ) -> Option<usize> {
     ui.vertical_centered(|ui| {
-        ui.label(RichText::new(title).size(11.0).color(theme::TEXT_DIM));
+        ui.label(RichText::new(title).size(11.0).color(theme::text_dim()));
     });
     ui.add_space(3.0);
     const DEFAULT_W: f32 = 20.0;
@@ -8495,16 +9030,20 @@ fn memory_section(
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.add_sized(
             [DEFAULT_W, 16.0],
-            Label::new(RichText::new("默认").size(9.5).color(theme::TEXT_FAINT)),
+            Label::new(RichText::new("默认").size(9.5).color(theme::text_faint())),
         );
         ui.add_sized([NAME_W, 16.0], Label::new(""));
         ui.add_sized(
             [START_W, 16.0],
-            Label::new(RichText::new("起始地址").size(9.5).color(theme::TEXT_FAINT)),
+            Label::new(
+                RichText::new("起始地址")
+                    .size(9.5)
+                    .color(theme::text_faint()),
+            ),
         );
         ui.add_sized(
             [SIZE_W, 16.0],
-            Label::new(RichText::new("大小").size(9.5).color(theme::TEXT_FAINT)),
+            Label::new(RichText::new("大小").size(9.5).color(theme::text_faint())),
         );
         ui.add_sized(
             [TAIL_W, 16.0],
@@ -8515,7 +9054,7 @@ fn memory_section(
                     "启动"
                 })
                 .size(9.5)
-                .color(theme::TEXT_FAINT),
+                .color(theme::text_faint()),
             ),
         );
     });
@@ -8534,9 +9073,9 @@ fn memory_section(
                     RichText::new(&region.name)
                         .size(10.5)
                         .color(if region.enabled {
-                            theme::TEXT
+                            theme::text()
                         } else {
-                            theme::TEXT_FAINT
+                            theme::text_faint()
                         }),
                 ),
             );
@@ -8583,7 +9122,7 @@ fn memory_total(
             RichText::new(format!("{label}:"))
                 .size(11.5)
                 .strong()
-                .color(theme::TEXT_DIM),
+                .color(theme::text_dim()),
         );
         ui.label(
             RichText::new(format!(
@@ -8592,7 +9131,7 @@ fn memory_total(
                 total
             ))
             .size(11.5)
-            .color(theme::TEXT),
+            .color(theme::text()),
         );
     });
 }
@@ -8624,16 +9163,16 @@ fn debug_icon_button(
     );
     if enabled && response.hovered() {
         ui.painter()
-            .rect_filled(rect.shrink(2.0), CornerRadius::same(4), theme::HOVER);
+            .rect_filled(rect.shrink(2.0), CornerRadius::same(4), theme::hover());
     }
     let color = if !enabled {
-        theme::TEXT_FAINT
+        theme::text_faint()
     } else if matches!(icon, DebugIcon::Stop) {
-        theme::ERROR
+        theme::error()
     } else if response.hovered() {
-        theme::ACCENT
+        theme::accent()
     } else {
-        theme::TEXT_DIM
+        theme::text_dim()
     };
     paint_debug_icon(ui.painter(), rect, icon, color);
     if enabled {
@@ -8649,36 +9188,40 @@ fn show_hover_info(ui: &mut egui::Ui, info: &crate::hover::HoverInfo) {
         RichText::new(&info.signature)
             .monospace()
             .size(13.0)
-            .color(theme::INFO),
+            .color(theme::info()),
     );
     if !info.doc.is_empty() {
         ui.add_space(5.0);
-        ui.label(RichText::new(&info.doc).size(11.5).color(theme::TEXT));
+        ui.label(RichText::new(&info.doc).size(11.5).color(theme::text()));
     }
     if !info.type_label.is_empty() && !info.type_text.is_empty() {
         ui.add_space(5.0);
         ui.label(
             RichText::new(format!("{}:", info.type_label))
                 .size(10.5)
-                .color(theme::TEXT_FAINT),
+                .color(theme::text_faint()),
         );
         ui.label(
             RichText::new(&info.type_text)
                 .monospace()
                 .size(12.0)
-                .color(theme::TEXT),
+                .color(theme::text()),
         );
     }
     if !info.kind.is_empty() {
         ui.add_space(2.0);
-        ui.label(RichText::new(info.kind).size(9.5).color(theme::TEXT_FAINT));
+        ui.label(
+            RichText::new(info.kind)
+                .size(9.5)
+                .color(theme::text_faint()),
+        );
     }
 }
 
 fn macro_issue_color(level: crate::macro_check::MacroIssueLevel) -> Color32 {
     match level {
-        crate::macro_check::MacroIssueLevel::Error => theme::ERROR,
-        crate::macro_check::MacroIssueLevel::Warning => theme::WARNING,
+        crate::macro_check::MacroIssueLevel::Error => theme::error(),
+        crate::macro_check::MacroIssueLevel::Warning => theme::warning(),
     }
 }
 
@@ -8843,8 +9386,8 @@ fn find_text_field(
     ui.painter().rect(
         rect,
         CornerRadius::same(4),
-        theme::SURFACE,
-        Stroke::new(1.0_f32, theme::BORDER_SOFT),
+        theme::surface(),
+        Stroke::new(1.0_f32, theme::border_soft()),
         egui::StrokeKind::Inside,
     );
     let inner = egui::Rect::from_min_max(
@@ -8866,9 +9409,9 @@ fn find_text_field(
             .frame(Frame::NONE)
             .margin(Margin::symmetric(0, 2))
             .font(FontId::proportional(12.0))
-            .text_color(theme::TEXT)
+            .text_color(theme::text())
             .background_color(Color32::TRANSPARENT)
-            .hint_text(RichText::new(hint).size(12.0).color(theme::TEXT_FAINT)),
+            .hint_text(RichText::new(hint).size(12.0).color(theme::text_faint())),
     );
     if hit.clicked() {
         ui.memory_mut(|memory| memory.request_focus(id));
@@ -8877,7 +9420,7 @@ fn find_text_field(
         ui.painter().rect_stroke(
             rect,
             CornerRadius::same(4),
-            Stroke::new(1.0_f32, theme::ACCENT),
+            Stroke::new(1.0_f32, theme::accent()),
             egui::StrokeKind::Inside,
         );
     }
@@ -8894,20 +9437,20 @@ fn find_toggle(ui: &mut egui::Ui, label: &str, active: bool, tooltip: &str) -> b
         ui.painter().rect(
             visual_rect,
             CornerRadius::same(3),
-            theme::ACCENT_SOFT,
-            Stroke::new(1.0_f32, theme::ACCENT_DARK),
+            theme::accent_soft(),
+            Stroke::new(1.0_f32, theme::accent_dark()),
             egui::StrokeKind::Inside,
         );
     } else if response.hovered() {
         ui.painter()
-            .rect_filled(visual_rect, CornerRadius::same(3), theme::SURFACE);
+            .rect_filled(visual_rect, CornerRadius::same(3), theme::surface());
     }
     let color = if active {
-        theme::ACCENT
+        theme::accent()
     } else if response.hovered() {
-        theme::TEXT
+        theme::text()
     } else {
-        theme::TEXT_DIM
+        theme::text_dim()
     };
     ui.painter().text(
         rect.center(),
@@ -8936,12 +9479,12 @@ fn find_icon_button(ui: &mut egui::Ui, glyph: FindGlyph, tooltip: &str) -> bool 
         .on_hover_text(tooltip);
     if response.hovered() {
         ui.painter()
-            .rect_filled(rect.shrink(1.0), CornerRadius::same(3), theme::SURFACE);
+            .rect_filled(rect.shrink(1.0), CornerRadius::same(3), theme::surface());
     }
     let color = if response.hovered() {
-        theme::TEXT
+        theme::text()
     } else {
-        theme::TEXT_DIM
+        theme::text_dim()
     };
     paint_find_glyph(ui.painter(), rect, glyph, color);
     response.clicked()
@@ -9008,7 +9551,7 @@ fn paint_find_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: FindGlyph,
                     stroke,
                     egui::StrokeKind::Inside,
                 );
-                painter.rect_filled(front, CornerRadius::same(2), theme::PANEL_RAISED);
+                painter.rect_filled(front, CornerRadius::same(2), theme::panel_raised());
             }
             painter.rect_stroke(
                 front,
@@ -9096,9 +9639,9 @@ fn paint_indent_guides(
                     continue;
                 }
                 let color = if *level == active_level && active_level > 0 {
-                    Color32::from_rgba_unmultiplied(88, 196, 221, 155)
+                    theme::with_alpha(theme::accent(), 155)
                 } else {
-                    Color32::from_rgba_unmultiplied(130, 145, 165, 72)
+                    theme::with_alpha(theme::text_dim(), 72)
                 };
                 painter.line_segment(
                     [

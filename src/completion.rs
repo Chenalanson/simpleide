@@ -40,11 +40,11 @@ impl CompletionKind {
 
     pub fn color(self) -> eframe::egui::Color32 {
         match self {
-            Self::Function => crate::theme::INFO,
-            Self::Type => crate::theme::ACCENT,
-            Self::Macro => crate::theme::WARNING,
-            Self::Field => crate::theme::TEXT,
-            Self::Label => eframe::egui::Color32::from_rgb(206, 158, 220),
+            Self::Function => crate::theme::info(),
+            Self::Type => crate::theme::accent(),
+            Self::Macro => crate::theme::warning(),
+            Self::Field => crate::theme::text(),
+            Self::Label => crate::theme::dir(),
         }
     }
 }

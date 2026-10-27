@@ -148,12 +148,12 @@ pub fn badge_for_code(code: &str) -> Option<char> {
 
 pub fn badge_color(badge: char) -> Color32 {
     match badge {
-        'A' | 'U' => theme::SUCCESS,
-        'M' => theme::WARNING,
-        'D' => theme::ERROR,
-        'R' | 'C' => theme::INFO,
-        '!' => Color32::from_rgb(206, 128, 220),
-        _ => theme::TEXT_DIM,
+        'A' | 'U' => theme::success(),
+        'M' => theme::warning(),
+        'D' => theme::error(),
+        'R' | 'C' => theme::info(),
+        '!' => theme::accent_dark(),
+        _ => theme::text_dim(),
     }
 }
 

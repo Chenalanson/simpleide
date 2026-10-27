@@ -1248,6 +1248,7 @@ pub struct Settings {
     pub respect_gitignore: bool,
     pub ignore_patterns: String,
     pub font_size: f32,
+    pub editor_theme: String,
     pub word_wrap: bool,
     pub relative_line_numbers: bool,
     pub show_whitespace: bool,
@@ -1288,6 +1289,7 @@ impl Default for Settings {
             respect_gitignore: true,
             ignore_patterns: String::new(),
             font_size: 14.0,
+            editor_theme: "示波器原色".to_owned(),
             word_wrap: true,
             relative_line_numbers: false,
             show_whitespace: false,
@@ -1484,6 +1486,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(settings.show_hover_info);
         assert!(!settings.check_duplicate_macro_values);
+        assert_eq!(settings.editor_theme, "示波器原色");
         assert_eq!(settings.left_panel_width, 300.0);
     }
 

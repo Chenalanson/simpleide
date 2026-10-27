@@ -4,33 +4,45 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::str::FromStr;
+use std::sync::{Arc, RwLock};
 
 use eframe::egui::{self, Color32, FontId, Galley, TextFormat};
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Theme, ThemeSet};
+use syntect::highlighting::{
+    Color, ScopeSelectors, StyleModifier, Theme, ThemeItem, ThemeSettings,
+};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
-use crate::theme;
+use crate::codetheme::{self, CodeTheme};
 
 pub struct Highlighter {
     syntax_set: SyntaxSet,
-    theme: Theme,
+    theme: RwLock<Theme>,
+    code_theme: RwLock<CodeTheme>,
 }
 
 impl Highlighter {
     pub fn new() -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();
-        let theme_set = ThemeSet::load_defaults();
-        let theme = theme_set
-            .themes
-            .get("base16-ocean.dark")
-            .or_else(|| theme_set.themes.values().next())
-            .expect("syntect ships with default themes")
-            .clone();
+        let code_theme = *codetheme::default_theme();
+        Self {
+            syntax_set,
+            theme: RwLock::new(build_theme(&code_theme)),
+            code_theme: RwLock::new(code_theme),
+        }
+    }
 
-        Self { syntax_set, theme }
+    /// Switch the editor palette. Existing documents clear their layout caches
+    /// in `App::apply_editor_theme`.
+    pub fn set_code_theme(&self, code_theme: &CodeTheme) {
+        if let Ok(mut theme) = self.theme.write() {
+            *theme = build_theme(code_theme);
+        }
+        if let Ok(mut current) = self.code_theme.write() {
+            *current = *code_theme;
+        }
     }
 
     /// Returns `(syntect syntax name, display label)`.
@@ -85,15 +97,20 @@ impl Highlighter {
         job.break_on_newline = true;
         job.halign = egui::Align::LEFT;
 
+        let code_theme = self
+            .code_theme
+            .read()
+            .map(|theme| *theme)
+            .unwrap_or(*codetheme::default_theme());
         let default_format = TextFormat {
             font_id: font_id.clone(),
-            color: theme::TEXT,
+            color: code_theme.text,
             ..Default::default()
         };
 
         let Some(syntax_name) = syntax_name else {
             job.append(text, 0.0, default_format);
-            apply_search_highlights(&mut job, search_ranges);
+            apply_search_highlights(&mut job, search_ranges, &code_theme);
             return job;
         };
         let Some(syntax) = self.syntax_set.find_syntax_by_name(syntax_name) else {
@@ -101,7 +118,11 @@ impl Highlighter {
             return job;
         };
 
-        let mut highlighter = HighlightLines::new(syntax, &self.theme);
+        let theme = self
+            .theme
+            .read()
+            .expect("highlighter theme lock is not poisoned");
+        let mut highlighter = HighlightLines::new(syntax, &theme);
         let mut appended = 0usize;
         for line in LinesWithEndings::from(text) {
             match highlighter.highlight_line(line, &self.syntax_set) {
@@ -139,14 +160,80 @@ impl Highlighter {
         if appended < text.len() {
             job.append(&text[appended..], 0.0, default_format);
         }
-        apply_search_highlights(&mut job, search_ranges);
+        apply_search_highlights(&mut job, search_ranges, &code_theme);
         job
+    }
+}
+
+fn build_theme(code: &CodeTheme) -> Theme {
+    let mut theme = Theme {
+        name: Some(code.name.to_owned()),
+        author: None,
+        settings: ThemeSettings {
+            foreground: Some(syntect_color(code.text)),
+            background: Some(syntect_color(code.bg)),
+            caret: Some(syntect_color(code.text)),
+            line_highlight: Some(syntect_color(code.line_highlight)),
+            ..Default::default()
+        },
+        scopes: Vec::new(),
+    };
+    add_scope(
+        &mut theme,
+        "comment, punctuation.definition.comment",
+        code.comment,
+    );
+    add_scope(
+        &mut theme,
+        "keyword, storage, storage.type, storage.modifier",
+        code.keyword,
+    );
+    add_scope(
+        &mut theme,
+        "string, constant.character, constant.other",
+        code.string,
+    );
+    add_scope(
+        &mut theme,
+        "constant.numeric, constant.language, constant",
+        code.number,
+    );
+    add_scope(
+        &mut theme,
+        "entity.name.function, support.function, variable.function, meta.function-call",
+        code.function,
+    );
+    add_scope(&mut theme, "meta.preprocessor", code.keyword);
+    theme
+}
+
+fn add_scope(theme: &mut Theme, scope: &str, color: Color32) {
+    let Ok(selectors) = ScopeSelectors::from_str(scope) else {
+        return;
+    };
+    theme.scopes.push(ThemeItem {
+        scope: selectors,
+        style: StyleModifier {
+            foreground: Some(syntect_color(color)),
+            background: None,
+            font_style: None,
+        },
+    });
+}
+
+fn syntect_color(color: Color32) -> Color {
+    Color {
+        r: color.r(),
+        g: color.g(),
+        b: color.b(),
+        a: 255,
     }
 }
 
 fn apply_search_highlights(
     job: &mut egui::text::LayoutJob,
     search_ranges: &[(Range<usize>, bool)],
+    code_theme: &CodeTheme,
 ) {
     if search_ranges.is_empty() {
         return;
@@ -176,9 +263,9 @@ fn apply_search_highlights(
                 highlighted.byte_range = start..stop;
                 highlighted.leading_space = if first { section.leading_space } else { 0.0 };
                 highlighted.format.background = if *active {
-                    Color32::from_rgb(72, 83, 52)
+                    code_theme.selection
                 } else {
-                    Color32::from_rgb(37, 56, 65)
+                    code_theme.line_highlight
                 };
                 sections.push(highlighted);
                 first = false;
@@ -203,6 +290,7 @@ pub struct LayoutCache {
     wrap_width: f32,
     font_size: f32,
     decorations_key: u64,
+    theme_key: u64,
     galley: Option<Arc<Galley>>,
 }
 
@@ -214,6 +302,7 @@ pub struct LayoutSpec<'a> {
     pub wrap_width: f32,
     pub font_id: FontId,
     pub decorations_key: u64,
+    pub theme_key: u64,
     pub search_ranges: &'a [(Range<usize>, bool)],
 }
 
@@ -240,6 +329,7 @@ pub fn layout_cached(
                 && (cache_borrow.wrap_width - normalized_width).abs() < 0.25
                 && (cache_borrow.font_size - spec.font_id.size).abs() < f32::EPSILON
                 && cache_borrow.decorations_key == spec.decorations_key
+                && cache_borrow.theme_key == spec.theme_key
             {
                 return Arc::clone(galley);
             }
@@ -260,6 +350,7 @@ pub fn layout_cached(
     cache.wrap_width = normalized_width;
     cache.font_size = spec.font_id.size;
     cache.decorations_key = spec.decorations_key;
+    cache.theme_key = spec.theme_key;
     cache.galley = Some(Arc::clone(&galley));
     galley
 }

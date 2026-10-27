@@ -10,12 +10,17 @@
 
 ![导入工程](docs/welcome.png)
 
+主题设置窗口（亮色示例）：
+
+![主题设置](docs/theme.png)
+
 从打开目录到构建、SSH、烧录和常见问题的完整中文教程：[docs/TUTORIAL.md](docs/TUTORIAL.md)。烧录工具（ST-Link、CubeProgrammer、OpenOCD、pyOCD、J-Link、Keil）的详细配置：[docs/FLASH.md](docs/FLASH.md)。动态监测（watchpoint）的时间戳、调用栈和自动启动：[docs/DYNAMIC.md](docs/DYNAMIC.md)。
 
 ## 功能
 
 - 打开任意文件夹作为工程；构建系统仍以 `Makefile` / `Cargo.toml` / `CMakeLists.txt` 为准，工程配置只存在于 `.simple-embedded/settings.json`
-- 深色标题栏与界面配色一致，构建 / 清理 / 重构建 / 烧录集中在右侧操作栏；配置界面从构建卡片的“配置”或 `Ctrl+,` 打开
+- 标题栏与界面配色一致（亮色主题使用亮色标题栏），构建 / 清理 / 重构建 / 烧录集中在右侧操作栏；配置界面从构建卡片的“配置”或 `Ctrl+,` 打开
+- 全应用主题：右侧操作栏底部 **设置** 打开设置窗口，第一个菜单是 **编辑器主题**，内置 40 套暗色 + 10 套亮色（共 50 套）。点击主题即时预览，整个软件（编辑器、侧栏、面板、菜单、按钮、状态栏和 Windows 标题栏）一起换肤；保存后写入全局设置，取消或关闭会恢复原主题
 - 左侧栏全高，资源管理器与工程信息默认各占一半高度；文件树较短时工程信息自动上移紧接文件列表；文件树较长时可拖动中间分割线调整比例；拖动左栏右边缘可调整宽度；分割比例和折叠状态会保存
 - 左侧构建卡片显示工程名（加粗）、完整路径、检测到的芯片型号和构建模式；未导入时按钮为“导入 / 配置 / 工作区”，导入后为“更换 / 配置 / 工作区”
 - 资源管理器、工程信息、构建配置等可折叠区域带缓动动画和旋转箭头；状态提示 Toast 使用更大字号，便于阅读
@@ -222,7 +227,8 @@ src/
   file_tree.rs   惰性目录树
   highlight.rs   syntect 高亮 + galley 缓存
   log.rs         ANSI SGR 解析、错误分级、日志裁剪
-  theme.rs       配色
+  codetheme.rs   50 套编辑器/应用主题色板
+  theme.rs       从主题派生面板、文字、强调色并安装 egui 样式
   util.rs        路径、换行、文件管理器集成
 examples/blink/  可直接打开的演示工程
 assets/         应用图标源图（Simple 字标 + S 标记）

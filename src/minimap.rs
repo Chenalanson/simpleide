@@ -6,8 +6,6 @@
 
 use eframe::egui::{self, Color32, CornerRadius, Rect, Sense, Stroke};
 
-use crate::theme;
-
 pub const WIDTH: f32 = 76.0;
 
 const COMMENT: Color32 = Color32::from_rgb(106, 153, 85);
@@ -18,6 +16,27 @@ const NORMAL: Color32 = Color32::from_rgb(96, 108, 124);
 const MAX_ROWS: usize = 20_000;
 
 #[derive(Clone, Copy)]
+pub struct Colors {
+    pub comment: Color32,
+    pub preproc: Color32,
+    pub string: Color32,
+    pub keyword: Color32,
+    pub normal: Color32,
+}
+
+impl Default for Colors {
+    fn default() -> Self {
+        Self {
+            comment: COMMENT,
+            preproc: PREPROC,
+            string: STRING,
+            keyword: KEYWORD,
+            normal: NORMAL,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct Row {
     indent: u16,
     len: u16,
@@ -26,24 +45,35 @@ struct Row {
 
 pub struct Cache {
     revision: u64,
+    theme_key: u64,
     rows: Vec<Row>,
 }
 
 pub struct View<'a> {
     pub text: &'a str,
     pub revision: u64,
+    pub theme_key: u64,
+    pub colors: Colors,
     pub scroll: &'a egui::scroll_area::ScrollAreaOutput<()>,
     pub width: f32,
     pub height: f32,
     pub line_count: usize,
+    pub background: Color32,
+    pub foreground: Color32,
 }
 
 pub fn show(ui: &mut egui::Ui, view: View<'_>, cache: &mut Option<Cache>) {
     if cache
         .as_ref()
-        .is_none_or(|cached| cached.revision != view.revision)
+        .is_none_or(|cached| cached.revision != view.revision || cached.theme_key != view.theme_key)
     {
-        *cache = Some(build(view.text, view.revision, view.line_count));
+        *cache = Some(build(
+            view.text,
+            view.revision,
+            view.theme_key,
+            view.line_count,
+            view.colors,
+        ));
     }
     let width = view.width;
     let height = view.height;
@@ -61,11 +91,11 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, cache: &mut Option<Cache>) {
         .on_hover_text("代码预览：点击或拖动跳转");
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, CornerRadius::ZERO, theme::BG);
+    painter.rect_filled(rect, CornerRadius::ZERO, view.background);
     painter.rect_filled(
         Rect::from_min_size(rect.min, egui::vec2(1.0, rect.height())),
         CornerRadius::ZERO,
-        theme::GUTTER,
+        view.foreground.gamma_multiply(0.15),
     );
 
     let map_top = rect.top() + 4.0;
@@ -105,20 +135,24 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, cache: &mut Option<Cache>) {
         egui::pos2(rect.left() + 1.0, thumb_top),
         egui::vec2(rect.width() - 2.0, thumb_height),
     );
-    painter.rect_filled(thumb, CornerRadius::same(2), Color32::from_white_alpha(10));
+    painter.rect_filled(
+        thumb,
+        CornerRadius::same(2),
+        view.foreground.gamma_multiply(0.12),
+    );
     let bar = Rect::from_min_size(
         egui::pos2(rect.right() - 5.0, thumb_top),
         egui::vec2(3.0, thumb_height),
     );
     let bar_color = if response.hovered() || response.dragged() {
-        theme::TEXT_DIM
+        view.foreground
     } else {
-        theme::TEXT_FAINT.gamma_multiply(0.65)
+        view.foreground.gamma_multiply(0.5)
     };
     painter.rect_filled(bar, CornerRadius::same(2), bar_color);
     painter.line_segment(
         [rect.right_top(), rect.right_bottom()],
-        Stroke::new(1.0_f32, theme::GUTTER),
+        Stroke::new(1.0_f32, view.foreground.gamma_multiply(0.15)),
     );
 
     if response.clicked() || response.dragged() {
@@ -132,7 +166,7 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, cache: &mut Option<Cache>) {
     }
 }
 
-fn build(text: &str, revision: u64, line_count: usize) -> Cache {
+fn build(text: &str, revision: u64, theme_key: u64, line_count: usize, colors: Colors) -> Cache {
     let step = line_count.div_ceil(MAX_ROWS).max(1);
     let mut rows = Vec::with_capacity(line_count.div_ceil(step).min(MAX_ROWS));
     for (index, line) in text.split('\n').enumerate() {
@@ -154,37 +188,41 @@ fn build(text: &str, revision: u64, line_count: usize) -> Cache {
             .count()
             .saturating_sub(indent as usize);
         let len = len.min(u16::MAX as usize) as u16;
-        let color = line_color(trimmed);
+        let color = line_color(trimmed, colors);
         rows.push(Row { indent, len, color });
     }
-    Cache { revision, rows }
+    Cache {
+        revision,
+        theme_key,
+        rows,
+    }
 }
 
-fn line_color(trimmed: &str) -> Color32 {
+fn line_color(trimmed: &str, colors: Colors) -> Color32 {
     if trimmed.is_empty() {
-        return NORMAL;
+        return colors.normal;
     }
     if trimmed.starts_with("//")
         || trimmed.starts_with("/*")
         || trimmed.starts_with('*')
         || trimmed.starts_with("*/")
     {
-        return COMMENT;
+        return colors.comment;
     }
     if trimmed.starts_with('#') {
-        return PREPROC;
+        return colors.preproc;
     }
     if trimmed.contains('"') || trimmed.contains('\'') {
-        return STRING;
+        return colors.string;
     }
     let first = trimmed
         .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
         .next()
         .unwrap_or("");
     if is_keyword(first) {
-        KEYWORD
+        colors.keyword
     } else {
-        NORMAL
+        colors.normal
     }
 }
 
@@ -250,8 +288,9 @@ mod tests {
     #[test]
     fn builds_compact_rows_and_preserves_indentation() {
         let text = "#include <stdint.h>\n\nint main(void) {\n    return 0;\n}\n// end";
-        let cache = build(text, 7, 6);
+        let cache = build(text, 7, 1, 6, Colors::default());
         assert_eq!(cache.revision, 7);
+        assert_eq!(cache.theme_key, 1);
         assert_eq!(cache.rows.len(), 6);
         assert_eq!(cache.rows[0].color, PREPROC);
         assert_eq!(cache.rows[2].color, KEYWORD);
@@ -265,7 +304,7 @@ mod tests {
             .map(|index| format!("int value_{index};"))
             .collect::<Vec<_>>()
             .join("\n");
-        let cache = build(&text, 1, 50_000);
+        let cache = build(&text, 1, 1, 50_000, Colors::default());
         assert!(cache.rows.len() <= MAX_ROWS + 1);
         assert!(cache.rows.len() >= 2);
     }

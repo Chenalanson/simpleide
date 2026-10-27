@@ -4,6 +4,7 @@ mod app;
 mod arraygen;
 mod brackets;
 mod build;
+mod codetheme;
 mod column;
 mod column_select;
 mod completion;

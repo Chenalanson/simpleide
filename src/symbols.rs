@@ -2,7 +2,6 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui::Color32;
 use regex::Regex;
 
 use crate::ignore::IgnoreRules;
@@ -32,10 +31,10 @@ impl SymbolKind {
 
     pub fn color(self) -> eframe::egui::Color32 {
         match self {
-            Self::Function => theme::INFO,
-            Self::Struct => theme::ACCENT,
-            Self::Macro => theme::WARNING,
-            Self::Label => Color32::from_rgb(206, 158, 220),
+            Self::Function => theme::info(),
+            Self::Struct => theme::accent(),
+            Self::Macro => theme::warning(),
+            Self::Label => theme::dir(),
         }
     }
 }

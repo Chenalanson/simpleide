@@ -24,12 +24,12 @@ pub enum Severity {
 impl Severity {
     pub fn color(self) -> Color32 {
         match self {
-            Self::Normal => theme::TEXT,
-            Self::Info => theme::INFO,
-            Self::Command => theme::ACCENT,
-            Self::Success => theme::SUCCESS,
-            Self::Warning => theme::WARNING,
-            Self::Error => theme::ERROR,
+            Self::Normal => theme::text(),
+            Self::Info => theme::info(),
+            Self::Command => theme::accent(),
+            Self::Success => theme::success(),
+            Self::Warning => theme::warning(),
+            Self::Error => theme::error(),
         }
     }
 
@@ -412,11 +412,11 @@ fn apply_sgr(params: &str, color: &mut Option<Color32>, bold: &mut bool) {
                             index += 2;
                         }
                         2 if index + 4 < values.len() => {
-                            parsed = Some(Color32::from_rgb(
+                            parsed = Some(adapt_light(Color32::from_rgb(
                                 values[index + 2].min(255) as u8,
                                 values[index + 3].min(255) as u8,
                                 values[index + 4].min(255) as u8,
-                            ));
+                            )));
                             index += 4;
                         }
                         _ => {}
@@ -433,24 +433,61 @@ fn apply_sgr(params: &str, color: &mut Option<Color32>, bold: &mut bool) {
 }
 
 fn basic_color(index: u16, bright: bool) -> Color32 {
-    match (index, bright) {
-        (0, false) => Color32::from_rgb(83, 94, 108),
-        (0, true) => Color32::from_rgb(118, 130, 145),
-        (1, false) => Color32::from_rgb(214, 103, 110),
-        (1, true) => Color32::from_rgb(245, 132, 138),
-        (2, false) => Color32::from_rgb(113, 190, 135),
-        (2, true) => Color32::from_rgb(139, 220, 159),
-        (3, false) => Color32::from_rgb(220, 175, 103),
-        (3, true) => Color32::from_rgb(245, 201, 128),
-        (4, false) => Color32::from_rgb(111, 159, 211),
-        (4, true) => Color32::from_rgb(136, 184, 236),
-        (5, false) => Color32::from_rgb(188, 140, 205),
-        (5, true) => Color32::from_rgb(213, 164, 229),
-        (6, false) => Color32::from_rgb(92, 187, 202),
-        (6, true) => Color32::from_rgb(122, 216, 230),
-        (7, false) => Color32::from_rgb(205, 212, 222),
-        (7, true) => Color32::from_rgb(240, 244, 249),
-        _ => theme::TEXT,
+    if theme::is_dark() {
+        match (index, bright) {
+            (0, false) => Color32::from_rgb(83, 94, 108),
+            (0, true) => Color32::from_rgb(118, 130, 145),
+            (1, false) => Color32::from_rgb(214, 103, 110),
+            (1, true) => Color32::from_rgb(245, 132, 138),
+            (2, false) => Color32::from_rgb(113, 190, 135),
+            (2, true) => Color32::from_rgb(139, 220, 159),
+            (3, false) => Color32::from_rgb(220, 175, 103),
+            (3, true) => Color32::from_rgb(245, 201, 128),
+            (4, false) => Color32::from_rgb(111, 159, 211),
+            (4, true) => Color32::from_rgb(136, 184, 236),
+            (5, false) => Color32::from_rgb(188, 140, 205),
+            (5, true) => Color32::from_rgb(213, 164, 229),
+            (6, false) => Color32::from_rgb(92, 187, 202),
+            (6, true) => Color32::from_rgb(122, 216, 230),
+            (7, false) => Color32::from_rgb(205, 212, 222),
+            (7, true) => Color32::from_rgb(240, 244, 249),
+            _ => theme::text(),
+        }
+    } else {
+        match (index, bright) {
+            (0, false) => Color32::from_rgb(92, 102, 114),
+            (0, true) => Color32::from_rgb(66, 75, 85),
+            (1, false) => Color32::from_rgb(178, 59, 69),
+            (1, true) => Color32::from_rgb(143, 46, 55),
+            (2, false) => Color32::from_rgb(47, 125, 79),
+            (2, true) => Color32::from_rgb(37, 102, 63),
+            (3, false) => Color32::from_rgb(138, 90, 18),
+            (3, true) => Color32::from_rgb(109, 70, 13),
+            (4, false) => Color32::from_rgb(61, 111, 158),
+            (4, true) => Color32::from_rgb(49, 90, 130),
+            (5, false) => Color32::from_rgb(120, 84, 155),
+            (5, true) => Color32::from_rgb(95, 65, 128),
+            (6, false) => Color32::from_rgb(47, 125, 134),
+            (6, true) => Color32::from_rgb(37, 100, 107),
+            (7, false) => Color32::from_rgb(44, 51, 58),
+            (7, true) => Color32::from_rgb(31, 36, 40),
+            _ => theme::text(),
+        }
+    }
+}
+
+fn adapt_light(color: Color32) -> Color32 {
+    if theme::is_dark() {
+        return color;
+    }
+    let luminance = (0.2126 * f32::from(color.r())
+        + 0.7152 * f32::from(color.g())
+        + 0.0722 * f32::from(color.b()))
+        / 255.0;
+    if luminance > 0.68 {
+        theme::blend(color, theme::text(), (luminance - 0.68) / 0.32)
+    } else {
+        color
     }
 }
 
@@ -470,10 +507,10 @@ fn color_256(index: u16) -> Color32 {
                 (55 + component * 40).min(255) as u8
             }
         };
-        return Color32::from_rgb(channel(r), channel(g), channel(b));
+        return adapt_light(Color32::from_rgb(channel(r), channel(g), channel(b)));
     }
     let gray = (8 + (index.saturating_sub(232)) * 10).min(255) as u8;
-    Color32::from_rgb(gray, gray, gray)
+    adapt_light(Color32::from_rgb(gray, gray, gray))
 }
 
 #[cfg(test)]

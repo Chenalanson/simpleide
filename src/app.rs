@@ -118,6 +118,12 @@ struct FlashDraft {
     error: Option<String>,
 }
 
+struct ThemeSettingsDraft {
+    selected: String,
+    original: String,
+    filter: String,
+}
+
 impl FlashDraft {
     fn from_config(config: &BuildConfig) -> Self {
         Self {
@@ -823,6 +829,7 @@ enum Action {
     RefreshTree,
     ToggleHidden,
     OpenSettings,
+    OpenThemeSettings,
     EditMeta,
     DetectIncludeDirs,
     AddMetaItem(MetaListField),
@@ -870,6 +877,7 @@ pub struct App {
     build_config: BuildConfig,
     project_debug: crate::config::ProjectDebugSettings,
     settings_draft: Option<SettingsDraft>,
+    theme_settings: Option<ThemeSettingsDraft>,
     meta_draft: Option<MetaDraft>,
     meta_add: Option<MetaAddDraft>,
     flash_draft: Option<FlashDraft>,
@@ -931,7 +939,7 @@ pub struct App {
 
 impl App {
     pub fn new(
-        _cc: &eframe::CreationContext<'_>,
+        cc: &eframe::CreationContext<'_>,
         initial_project: Option<PathBuf>,
         initial_file: Option<PathBuf>,
     ) -> Self {
@@ -951,6 +959,7 @@ impl App {
             build_config: BuildConfig::default(),
             project_debug: crate::config::ProjectDebugSettings::default(),
             settings_draft: None,
+            theme_settings: None,
             meta_draft: None,
             meta_add: None,
             flash_draft: None,
@@ -1012,6 +1021,10 @@ impl App {
         };
         app.build.auto_scroll = app.settings.auto_scroll_output;
         app.build.output_open = app.settings.output_open;
+        let code_theme = crate::codetheme::by_name(&app.settings.editor_theme)
+            .unwrap_or(crate::codetheme::default_theme());
+        app.highlighter.set_code_theme(code_theme);
+        crate::theme::apply(&cc.egui_ctx, code_theme);
 
         if let Some(path) = initial_project {
             app.load_project(&path, false);
@@ -2378,6 +2391,7 @@ impl App {
 
     fn has_modal(&self) -> bool {
         self.settings_draft.is_some()
+            || self.theme_settings.is_some()
             || self.pending.is_some()
             || self.meta_draft.is_some()
             || self.meta_add.is_some()
@@ -4402,6 +4416,55 @@ impl App {
         }
     }
 
+    fn code_theme(&self) -> &'static crate::codetheme::CodeTheme {
+        crate::codetheme::by_name(&self.settings.editor_theme)
+            .unwrap_or(crate::codetheme::default_theme())
+    }
+
+    fn open_theme_settings(&mut self) {
+        if self.has_modal() {
+            return;
+        }
+        self.theme_settings = Some(ThemeSettingsDraft {
+            selected: self.settings.editor_theme.clone(),
+            original: self.settings.editor_theme.clone(),
+            filter: String::new(),
+        });
+    }
+
+    fn set_editor_theme(&mut self, ctx: &egui::Context, name: &str) {
+        let Some(code_theme) = crate::codetheme::by_name(name) else {
+            return;
+        };
+        self.settings.editor_theme = code_theme.name.to_owned();
+        self.highlighter.set_code_theme(code_theme);
+        crate::theme::apply(ctx, code_theme);
+        self.native_theme_requested = false;
+        self.native_titlebar_styled = false;
+        for document in &mut self.tabs {
+            document.layout_cache = highlight::new_cache();
+            document.minimap_cache = None;
+        }
+        ctx.request_repaint();
+    }
+
+    fn apply_editor_theme(&mut self, ctx: &egui::Context, name: &str) {
+        self.set_editor_theme(ctx, name);
+        self.settings.save();
+        let code_theme = self.code_theme();
+        self.set_toast(
+            format!("已应用主题：{}", code_theme.name),
+            Severity::Success,
+        );
+    }
+
+    fn cancel_theme_settings(&mut self, ctx: &egui::Context) {
+        let Some(draft) = self.theme_settings.take() else {
+            return;
+        };
+        self.set_editor_theme(ctx, &draft.original);
+    }
+
     fn open_settings(&mut self) {
         let (debug_program, gdb_path) = if self.project.is_some() {
             (
@@ -5163,6 +5226,7 @@ impl App {
         if modal_open {
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 self.settings_draft = None;
+                self.cancel_theme_settings(ctx);
                 self.pending = None;
                 self.meta_draft = None;
                 self.meta_add = None;
@@ -6251,6 +6315,7 @@ impl App {
                     self.settings.save();
                 }
                 Action::OpenSettings => self.open_settings(),
+                Action::OpenThemeSettings => self.open_theme_settings(),
                 Action::EditMeta => self.open_meta_editor(),
                 Action::DetectIncludeDirs => self.detect_include_dirs(),
                 Action::AddMetaItem(field) => self.open_meta_add(field),
@@ -6331,7 +6396,11 @@ impl App {
 
     fn style_native_window(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         if !self.native_theme_requested {
-            ctx.send_viewport_cmd(ViewportCommand::SetTheme(egui::SystemTheme::Dark));
+            ctx.send_viewport_cmd(ViewportCommand::SetTheme(if theme::is_dark() {
+                egui::SystemTheme::Dark
+            } else {
+                egui::SystemTheme::Light
+            }));
             self.native_theme_requested = true;
         }
 
@@ -6370,14 +6439,14 @@ impl App {
         if let Some(kind) = self.build.running_kind() {
             let elapsed = self.build.elapsed().unwrap_or_default();
             return (
-                theme::ACCENT,
+                theme::accent(),
                 format!("{}中… {}", kind.verb(), format_duration(elapsed)),
             );
         }
         if let Some(last) = self.build.last() {
             return build_result_status(last);
         }
-        (theme::TEXT_FAINT, "就绪".to_owned())
+        (theme::text_faint(), "就绪".to_owned())
     }
 }
 
@@ -6385,18 +6454,19 @@ fn build_result_status(last: &LastBuild) -> (Color32, String) {
     let duration = format_duration(last.duration);
     match &last.outcome {
         BuildOutcome::Success => (
-            theme::SUCCESS,
+            theme::success(),
             format!("{}完成 · {duration}", last.kind.verb()),
         ),
         BuildOutcome::Failed(Some(code)) => (
-            theme::ERROR,
+            theme::error(),
             format!("{}失败 · 退出码 {code}", last.kind.verb()),
         ),
-        BuildOutcome::Failed(None) => {
-            (theme::ERROR, format!("{}失败 · 进程终止", last.kind.verb()))
-        }
-        BuildOutcome::Cancelled => (theme::WARNING, format!("{}已停止", last.kind.verb())),
-        BuildOutcome::Error(_) => (theme::ERROR, format!("{}无法执行", last.kind.verb())),
+        BuildOutcome::Failed(None) => (
+            theme::error(),
+            format!("{}失败 · 进程终止", last.kind.verb()),
+        ),
+        BuildOutcome::Cancelled => (theme::warning(), format!("{}已停止", last.kind.verb())),
+        BuildOutcome::Error(_) => (theme::error(), format!("{}无法执行", last.kind.verb())),
     }
 }
 
@@ -6786,6 +6856,10 @@ impl eframe::App for App {
             self.show_settings_modal(&ctx);
             actions.clear();
         }
+        if self.theme_settings.is_some() {
+            self.show_theme_settings_modal(&ctx);
+            actions.clear();
+        }
         if self.pending.is_some() {
             self.show_pending_modal(&ctx);
             actions.clear();
@@ -6926,38 +7000,35 @@ fn style_windows_titlebar(hwnd: isize) {
         u32::from(color.r()) | (u32::from(color.g()) << 8) | (u32::from(color.b()) << 16)
     }
 
-    let dark = 1_i32;
+    let dark = i32::from(theme::is_dark());
     unsafe {
-        let result = DwmSetWindowAttribute(
-            hwnd,
+        for attribute in [
             DWMWA_USE_IMMERSIVE_DARK_MODE,
-            (&dark as *const i32).cast(),
-            std::mem::size_of::<i32>() as u32,
-        );
-        if result != 0 {
+            DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
+        ] {
             DwmSetWindowAttribute(
                 hwnd,
-                DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
+                attribute,
                 (&dark as *const i32).cast(),
                 std::mem::size_of::<i32>() as u32,
             );
         }
 
-        let caption = colorref(theme::PANEL);
+        let caption = colorref(theme::panel());
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_CAPTION_COLOR,
             (&caption as *const u32).cast(),
             std::mem::size_of::<u32>() as u32,
         );
-        let border = colorref(theme::BORDER_SOFT);
+        let border = colorref(theme::border_soft());
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_BORDER_COLOR,
             (&border as *const u32).cast(),
             std::mem::size_of::<u32>() as u32,
         );
-        let text = colorref(theme::TEXT);
+        let text = colorref(theme::text());
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_TEXT_COLOR,
@@ -6982,7 +7053,7 @@ impl App {
             .exact_size(58.0)
             .frame(
                 Frame::new()
-                    .fill(theme::GUTTER)
+                    .fill(theme::gutter())
                     .inner_margin(Margin::same(3)),
             )
             .show_inside(ui, |ui| {
@@ -6990,7 +7061,7 @@ impl App {
                 ui.painter().rect(
                     ui.max_rect(),
                     CornerRadius::same(8),
-                    theme::PANEL,
+                    theme::panel(),
                     Stroke::NONE,
                     egui::StrokeKind::Inside,
                 );
@@ -7005,10 +7076,10 @@ impl App {
                             RichText::new("停止")
                                 .size(12.5)
                                 .strong()
-                                .color(theme::ERROR),
+                                .color(theme::error()),
                         )
-                        .fill(theme::ERROR.gamma_multiply(0.13))
-                        .stroke(Stroke::new(1.0_f32, theme::ERROR.gamma_multiply(0.55)))
+                        .fill(theme::error().gamma_multiply(0.13))
+                        .stroke(Stroke::new(1.0_f32, theme::error().gamma_multiply(0.55)))
                         .corner_radius(6)
                         .min_size(egui::vec2(width, 34.0));
                         if ui.add(stop).on_hover_text("终止构建进程树").clicked() {
@@ -7028,10 +7099,10 @@ impl App {
                             theme::primary_button("构建").min_size(egui::vec2(width, 34.0))
                         } else {
                             egui::Button::new(
-                                RichText::new("构建").color(theme::TEXT_FAINT).size(12.5),
+                                RichText::new("构建").color(theme::text_faint()).size(12.5),
                             )
-                            .fill(theme::SURFACE)
-                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                            .fill(theme::surface())
+                            .stroke(Stroke::new(1.0_f32, theme::border_soft()))
                             .corner_radius(6)
                             .min_size(egui::vec2(width, 34.0))
                         };
@@ -7154,6 +7225,17 @@ impl App {
                             actions.push(Action::RunMemoryCheck);
                         }
                     }
+                    let remaining = ui.available_height();
+                    if remaining > 38.0 {
+                        ui.add_space(remaining - 38.0);
+                    }
+                    if ui
+                        .add_sized([width, 30.0], theme::secondary_button("设置"))
+                        .on_hover_text("打开设置")
+                        .clicked()
+                    {
+                        actions.push(Action::OpenThemeSettings);
+                    }
                 });
             });
     }
@@ -7188,17 +7270,17 @@ impl App {
         let mut toggle_output = false;
         let (status_color, status_text) = if debug_view {
             if self.debug.error.is_some() {
-                (theme::ERROR, "错误".to_owned())
+                (theme::error(), "错误".to_owned())
             } else if debug_starting {
-                (theme::ACCENT, "启动中".to_owned())
+                (theme::accent(), "启动中".to_owned())
             } else if debug_has_session {
                 if debug_running {
-                    (theme::SUCCESS, "调试器已连接".to_owned())
+                    (theme::success(), "调试器已连接".to_owned())
                 } else {
-                    (theme::TEXT_FAINT, "调试器已停止".to_owned())
+                    (theme::text_faint(), "调试器已停止".to_owned())
                 }
             } else {
-                (theme::TEXT_FAINT, "未启动".to_owned())
+                (theme::text_faint(), "未启动".to_owned())
             }
         } else {
             self.build_status()
@@ -7222,7 +7304,7 @@ impl App {
         panel
             .frame(
                 Frame::new()
-                    .fill(theme::GUTTER)
+                    .fill(theme::gutter())
                     .inner_margin(Margin::same(4)),
             )
             .show_inside(ui, |ui| {
@@ -7230,7 +7312,7 @@ impl App {
                 ui.painter().rect(
                     ui.max_rect(),
                     CornerRadius::same(8),
-                    theme::PANEL,
+                    theme::panel(),
                     Stroke::NONE,
                     egui::StrokeKind::Inside,
                 );
@@ -7256,7 +7338,7 @@ impl App {
                 }
 
                 let header = Frame::new()
-                    .fill(theme::PANEL_RAISED)
+                    .fill(theme::panel_raised())
                     .corner_radius(CornerRadius {
                         nw: 8,
                         ne: 8,
@@ -7276,7 +7358,7 @@ impl App {
                                         Button::new(
                                             RichText::new(toggle_label)
                                                 .size(12.0)
-                                                .color(theme::TEXT_FAINT),
+                                                .color(theme::text_faint()),
                                         )
                                         .frame(false),
                                     )
@@ -7295,7 +7377,7 @@ impl App {
                                 ui.painter().rect_filled(
                                     bar_rect,
                                     CornerRadius::same(1),
-                                    theme::ACCENT,
+                                    theme::accent(),
                                 );
                                 if output_view_tab(ui, "构建输出", !debug_view)
                                     .on_hover_text("查看构建输出")
@@ -7318,13 +7400,13 @@ impl App {
                                     ui.label(
                                         RichText::new(format!("{debug_count} 行"))
                                             .size(11.0)
-                                            .color(theme::TEXT_FAINT),
+                                            .color(theme::text_faint()),
                                     );
                                 } else if problem_count > 0 {
                                     ui.label(
                                         RichText::new(format!("{problem_count} 条问题"))
                                             .size(11.0)
-                                            .color(theme::ERROR),
+                                            .color(theme::error()),
                                     );
                                 }
                                 if !debug_view {
@@ -7333,7 +7415,7 @@ impl App {
                                         ui.label(
                                             RichText::new(summary)
                                                 .size(11.0)
-                                                .color(theme::SUCCESS),
+                                                .color(theme::success()),
                                         )
                                         .on_hover_text(
                                             "Flash = text + data，RAM = data + bss；总量来自链接脚本或芯片支持包",
@@ -7350,9 +7432,9 @@ impl App {
                                     ] {
                                         let active = self.log_filter == filter;
                                         let color = if active {
-                                            theme::ACCENT
+                                            theme::accent()
                                         } else {
-                                            theme::TEXT_FAINT
+                                            theme::text_faint()
                                         };
                                         if ui
                                             .add_sized(
@@ -7361,7 +7443,7 @@ impl App {
                                                     RichText::new(label).size(11.5).color(color),
                                                 )
                                                 .fill(if active {
-                                                    theme::ACCENT_SOFT
+                                                    theme::accent_soft()
                                                 } else {
                                                     Color32::TRANSPARENT
                                                 })
@@ -7378,14 +7460,14 @@ impl App {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     let auto = ui.checkbox(
                                         &mut auto_scroll,
-                                        RichText::new("自动滚动").size(12.0).color(theme::TEXT_DIM),
+                                        RichText::new("自动滚动").size(12.0).color(theme::text_dim()),
                                     );
                                     auto.on_hover_text("输出增加时自动滚动到底部");
 
                                     let copy_enabled = log_count > 0;
                                     let copy = ui.add_enabled(
                                         copy_enabled,
-                                        small_flat_button("复制", theme::TEXT_DIM),
+                                        small_flat_button("复制", theme::text_dim()),
                                     );
                                     if copy.clicked() {
                                         if debug_view {
@@ -7397,7 +7479,7 @@ impl App {
 
                                     let clear = ui.add_enabled(
                                         log_count > 0,
-                                        small_flat_button("清空", theme::TEXT_DIM),
+                                        small_flat_button("清空", theme::text_dim()),
                                     );
                                     if clear.clicked() {
                                         if debug_view {
@@ -7412,12 +7494,12 @@ impl App {
                                             Button::new(
                                                 RichText::new("停止")
                                                     .size(12.0)
-                                                    .color(theme::ERROR),
+                                                    .color(theme::error()),
                                             )
-                                            .fill(theme::ERROR.gamma_multiply(0.12))
+                                            .fill(theme::error().gamma_multiply(0.12))
                                             .stroke(Stroke::new(
                                                 1.0_f32,
-                                                theme::ERROR.gamma_multiply(0.45),
+                                                theme::error().gamma_multiply(0.45),
                                             ))
                                             .corner_radius(4)
                                             .min_size(egui::vec2(0.0, 21.0)),
@@ -7432,9 +7514,9 @@ impl App {
                     });
                 let header_rect = header.response.rect;
                 let handle_color = if handle.hovered() || handle.dragged() {
-                    theme::ACCENT
+                    theme::accent()
                 } else {
-                    theme::BORDER_SOFT
+                    theme::border_soft()
                 };
                 ui.painter().rect_filled(
                     egui::Rect::from_center_size(
@@ -7447,7 +7529,7 @@ impl App {
 
                 if open {
                     Frame::new()
-                        .fill(theme::EDITOR_BG)
+                        .fill(theme::editor_bg())
                         .corner_radius(CornerRadius {
                             nw: 0,
                             ne: 0,
@@ -7485,7 +7567,7 @@ impl App {
                                                 ui.label(
                                                     RichText::new("构建输出会显示在这里")
                                                         .size(11.0)
-                                                        .color(theme::TEXT_FAINT),
+                                                        .color(theme::text_faint()),
                                                 );
                                             } else {
                                                 let row_height = 18.0;
@@ -7516,7 +7598,7 @@ impl App {
                                                     ui.label(
                                                         RichText::new("没有符合过滤条件的日志")
                                                             .size(11.0)
-                                                            .color(theme::TEXT_FAINT),
+                                                            .color(theme::text_faint()),
                                                     );
                                                 } else {
                                     let mut scroll = ScrollArea::vertical()
@@ -7547,7 +7629,7 @@ impl App {
                                                     0.0,
                                                     egui::TextFormat {
                                                         font_id: font,
-                                                        color: theme::TEXT,
+                                                        color: theme::text(),
                                                         ..Default::default()
                                                     },
                                                 );
@@ -7556,7 +7638,7 @@ impl App {
                                                     let color = if force_severity {
                                                         severity_color
                                                     } else {
-                                                        span.color.unwrap_or(theme::TEXT)
+                                                        span.color.unwrap_or(theme::text())
                                                     };
                                                     job.append(
                                                         &span.text,
@@ -7602,9 +7684,7 @@ impl App {
                                                     painter.rect_filled(
                                                         rect,
                                                         CornerRadius::ZERO,
-                                                        Color32::from_rgba_unmultiplied(
-                                                            239, 112, 118, 18,
-                                                        ),
+                                                        theme::with_alpha(theme::error(), 18),
                                                     );
                                                     painter.rect_filled(
                                                         egui::Rect::from_min_size(
@@ -7612,16 +7692,14 @@ impl App {
                                                             egui::vec2(2.0, rect.height()),
                                                         ),
                                                         CornerRadius::ZERO,
-                                                        theme::ERROR,
+                                                        theme::error(),
                                                     );
                                                 }
                                                 Severity::Warning => {
                                                     painter.rect_filled(
                                                         rect,
                                                         CornerRadius::ZERO,
-                                                        Color32::from_rgba_unmultiplied(
-                                                            233, 181, 100, 14,
-                                                        ),
+                                                        theme::with_alpha(theme::warning(), 14),
                                                     );
                                                     painter.rect_filled(
                                                         egui::Rect::from_min_size(
@@ -7629,7 +7707,7 @@ impl App {
                                                             egui::vec2(2.0, rect.height()),
                                                         ),
                                                         CornerRadius::ZERO,
-                                                        theme::WARNING,
+                                                        theme::warning(),
                                                     );
                                                 }
                                                 _ => {}
@@ -7657,9 +7735,9 @@ impl App {
                                     let response = response
                                         .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
                                     let color = if response.hovered() || response.dragged() {
-                                        theme::ACCENT
+                                        theme::accent()
                                     } else {
-                                        theme::BORDER_SOFT
+                                        theme::border_soft()
                                     };
                                     ui.painter().rect_filled(
                                         egui::Rect::from_center_size(
@@ -7743,8 +7821,8 @@ impl App {
         }
         let mut refresh = false;
         Frame::new()
-            .fill(theme::PANEL)
-            .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+            .fill(theme::panel())
+            .stroke(Stroke::new(1.0_f32, theme::border_soft()))
             .corner_radius(6)
             .inner_margin(Margin::symmetric(9, 7))
             .show(ui, |ui| {
@@ -7754,11 +7832,11 @@ impl App {
                         RichText::new("内存可视化")
                             .size(12.5)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui
-                            .add(small_flat_button("刷新", theme::TEXT_FAINT))
+                            .add(small_flat_button("刷新", theme::text_faint()))
                             .on_hover_text("重新读取 ELF 符号")
                             .clicked()
                         {
@@ -7771,7 +7849,7 @@ impl App {
                         Label::new(
                             RichText::new(util::file_name(path))
                                 .size(9.5)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                         )
                         .truncate(),
                     )
@@ -7781,7 +7859,7 @@ impl App {
                     self.ensure_firmware_analysis(true);
                 }
                 if let Some(error) = self.firmware_view.error.as_ref() {
-                    ui.label(RichText::new(error).size(10.0).color(theme::WARNING));
+                    ui.label(RichText::new(error).size(10.0).color(theme::warning()));
                 }
                 let Some(analysis) = self.firmware_view.analysis.as_ref() else {
                     ui.add_space(8.0);
@@ -7790,7 +7868,7 @@ impl App {
                             "构建生成 ELF 后，这里显示全局变量分布、栈使用预估和 FreeRTOS 堆。",
                         )
                         .size(10.0)
-                        .color(theme::TEXT_FAINT),
+                        .color(theme::text_faint()),
                     );
                     return;
                 };
@@ -7814,27 +7892,27 @@ impl App {
                         ui.label(
                             RichText::new("数据来自 ELF 符号；栈溢出为静态或暂停点预估")
                                 .size(9.0)
-                                .color(theme::TEXT_FAINT),
+                                .color(theme::text_faint()),
                         );
                     });
             });
     }
 
     fn show_global_distribution(ui: &mut egui::Ui, analysis: &crate::memory::FirmwareAnalysis) {
-        const PALETTE: [Color32; 7] = [
-            theme::ACCENT,
-            theme::SUCCESS,
-            theme::WARNING,
-            theme::INFO,
-            Color32::from_rgb(190, 146, 226),
-            Color32::from_rgb(232, 139, 156),
-            Color32::from_rgb(139, 214, 198),
+        let palette: [Color32; 7] = [
+            theme::accent(),
+            theme::success(),
+            theme::warning(),
+            theme::info(),
+            theme::dir(),
+            theme::error(),
+            theme::accent_dark(),
         ];
         ui.label(
             RichText::new("全局变量分布")
                 .size(11.5)
                 .strong()
-                .color(theme::TEXT),
+                .color(theme::text()),
         );
         ui.label(
             RichText::new(format!(
@@ -7843,13 +7921,13 @@ impl App {
                 crate::memory::format_size(analysis.bss_size)
             ))
             .size(9.5)
-            .color(theme::TEXT_FAINT),
+            .color(theme::text_faint()),
         );
         if !analysis.has_symbols {
             ui.label(
                 RichText::new("ELF 未包含符号表，无法列出全局变量")
                     .size(10.0)
-                    .color(theme::WARNING),
+                    .color(theme::warning()),
             );
             return;
         }
@@ -7857,7 +7935,7 @@ impl App {
             ui.label(
                 RichText::new("未在 .data / .bss 中找到带大小的全局变量")
                     .size(10.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
             return;
         }
@@ -7870,7 +7948,7 @@ impl App {
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 14.0), Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::same(2), theme::SURFACE);
+        painter.rect_filled(rect, CornerRadius::same(2), theme::surface());
         let mut left = rect.left();
         for (index, symbol) in analysis.globals.iter().take(12).enumerate() {
             let width = rect.width() * symbol.size as f32 / total as f32;
@@ -7884,7 +7962,7 @@ impl App {
                     egui::pos2(right, rect.bottom()),
                 ),
                 CornerRadius::same(1),
-                PALETTE[index % PALETTE.len()],
+                palette[index % palette.len()],
             );
             left = right;
             if left >= rect.right() {
@@ -7899,7 +7977,7 @@ impl App {
         ui.add_space(3.0);
         for (index, symbol) in analysis.globals.iter().take(14).enumerate() {
             ui.horizontal(|ui| {
-                colored_dot(ui, PALETTE[index % PALETTE.len()], 5.0);
+                colored_dot(ui, palette[index % palette.len()], 5.0);
                 let name_width = (ui.available_width() - 102.0).max(60.0);
                 ui.allocate_ui_with_layout(
                     egui::vec2(name_width, 14.0),
@@ -7910,7 +7988,7 @@ impl App {
                                 RichText::new(&symbol.name)
                                     .monospace()
                                     .size(10.0)
-                                    .color(theme::TEXT),
+                                    .color(theme::text()),
                             )
                             .truncate(),
                         )
@@ -7922,18 +8000,18 @@ impl App {
                         RichText::new(crate::memory::format_size(symbol.size))
                             .monospace()
                             .size(9.5)
-                            .color(theme::SUCCESS),
+                            .color(theme::success()),
                     );
                     ui.label(
                         RichText::new(crate::memory::format_hex(symbol.address))
                             .monospace()
                             .size(9.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                     ui.label(
                         RichText::new(&symbol.section)
                             .size(9.0)
-                            .color(theme::TEXT_FAINT),
+                            .color(theme::text_faint()),
                     );
                 });
             });
@@ -7942,7 +8020,7 @@ impl App {
             ui.label(
                 RichText::new(format!("还有 {} 个变量", analysis.globals.len() - 14))
                     .size(9.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
         }
     }
@@ -7957,7 +8035,7 @@ impl App {
             RichText::new("栈使用预估")
                 .size(11.5)
                 .strong()
-                .color(theme::TEXT),
+                .color(theme::text()),
         );
         let (Some(top), Some(limit), Some(size)) = (
             analysis.stack_top,
@@ -7967,7 +8045,7 @@ impl App {
             ui.label(
                 RichText::new("ELF 中未找到 _estack / _Min_Stack_Size，无法定位栈区")
                     .size(10.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
             return;
         };
@@ -7975,7 +8053,7 @@ impl App {
             ui.label(
                 RichText::new("栈大小配置为 0，无法计算使用率")
                     .size(10.0)
-                    .color(theme::WARNING),
+                    .color(theme::warning()),
             );
             return;
         }
@@ -7984,16 +8062,16 @@ impl App {
         let overflow = sp.is_some_and(|sp| sp < limit);
         let risky = ratio.is_some_and(|ratio| ratio > 0.8);
         let color = if overflow {
-            theme::ERROR
+            theme::error()
         } else if risky {
-            theme::WARNING
+            theme::warning()
         } else {
-            theme::ACCENT
+            theme::accent()
         };
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 12.0), Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::same(2), theme::SURFACE);
+        painter.rect_filled(rect, CornerRadius::same(2), theme::surface());
         if let Some(ratio) = ratio {
             let width = (rect.width() * ratio).max(1.0);
             painter.rect_filled(
@@ -8005,7 +8083,7 @@ impl App {
             painter.rect_stroke(
                 rect,
                 CornerRadius::same(2),
-                Stroke::new(1.0_f32, theme::ACCENT_DARK),
+                Stroke::new(1.0_f32, theme::accent_dark()),
                 egui::StrokeKind::Inside,
             );
         }
@@ -8036,12 +8114,12 @@ impl App {
                 ))
                 .monospace()
                 .size(9.5)
-                .color(theme::TEXT_FAINT),
+                .color(theme::text_faint()),
             );
             ui.label(
                 RichText::new("目标暂停后读取 SP，显示实时已用量")
                     .size(9.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
         }
         if let Some(ram) = ram {
@@ -8054,13 +8132,13 @@ impl App {
                     crate::memory::format_size(remaining)
                 ))
                 .size(9.0)
-                .color(theme::TEXT_FAINT),
+                .color(theme::text_faint()),
             );
             if size > remaining {
                 ui.label(
                     RichText::new("风险：栈预留超过 RAM 剩余")
                         .size(9.5)
-                        .color(theme::ERROR),
+                        .color(theme::error()),
                 );
             }
         }
@@ -8068,19 +8146,19 @@ impl App {
             ui.label(
                 RichText::new("检测到 SP 已越过栈底，可能已经发生栈溢出")
                     .size(9.5)
-                    .color(theme::ERROR),
+                    .color(theme::error()),
             );
         } else if risky {
             ui.label(
                 RichText::new("警告：当前栈使用已超过 80%")
                     .size(9.5)
-                    .color(theme::WARNING),
+                    .color(theme::warning()),
             );
         } else if sp.is_some() {
             ui.label(
                 RichText::new("当前 SP 未越过栈底")
                     .size(9.0)
-                    .color(theme::SUCCESS),
+                    .color(theme::success()),
             );
         }
     }
@@ -8090,13 +8168,13 @@ impl App {
             RichText::new("堆内存 (FreeRTOS)")
                 .size(11.5)
                 .strong()
-                .color(theme::TEXT),
+                .color(theme::text()),
         );
         let Some(size) = analysis.heap_size else {
             ui.label(
                 RichText::new("未检测到 FreeRTOS 堆（ucHeap / .heap）")
                     .size(10.0)
-                    .color(theme::TEXT_FAINT),
+                    .color(theme::text_faint()),
             );
             return;
         };
@@ -8107,22 +8185,22 @@ impl App {
                 crate::memory::format_size(size)
             ))
             .size(10.0)
-            .color(theme::TEXT_DIM),
+            .color(theme::text_dim()),
         );
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 12.0), Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::same(2), theme::SURFACE);
+        painter.rect_filled(rect, CornerRadius::same(2), theme::surface());
         painter.rect_filled(
             egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), rect.height())),
             CornerRadius::same(2),
-            theme::ACCENT_SOFT,
+            theme::accent_soft(),
         );
         response.on_hover_text("堆区大小来自 ucHeap / .heap 段");
         ui.label(
             RichText::new("运行时空闲和最高水位可在调试输出中查看")
                 .size(9.0)
-                .color(theme::TEXT_FAINT),
+                .color(theme::text_faint()),
         );
     }
 
@@ -8159,9 +8237,9 @@ impl App {
                 ui.allocate_exact_size(egui::vec2(handle_width, body_height), Sense::drag());
             let response = response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
             let color = if response.hovered() || response.dragged() {
-                theme::ACCENT
+                theme::accent()
             } else {
-                theme::BORDER_SOFT
+                theme::border_soft()
             };
             ui.painter().rect_filled(
                 egui::Rect::from_center_size(rect.center(), egui::vec2(1.0, rect.height())),
@@ -8188,16 +8266,16 @@ impl App {
                 TextEdit::singleline(&mut self.debug.input)
                     .id(Id::new("simple_embedded_debug_input"))
                     .font(FontId::monospace(11.5))
-                    .text_color(theme::TEXT)
-                    .background_color(theme::BG)
+                    .text_color(theme::text())
+                    .background_color(theme::bg())
                     .desired_width((ui.available_width() - send_width - 8.0).max(80.0))
                     .hint_text(
-                        RichText::new("gdb 命令，例如 info locals").color(theme::TEXT_FAINT),
+                        RichText::new("gdb 命令，例如 info locals").color(theme::text_faint()),
                     ),
             );
             let submitted =
                 response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if submitted || ui.add(small_flat_button("发送", theme::ACCENT)).clicked() {
+            if submitted || ui.add(small_flat_button("发送", theme::accent())).clicked() {
                 let command = self.debug.input.trim().to_owned();
                 if !command.is_empty() {
                     self.debug.input.clear();
@@ -8224,7 +8302,7 @@ impl App {
         scroll.show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             if let Some(error) = &self.debug.error {
-                ui.label(RichText::new(error).size(11.0).color(theme::ERROR));
+                ui.label(RichText::new(error).size(11.0).color(theme::error()));
             }
             if log.is_empty() {
                 let hint = if self.debug.starting {
@@ -8232,18 +8310,18 @@ impl App {
                 } else {
                     "启动 gdb 后，这里显示调试输出"
                 };
-                ui.label(RichText::new(hint).size(11.0).color(theme::TEXT_FAINT));
+                ui.label(RichText::new(hint).size(11.0).color(theme::text_faint()));
             }
             for line in log {
                 let color = if line.contains("Error")
                     || line.contains("error")
                     || line.starts_with("No ")
                 {
-                    theme::ERROR
+                    theme::error()
                 } else if line.starts_with('[') {
-                    theme::INFO
+                    theme::info()
                 } else {
-                    theme::TEXT_DIM
+                    theme::text_dim()
                 };
                 ui.label(RichText::new(line).monospace().size(11.5).color(color));
             }
@@ -8254,9 +8332,9 @@ impl App {
 fn output_view_tab(ui: &mut egui::Ui, label: &str, active: bool) -> egui::Response {
     ui.add(
         Button::new(RichText::new(label).size(12.5).strong().color(if active {
-            theme::TEXT
+            theme::text()
         } else {
-            theme::TEXT_FAINT
+            theme::text_faint()
         }))
         .frame(false),
     )

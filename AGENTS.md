@@ -60,7 +60,8 @@ src/highlight.rs       syntect 高亮和 galley 缓存
 src/hover.rs           标识符悬停：声明签名、注释、返回值/类型
 src/minimap.rs         编辑器右侧代码预览、缩略行缓存和滚动跳转
 src/log.rs             ANSI SGR、错误分级、日志上限
-src/theme.rs           配色和按钮样式
+src/codetheme.rs       50 套编辑器 / 应用主题色板（暗色 40 + 亮色 10）
+src/theme.rs           从当前主题派生整套 UI 配色、egui 样式和按钮样式
 src/toolchain.rs       系统 / 软件自带工具链检测、PATH 目录和复制安装
 src/util.rs            路径、换行、系统集成辅助
 src/brackets.rs        注释/字符串感知的括号匹配
@@ -141,10 +142,11 @@ docs/                  README 截图和使用教程
 - 粘贴由编辑器在 TextEdit 前拦截 `Event::Paste`：`indent::adjust_pasted` 统一换行并按当前行缩进对齐后续行，同时保留粘贴内容相对缩进；只读或编辑器未聚焦时不拦截。
 - 分屏只从标签页右键菜单进入：`向右拆分` / `拆分和移动 → 向上拆分` / `取消拆分`。`split_primary` + `split_path` + `split_direction` 决定两个窗格，两个窗格都调用 `show_code_editor`，都可编辑；`split_focus` 记录焦点窗格，点击窗格会切换 active。当前不支持同一个文件在两个窗格重复打开。
 - 标签页右键菜单还提供关闭其他、关闭右侧标签页、关闭已保存、全部关闭；保存、另存为；复制完整路径、相对路径和面包屑路径；在文件资源管理器中显示、在资源管理器视图中显示；以及拆分操作。批量关闭遇到未保存文件时走 `PendingAction::CloseTabs` 确认。另存为会写入新路径并把标签页、分屏引用和语法识别一并切换到新文件。快捷键：Ctrl+F4 关闭当前，Ctrl+\ 向右拆分，Ctrl+K U 关闭已保存，Ctrl+K W 全部关闭，Ctrl+K S 保存全部，Ctrl+K Ctrl+\ 向上拆分，Ctrl+Shift+S 另存为，Shift+Alt+C 复制路径，Ctrl+K Ctrl+Shift+C 复制相对路径，Shift+Alt+R 在资源管理器中显示。
-- 标签页右键菜单和所有弹出菜单使用深色主题；`theme::install` 强制 `ThemePreference::Dark`，避免系统浅色主题把菜单画成白色。窗口/弹窗的关闭 X 统一使用 `window_close_button`，尺寸和绘制方式与查找浮层的关闭按钮一致。`theme::install` 同时关闭 egui 的 `show_unaligned` 和 `warn_if_rect_changes_id` 调试覆盖层，避免 debug 构建在动画时出现红色控件边框。
+- 标签页右键菜单和所有弹出菜单跟随当前应用主题；`theme::install` 按主题的明暗设置 `ThemePreference::Dark` / `Light`，并从当前色板重装 egui 的菜单、弹窗、滚动条和输入框样式。窗口/弹窗的关闭 X 统一使用 `window_close_button`，尺寸和绘制方式与查找浮层的关闭按钮一致。`theme::install` 同时关闭 egui 的 `show_unaligned` 和 `warn_if_rect_changes_id` 调试覆盖层，避免 debug 构建在动画时出现红色控件边框。
 - 查找是编辑器右上角的约 420px 紧凑浮层 `show_find_overlay`（内部复用 `show_find_bar`），只在 `find.open` 时由 `Ctrl+F` / `Ctrl+H` 打开，不占用独立行；左侧下拉箭头展开替换行，宽度不变，`AB` 保留大小写在替换输入框内，替换/全部替换为图标按钮。`Ctrl+G` 打开同宽的跳行浮层，输入框复用查找输入框样式；提示文字为普通次要色，不使用色块。
 - 面包屑栏只显示从工程根目录开始的路径（`doc.rel_path` 的 `/` 替换为 ` > `）和未保存标记；编码、行尾、语言、只读、寄存器、数组、符号、格式化、自动换行、保存移到最底部状态栏。补全和列编辑不出现在可见工具栏。
-- 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::GUTTER` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。右侧操作栏宽约 58px（原 110px 的一半），按钮内边距同步收窄。编辑器卡底部两角由 `paint_bottom_corners` 补绘 `GUTTER` 圆角，输出面板标题栏紧贴面板顶部，拖动区域合并到标题栏顶部 4px，日志区使用 `EDITOR_BG` 并撑满剩余空间。输出面板标题提供“构建输出 / 调试输出”切换，`OutputView` 决定显示哪一份日志；构建开始时切回构建，启动调试时切到调试。
+- 左侧项目栏、编辑器区、右侧操作栏、底部输出区是四块带圆角的不同底色容器（外圈 3–4px `theme::gutter()` 深色间隙），不再用亮色分隔线；所有 `Panel` 设置 `show_separator_line(false)`。右侧操作栏宽约 58px（原 110px 的一半），按钮内边距同步收窄。编辑器卡底部两角由 `paint_bottom_corners` 补绘 `gutter` 圆角，输出面板标题栏紧贴面板顶部，拖动区域合并到标题栏顶部 4px，日志区使用 `editor_bg` 并撑满剩余空间。输出面板标题提供“构建输出 / 调试输出”切换，`OutputView` 决定显示哪一份日志；构建开始时切回构建，启动调试时切到调试。
+- 右侧操作栏最底部是 **设置** 按钮，大小与构建 / 烧录等按钮一致；点击打开标题为“设置”的独立窗口。窗口左侧第一个菜单是 **编辑器主题**，右侧列出 40 套暗色 + 10 套亮色共 50 套主题，支持按名称或色值搜索。主题卡片展示名称、明暗标签、语法示例和 9 色色板；点击卡片即时预览整个应用，保存后写入 `Settings.editor_theme`，取消 / 关闭 / Esc 恢复原主题。`codetheme.rs` 只保存 9 个代码色字段，`theme.rs` 从中派生 bg / gutter / panel / surface / text / accent / border / success 等整套 UI 色，因此侧栏、菜单、状态栏和 Windows 标题栏会一起切换；不要把它退回成只给代码区换色。
 - “配置”弹窗第一行是 构建 / 编辑器 / 调试 / 其他 四个页签，下方只显示当前页；构建页包含工具链下拉、自动检测、Build/Clean/Rebuild/Flash 命令、“并行任务数”（0 = 不启用，可一键填入 CPU 核心数）和“工具链路径”。**自动检测** 按钮紧挨工具链下拉，完整说明作为鼠标下方的悬停提示；“并行任务数”直接跟在 Rebuild（或 Flash）后面，不再有“并行构建”小标题和解释段落。`form_line` 的单行输入框高 26px，构建页行距收紧到 3px，命令行之间只留 1px 额外间距；配置页内容区固定为 400px（以构建页高度为准），切换页签时弹窗高度不变。“工具链路径”与 Build 等标签同列，右侧多行输入框高度为 Build 输入框的三倍（约 78px），内容超出时在框内滚动；它对应 `BuildConfig.extra_paths`，并在打开配置时合并自动检测到的工具目录。构建页不再显示工程路径，底部的“本地或 SSH 构建共用同一组命令”说明也已删除，只保留右下角的保存 / 取消按钮。“当前烧录工具为…”和并行构建说明段落已删除。自动检测先看工程根目录的构建文件，再查 PATH/常见安装目录。原来的“构建工具链”页已删除；软件自带 `tools/` 存在时自动优先使用，否则回退到旧配置路径、额外 PATH 和系统 PATH。调试页的调试程序和 gdb 路径在工程打开时读写工程的 `debug` 节点（无工程时才用全局设置），提供浏览和自动检测；调试程序为空时会自动回填 build 产物，gdb 路径既可填 exe，也可填 `bin` 目录。
 - 最底部状态栏是贯穿整个窗口宽度的矩形条（无圆角、无外圈间隙），内容靠右排列：右侧操作按钮 + 行列/缩进/编码/行尾/语言信息。
 - 资源管理器、工程信息、构建配置、芯片支持包、烧录配置、C/C++ 列表等可折叠区域使用缓动动画，不直接瞬间显示/隐藏：侧栏高度动画 0.22s、`cubic_in_out`，其余折叠组使用 egui `CollapsingState` 和全局 0.20s 动画；箭头随 openness 旋转。动画期间主动 `request_repaint()`，避免掉帧式跳变。
@@ -212,7 +214,7 @@ docs/                  README 截图和使用教程
 
 - 打开工程时优先读取工程的 `.simple-embedded/settings.json`；不存在时回退到用户目录里的每工程配置，并自动迁移写入工程文件。迁移成功后删除用户目录里的旧条目，避免删除工程配置后被旧缓存恢复；只有工程文件写入失败时才保留用户目录回退。
 - 工程文件是普通 JSON（`ProjectSettings { version, build, debug }`），保存 Build/Clean/Rebuild/Flash/SSH、OpenOCD/pyOCD、并行任务数、C/C++ 属性覆盖、构建选项、内存布局 `build.memory`，以及调试程序 `debug.program` 和 gdb 路径 `debug.gdb_path`。可以手改，也可以和源码一起提交。
-- 全局设置继续保存最近工程、编辑器偏好、输出面板状态等；`Settings::load` 容忍 UTF-8 BOM，解析失败会回退默认值并输出到 stderr。
+- 全局设置继续保存最近工程、编辑器偏好、主题（`Settings.editor_theme`）、输出面板状态等；启动时先读取该字段并用 `theme::apply` 派生整套 UI 配色，再打开上次工程。`Settings::load` 容忍 UTF-8 BOM，解析失败会回退默认值并输出到 stderr。
 - Makefile 备份位于 `%APPDATA%\SimpleEmbedded\backups\<工程名>-<hash>\`，默认保留最近 12 份。
 - 自动检测结果只是初值；用户可以随时在设置里改。修改设置后必须点击保存。
 - 工作区文件：`<工程目录>\<工程名>.se-workspace`，内容是 VS Code 风格 JSON（`version`、`name`、`folders`、`settings`）。`config::write_workspace_file` 生成，`config::resolve_workspace_file` 解析；只使用第一个 folder。`register_workspace_association` 用 `reg.exe` 写入 HKCU 的 `.se-workspace` 关联，关联当前 exe。
@@ -220,9 +222,9 @@ docs/                  README 截图和使用教程
 
 ## UI/产品约定
 
-- 用户界面使用中文；保持现有深色配色和 `docs/` 截图风格。
+- 用户界面使用中文；默认暗色主题，同时支持 50 套暗色 / 亮色主题，保持 `docs/` 截图的深色工程风格。
 - 界面不显示 emoji/生僻符号；使用 `Painter` 画图形或已验证的字符。
-- 右侧操作栏：纵向排列 Build、Clean/重构、Flash、调试、检测；不再放设置按钮，设置从构建卡片“配置”或 `Ctrl+,` 打开。检测按钮在工程打开后即可用：无调试会话时运行静态扫描并打开“非法检测 → 静态检测”；有调试会话时打开“动态监测”，可添加硬件 watchpoint（写入 `watch`、读取 `rwatch`、读写 `awatch`，GDB 优先使用硬件比较器，Cortex-M 通常 2-4 个），命中后目标自动暂停并记录本机时间、旧值 → 新值、GDB 停止位置和调用栈（每个监测点最多 200 条记录）。动态监测页可勾选“调试时自动启动动态监测”，启动调试时自动打开面板，并在临时 `main` 断点暂停后再重新启用已保存的 watchpoint（避免启动清 `.bss` 时误命中）；停止调试后表达式和历史保留。OpenOCD 把命中报告为 `SIGTRAP` 而不是 `Old value` / `New value` 时，应用通过 GDB convenience variable 查询命中前的值和当前值补记录。静态检测扫描所有 `.c/.h`：数组常量下标越界、`strcpy`/`strcat`/`strncpy`/`memcpy`/`memset` 常量长度、`gets`/`sprintf`、重复 `free`、可疑 `malloc` 字节数、返回数组名；结果在窗口内按文件:行显示，可点击跳转。静态扫描是启发式检查，不替代 ASAN/Valgrind；动态 watchpoint 依赖 gdb / OpenOCD / pyOCD 会话。
+- 右侧操作栏：纵向排列 Build、Clean/重构、Flash、调试、检测，最底部是 **设置**；构建配置仍从构建卡片“配置”或 `Ctrl+,` 打开。检测按钮在工程打开后即可用：无调试会话时运行静态扫描并打开“非法检测 → 静态检测”；有调试会话时打开“动态监测”，可添加硬件 watchpoint（写入 `watch`、读取 `rwatch`、读写 `awatch`，GDB 优先使用硬件比较器，Cortex-M 通常 2-4 个），命中后目标自动暂停并记录本机时间、旧值 → 新值、GDB 停止位置和调用栈（每个监测点最多 200 条记录）。动态监测页可勾选“调试时自动启动动态监测”，启动调试时自动打开面板，并在临时 `main` 断点暂停后再重新启用已保存的 watchpoint（避免启动清 `.bss` 时误命中）；停止调试后表达式和历史保留。OpenOCD 把命中报告为 `SIGTRAP` 而不是 `Old value` / `New value` 时，应用通过 GDB convenience variable 查询命中前的值和当前值补记录。静态检测扫描所有 `.c/.h`：数组常量下标越界、`strcpy`/`strcat`/`strncpy`/`memcpy`/`memset` 常量长度、`gets`/`sprintf`、重复 `free`、可疑 `malloc` 字节数、返回数组名；结果在窗口内按文件:行显示，可点击跳转。静态扫描是启发式检查，不替代 ASAN/Valgrind；动态 watchpoint 依赖 gdb / OpenOCD / pyOCD 会话。
 - 构建结果和内存占用显示在输出面板标题和日志中；构建视图标题显示 `Flash 已用 / 总量 (百分比) · RAM 已用 / 总量 (百分比)`，占用来自 `text/data/bss` 或 ELF 段，容量来自链接脚本 / PDSC / 工程信息。输出面板可切换“构建输出 / 调试输出”，底部不再保留重复的状态栏。
 - 构建输出面板顶部有 10px 拖动手柄，收起时也能向上拉出；高度存 `Settings.output_height`，最大到主区域顶部。
 - 构建输出视图右侧固定显示 **内存可视化** 侧栏（默认 380px，可拖动 6px 分隔条调整，高度与调试侧栏一致）：`memory.rs::analyze_elf` 解析 ELF32/64 符号表，列出写入型 `.data` / `.bss` 全局变量（最多 200 个，展示前 14 个）、`_estack` / `_Min_Stack_Size` 栈区、`ucHeap` / `.heap` FreeRTOS 堆区；调试暂停且寄存器可用时用 SP 估算当前栈使用，否则显示静态预留。缓存按 ELF 路径/修改时间刷新，面板内 **刷新** 强制重读。
@@ -258,7 +260,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil 工程、命令可用性检查、图标 ICO 条目与 exe 嵌入资源一致性。当前共 178 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil 工程、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、图标 ICO 条目与 exe 嵌入资源一致性。当前共 182 个测试。
 
 UI 改动后建议：
 

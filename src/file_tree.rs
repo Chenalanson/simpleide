@@ -419,14 +419,14 @@ fn row(
         let painter = ui.painter_at(rect);
         let hovered = response.hovered();
         if selected {
-            painter.rect_filled(rect, egui::CornerRadius::same(4), theme::ACCENT_SOFT);
+            painter.rect_filled(rect, egui::CornerRadius::same(4), theme::accent_soft());
             painter.rect_filled(
                 egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
                 egui::CornerRadius::same(1),
-                theme::ACCENT,
+                theme::accent(),
             );
         } else if hovered {
-            painter.rect_filled(rect, egui::CornerRadius::same(4), theme::HOVER);
+            painter.rect_filled(rect, egui::CornerRadius::same(4), theme::hover());
         }
 
         // The tree is a child of the "资源管理器" section header, so the
@@ -442,7 +442,7 @@ fn row(
                     egui::pos2(x, rect.top()),
                     egui::pos2(x, rect.bottom() + 1.0),
                 ],
-                Stroke::new(1.0_f32, theme::BORDER),
+                Stroke::new(1.0_f32, theme::border()),
             );
         }
         if is_dir {
@@ -458,11 +458,11 @@ fn row(
 
         let text_x = icon_x + 16.0;
         let text_color = if selected {
-            theme::TEXT
+            theme::text()
         } else if let Some(badge) = badge {
             crate::git::badge_color(badge)
         } else {
-            theme::TEXT_DIM
+            theme::text_dim()
         };
         painter.text(
             egui::pos2(text_x, rect.center().y),
@@ -486,7 +486,7 @@ fn row(
 }
 
 fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, openness: f32) {
-    let stroke = Stroke::new(1.6_f32, theme::ACCENT);
+    let stroke = Stroke::new(1.6_f32, theme::accent());
     let angle = openness.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
     let (sin, cos) = angle.sin_cos();
     let rotate = |x: f32, y: f32| egui::vec2(x * cos - y * sin, x * sin + y * cos);
@@ -498,7 +498,7 @@ fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, openness: f32) {
 }
 
 fn paint_folder(painter: &egui::Painter, x: f32, center_y: f32) {
-    let color = theme::DIR.gamma_multiply(0.9);
+    let color = theme::dir().gamma_multiply(0.9);
     let body = egui::Rect::from_min_size(egui::pos2(x, center_y - 4.0), egui::vec2(11.0, 8.0));
     let tab = egui::Rect::from_min_size(egui::pos2(x, center_y - 5.5), egui::vec2(5.0, 3.0));
     painter.rect_filled(tab, egui::CornerRadius::same(1), color.gamma_multiply(0.7));
@@ -531,14 +531,14 @@ fn color_for_name(name: &str) -> Color32 {
         .map(|extension| extension.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     match extension.as_str() {
-        "rs" => Color32::from_rgb(224, 151, 102),
-        "c" | "h" => Color32::from_rgb(111, 166, 220),
-        "cpp" | "cc" | "cxx" | "hpp" | "hh" => Color32::from_rgb(132, 182, 228),
-        "s" | "asm" | "ld" => Color32::from_rgb(206, 158, 220),
-        "toml" | "json" | "yaml" | "yml" => Color32::from_rgb(219, 183, 112),
-        "md" | "txt" => Color32::from_rgb(142, 160, 180),
-        "mk" => Color32::from_rgb(207, 175, 100),
-        _ => Color32::from_rgb(139, 149, 164),
+        "rs" => theme::warning(),
+        "c" | "h" => theme::accent(),
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" => theme::info(),
+        "s" | "asm" | "ld" => theme::dir(),
+        "toml" | "json" | "yaml" | "yml" => theme::warning(),
+        "md" | "txt" => theme::text_dim(),
+        "mk" => theme::dir(),
+        _ => theme::text_faint(),
     }
 }
 
