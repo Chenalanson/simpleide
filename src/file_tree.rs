@@ -369,8 +369,8 @@ impl FileTree {
     }
 }
 
-struct RowResponse {
-    response: egui::Response,
+pub(crate) struct RowResponse {
+    pub(crate) response: egui::Response,
 }
 
 fn is_image_path(path: &Path) -> bool {
@@ -411,6 +411,39 @@ fn row(
     selected: bool,
     badge: Option<char>,
 ) -> RowResponse {
+    RowResponse {
+        response: row_impl(ui, name, is_dir, openness, depth, selected, badge, None),
+    }
+}
+
+/// Explorer-style row used by the chip file browser. It shares the file tree
+/// icons, indentation guides and hover highlight, with an optional right-aligned
+/// size for files.
+pub(crate) fn board_row(
+    ui: &mut egui::Ui,
+    name: &str,
+    is_dir: bool,
+    openness: f32,
+    depth: usize,
+    selected: bool,
+    size: Option<&str>,
+) -> RowResponse {
+    RowResponse {
+        response: row_impl(ui, name, is_dir, openness, depth, selected, None, size),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn row_impl(
+    ui: &mut egui::Ui,
+    name: &str,
+    is_dir: bool,
+    openness: f32,
+    depth: usize,
+    selected: bool,
+    badge: Option<char>,
+    size: Option<&str>,
+) -> egui::Response {
     let height = 22.0;
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::click());
@@ -479,10 +512,18 @@ fn row(
                 FontId::monospace(10.0),
                 crate::git::badge_color(badge),
             );
+        } else if let Some(size) = size {
+            painter.text(
+                egui::pos2(rect.right() - 8.0, rect.center().y),
+                Align2::RIGHT_CENTER,
+                size,
+                FontId::monospace(10.0),
+                theme::text_faint(),
+            );
         }
     }
 
-    RowResponse { response }
+    response
 }
 
 fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, openness: f32) {

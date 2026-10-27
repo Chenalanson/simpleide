@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::config::autodetect;
+use crate::micropython::{BoardFile, BoardNode};
 use eframe::egui::{
     self, Align, Align2, Button, Checkbox, Color32, FontId, Frame, Id, Label, Layout, Margin,
     RadioButton, Rect, RichText, ScrollArea, Sense, Shape, Stroke, TextEdit,
@@ -787,23 +788,78 @@ impl App {
 
     fn show_chip_files(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>, open: bool) {
         let ready = self.build_config.serial.is_ready();
+        let busy = self.micropython_busy;
         Frame::new()
             .inner_margin(Margin::symmetric(11, 0))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let refresh = ui.add_enabled(
-                        ready && !self.micropython_busy,
-                        small_flat_button("刷新", theme::accent()),
+                ui.label(
+                    RichText::new("读取芯片文件会暂停板上正在运行的程序")
+                        .size(9.0)
+                        .color(theme::text_faint()),
+                );
+                ui.add_space(4.0);
+
+                if !ready {
+                    ui.label(
+                        RichText::new("请先在 配置 → 构建 中选择 MicroPython 串口")
+                            .size(10.5)
+                            .color(theme::warning()),
                     );
+                } else if let Some(error) = &self.board_error {
+                    ui.add(Label::new(RichText::new(error).size(9.5).color(theme::error())).wrap());
+                } else {
+                    if let Some(error) = &self.board_file_error {
+                        ui.add(
+                            Label::new(RichText::new(error).size(9.5).color(theme::warning()))
+                                .wrap(),
+                        );
+                        ui.add_space(2.0);
+                    }
+
+                    if let Some(files) = &self.board_files {
+                        if files.is_empty() {
+                            ui.label(
+                                RichText::new("芯片上没有文件")
+                                    .size(10.0)
+                                    .color(theme::text_faint()),
+                            );
+                        } else {
+                            let height = (ui.available_height() - 36.0).max(60.0);
+                            ScrollArea::vertical()
+                                .id_salt("simple_embedded_chip_files")
+                                .max_height(height)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing.y = 1.0;
+                                    let tree = crate::micropython::board_tree(files);
+                                    show_chip_nodes(ui, &tree, 0, actions);
+                                });
+                        }
+                    } else if !busy && !self.build.is_running() && open {
+                        // The first time the section is expanded, fetch the board
+                        // filesystem once. A failed fetch sets board_error and stops
+                        // this automatic retry.
+                        actions.push(Action::RefreshBoardFiles);
+                        ui.label(
+                            RichText::new("读取芯片文件…")
+                                .size(10.0)
+                                .color(theme::text_faint()),
+                        );
+                    }
+                }
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let refresh = ui.add_enabled(ready && !busy, theme::secondary_button("刷新"));
                     let refresh = if ready {
-                        refresh.on_hover_text("读取芯片文件（会暂停板上正在运行的程序）")
+                        refresh.on_hover_text("重新读取芯片文件（会暂停板上正在运行的程序）")
                     } else {
                         refresh.on_disabled_hover_text("请先在配置 → 构建中设置串口")
                     };
                     if refresh.clicked() {
                         actions.push(Action::RefreshBoardFiles);
                     }
-                    if self.micropython_busy {
+                    if busy {
                         ui.spinner();
                         ui.label(
                             RichText::new("读取中…")
@@ -818,108 +874,6 @@ impl App {
                         );
                     }
                 });
-                ui.label(
-                    RichText::new("读取芯片文件会暂停板上正在运行的程序")
-                        .size(9.0)
-                        .color(theme::text_faint()),
-                );
-                ui.add_space(4.0);
-
-                if !ready {
-                    ui.label(
-                        RichText::new("请先在 配置 → 构建 中选择 MicroPython 串口")
-                            .size(10.5)
-                            .color(theme::warning()),
-                    );
-                    return;
-                }
-
-                if let Some(error) = &self.board_error {
-                    ui.add(Label::new(RichText::new(error).size(9.5).color(theme::error())).wrap());
-                    return;
-                }
-                if let Some(error) = &self.board_file_error {
-                    ui.add(
-                        Label::new(RichText::new(error).size(9.5).color(theme::warning())).wrap(),
-                    );
-                    ui.add_space(2.0);
-                }
-
-                if let Some(files) = &self.board_files {
-                    if files.is_empty() {
-                        ui.label(
-                            RichText::new("芯片上没有文件")
-                                .size(10.0)
-                                .color(theme::text_faint()),
-                        );
-                    } else {
-                        let height = (ui.available_height() - 4.0).max(80.0);
-                        ScrollArea::vertical()
-                            .id_salt("simple_embedded_chip_files")
-                            .max_height(height)
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                for file in files {
-                                    let display = if file.is_dir {
-                                        format!("{}/", file.path.trim_end_matches('/'))
-                                    } else {
-                                        format!(
-                                            "{}    {}",
-                                            file.path,
-                                            crate::memory::format_size(u64::from(file.size))
-                                        )
-                                    };
-                                    let color = if file.is_dir {
-                                        theme::dir()
-                                    } else {
-                                        theme::text_dim()
-                                    };
-                                    if file.is_dir {
-                                        ui.add(
-                                            Label::new(
-                                                RichText::new(display)
-                                                    .monospace()
-                                                    .size(10.5)
-                                                    .color(color),
-                                            )
-                                            .truncate(),
-                                        )
-                                        .on_hover_text("目录");
-                                    } else {
-                                        let response = ui.add(
-                                            Label::new(
-                                                RichText::new(display)
-                                                    .monospace()
-                                                    .size(10.5)
-                                                    .color(color),
-                                            )
-                                            .truncate()
-                                            .sense(Sense::click()),
-                                        );
-                                        let response = response
-                                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                            .on_hover_text(format!(
-                                                "{}\n点击读取到工程（会暂停设备程序）",
-                                                file.path
-                                            ));
-                                        if response.clicked() {
-                                            actions.push(Action::ReadBoardFile(file.clone()));
-                                        }
-                                    }
-                                }
-                            });
-                    }
-                } else if !self.micropython_busy && !self.build.is_running() && open {
-                    // The first time the section is expanded, fetch the board
-                    // filesystem once. A failed fetch sets board_error and stops
-                    // this automatic retry.
-                    actions.push(Action::RefreshBoardFiles);
-                    ui.label(
-                        RichText::new("读取芯片文件…")
-                            .size(10.0)
-                            .color(theme::text_faint()),
-                    );
-                }
             });
     }
 
@@ -8075,6 +8029,56 @@ impl App {
             return;
         }
         self.theme_settings = Some(draft);
+    }
+}
+
+fn show_chip_nodes(
+    ui: &mut egui::Ui,
+    nodes: &[BoardNode],
+    depth: usize,
+    actions: &mut Vec<Action>,
+) {
+    for node in nodes {
+        if node.is_dir {
+            let id = ui.make_persistent_id(("simple_embedded_chip_dir", node.path.as_str()));
+            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                id,
+                true,
+            );
+            let openness = state.openness(ui.ctx());
+            if openness > 0.0 && openness < 1.0 {
+                ui.ctx().request_repaint();
+            }
+            let row =
+                crate::file_tree::board_row(ui, &node.name, true, openness, depth, false, None);
+            let response = row
+                .response
+                .on_hover_text(format!("{}/\n点击展开或收起", node.path));
+            if response.clicked() {
+                state.set_open(!state.is_open());
+                ui.ctx().request_repaint();
+            }
+            state.show_body_unindented(ui, |ui| {
+                show_chip_nodes(ui, &node.children, depth + 1, actions);
+            });
+        } else {
+            let size = crate::memory::format_size(u64::from(node.size));
+            let row =
+                crate::file_tree::board_row(ui, &node.name, false, 0.0, depth, false, Some(&size));
+            let response = row
+                .response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(format!("{}\n点击读取到工程（会暂停设备程序）", node.path));
+            if response.clicked() {
+                actions.push(Action::ReadBoardFile(BoardFile {
+                    path: node.path.clone(),
+                    name: node.name.clone(),
+                    is_dir: false,
+                    size: node.size,
+                }));
+            }
+        }
     }
 }
 

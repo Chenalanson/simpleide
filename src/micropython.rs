@@ -41,6 +41,73 @@ pub struct BoardFile {
     pub size: u32,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BoardNode {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u32,
+    pub children: Vec<BoardNode>,
+}
+
+/// Turn the flat `os.ilistdir` output into the same folder/file hierarchy the
+/// explorer uses, creating synthetic parents when the listing skipped one.
+pub fn board_tree(files: &[BoardFile]) -> Vec<BoardNode> {
+    let mut roots = Vec::new();
+    for file in files {
+        let parts = file
+            .path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        if parts.is_empty() {
+            continue;
+        }
+        let mut nodes: &mut Vec<BoardNode> = &mut roots;
+        let mut current = String::new();
+        for (index, part) in parts.iter().enumerate() {
+            if !current.is_empty() {
+                current.push('/');
+            }
+            current.push_str(part);
+            let last = index + 1 == parts.len();
+            let position = match nodes.iter().position(|node| node.name == *part) {
+                Some(position) => position,
+                None => {
+                    nodes.push(BoardNode {
+                        name: (*part).to_owned(),
+                        path: current.clone(),
+                        is_dir: !last || file.is_dir,
+                        size: 0,
+                        children: Vec::new(),
+                    });
+                    nodes.len() - 1
+                }
+            };
+            if last {
+                nodes[position].is_dir = file.is_dir;
+                nodes[position].size = if file.is_dir { 0 } else { file.size };
+            } else {
+                nodes[position].is_dir = true;
+            }
+            nodes = &mut nodes[position].children;
+        }
+    }
+    sort_board_nodes(&mut roots);
+    roots
+}
+
+fn sort_board_nodes(nodes: &mut [BoardNode]) {
+    nodes.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    for node in nodes.iter_mut() {
+        sort_board_nodes(&mut node.children);
+    }
+}
+
 pub fn list_files(port: &str, baud: u32) -> Result<Vec<BoardFile>, String> {
     let mut port = open(port, baud)?;
     drain(&mut port, Duration::from_millis(120));
@@ -54,21 +121,30 @@ pub fn list_files(port: &str, baud: u32) -> Result<Vec<BoardFile>, String> {
     Ok(parse_file_list(&report.output))
 }
 
+fn read_file_script(path: &str) -> String {
+    // `concat!` keeps the indentation: a trailing `\` line continuation would
+    // strip the leading spaces and make MicroPython report a SyntaxError.
+    format!(
+        concat!(
+            "import ubinascii\n",
+            "p = {}\n",
+            "f = open(p, 'rb')\n",
+            "f.seek(0, 2)\n",
+            "size = f.tell()\n",
+            "f.seek(0)\n",
+            "if size > {}:\n",
+            "    print('ERROR:too large')\n",
+            "else:\n",
+            "    print(ubinascii.b2a_base64(f.read()).decode())\n",
+            "f.close()\n"
+        ),
+        python_string(path),
+        MAX_READ_BYTES
+    )
+}
+
 pub fn read_file(port: &str, baud: u32, path: &str) -> Result<Vec<u8>, String> {
-    let script = format!(
-        "import ubinascii\n\
-p = {}\n\
-f = open(p, 'rb')\n\
-f.seek(0, 2)\n\
-size = f.tell()\n\
-f.seek(0)\n\
-if size > {MAX_READ_BYTES}:\n\
-    print('ERROR:too large')\n\
-else:\n\
-    print(ubinascii.b2a_base64(f.read()).decode())\n\
-f.close()\n",
-        python_string(path)
-    );
+    let script = read_file_script(path);
     let mut port = open(port, baud)?;
     drain(&mut port, Duration::from_millis(120));
     enter_raw_repl(&mut port)?;
@@ -723,6 +799,41 @@ mod tests {
         assert_eq!(files[1].size, 45);
         assert_eq!(files[2].path, "main.py");
         assert_eq!(files[2].size, 123);
+    }
+
+    #[test]
+    fn builds_a_board_file_tree_from_flat_paths() {
+        let files = parse_file_list(
+            "main.py\t32768\t10\nlib\t16384\t0\nlib/helper.py\t32768\t20\nlib/sub\t16384\t0\nlib/sub/deep.py\t32768\t30\nassist/only.py\t32768\t40\n",
+        );
+        let tree = board_tree(&files);
+        assert_eq!(tree.len(), 3);
+        assert_eq!(tree[0].name, "assist");
+        assert!(tree[0].is_dir);
+        assert_eq!(tree[0].children[0].name, "only.py");
+        assert_eq!(tree[1].name, "lib");
+        assert!(tree[1].is_dir);
+        assert_eq!(tree[1].children[0].name, "sub");
+        assert_eq!(tree[1].children[0].children[0].name, "deep.py");
+        assert_eq!(tree[1].children[1].name, "helper.py");
+        assert_eq!(tree[1].children[1].size, 20);
+        assert_eq!(tree[2].name, "main.py");
+        assert_eq!(tree[2].size, 10);
+    }
+
+    #[test]
+    fn read_file_script_keeps_the_indented_branches() {
+        let script = read_file_script("boot.py");
+        let lines: Vec<_> = script.lines().collect();
+        assert_eq!(lines[0], "import ubinascii");
+        assert_eq!(lines[1], "p = \"boot.py\"");
+        assert_eq!(lines[7], "    print('ERROR:too large')");
+        assert_eq!(lines[8], "else:");
+        assert_eq!(
+            lines[9],
+            "    print(ubinascii.b2a_base64(f.read()).decode())"
+        );
+        assert_eq!(lines[10], "f.close()");
     }
 
     #[test]
