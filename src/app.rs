@@ -966,6 +966,8 @@ pub struct App {
     micropython_rx: Option<Receiver<MicroPythonJobResult>>,
     board_files: Option<Vec<crate::micropython::BoardFile>>,
     board_error: Option<String>,
+    board_file_error: Option<String>,
+    board_remote_paths: BTreeMap<PathBuf, String>,
     create_entry: Option<CreateEntryDraft>,
     rename_entry: Option<RenameEntryDraft>,
     delete_entry: Option<DeleteEntryDraft>,
@@ -1053,6 +1055,8 @@ impl App {
             micropython_rx: None,
             board_files: None,
             board_error: None,
+            board_file_error: None,
+            board_remote_paths: BTreeMap::new(),
             create_entry: None,
             rename_entry: None,
             delete_entry: None,
@@ -1125,6 +1129,8 @@ impl App {
         self.micropython_action = None;
         self.board_files = None;
         self.board_error = None;
+        self.board_file_error = None;
+        self.board_remote_paths.clear();
         let path = if path.is_file() && crate::config::is_workspace_file(path) {
             match crate::config::resolve_workspace_file(path) {
                 Ok(path) => path,
@@ -4494,7 +4500,10 @@ impl App {
             let name = if action == MicroPythonAction::Run {
                 "main.py".to_owned()
             } else {
-                doc.name.clone()
+                self.board_remote_paths
+                    .get(&doc.path)
+                    .cloned()
+                    .unwrap_or_else(|| doc.name.clone())
             };
             (name, doc.buffer.as_string().to_owned())
         };
@@ -4522,6 +4531,7 @@ impl App {
         self.micropython_busy = true;
         self.micropython_action = Some(action.label().to_owned());
         self.micropython_rx = Some(receiver);
+        self.board_file_error = None;
         self.set_toast(
             format!("MicroPython 正在{}…", action.label()),
             Severity::Info,
@@ -4558,6 +4568,7 @@ impl App {
         self.micropython_action = Some("读取文件".to_owned());
         self.micropython_rx = Some(receiver);
         self.board_error = None;
+        self.board_file_error = None;
         self.build.log.push_message(
             format!("MicroPython · 读取芯片文件 {port} @ {baud}"),
             Severity::Command,
@@ -4584,14 +4595,13 @@ impl App {
             return;
         }
         if file.size as usize > crate::micropython::MAX_READ_BYTES {
-            self.set_toast(
-                format!(
-                    "{} 超过 {} KB，暂不支持读取",
-                    file.path,
-                    crate::micropython::MAX_READ_BYTES / 1024
-                ),
-                Severity::Warning,
+            let message = format!(
+                "{} 超过 {} KB，暂不支持读取",
+                file.path,
+                crate::micropython::MAX_READ_BYTES / 1024
             );
+            self.board_file_error = Some(message.clone());
+            self.set_toast(message, Severity::Warning);
             return;
         }
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
@@ -4601,6 +4611,7 @@ impl App {
         let local_path = match board_download_path(&root, &file) {
             Ok(path) => path,
             Err(error) => {
+                self.board_file_error = Some(error.clone());
                 self.set_toast(error, Severity::Error);
                 return;
             }
@@ -4613,6 +4624,7 @@ impl App {
         self.micropython_busy = true;
         self.micropython_action = Some("读取文件".to_owned());
         self.micropython_rx = Some(receiver);
+        self.board_file_error = None;
         self.build.log.push_message(
             format!(
                 "MicroPython · 读取 {} → {}",
@@ -4655,6 +4667,7 @@ impl App {
                             }
                         }
                         if report.success {
+                            self.board_file_error = None;
                             let message = match action.as_str() {
                                 "上传" => "MicroPython 上传完成".to_owned(),
                                 "复位" => "MicroPython 已软复位".to_owned(),
@@ -4671,6 +4684,7 @@ impl App {
                                 .find(|line| !line.trim().is_empty())
                                 .unwrap_or("MicroPython 返回错误");
                             let message = format!("MicroPython {}失败：{detail}", action);
+                            self.board_file_error = Some(message.clone());
                             self.build
                                 .log
                                 .push_message(message.clone(), Severity::Error);
@@ -4679,6 +4693,7 @@ impl App {
                     }
                     Err(error) => {
                         let message = format!("MicroPython {action}失败：{error}");
+                        self.board_file_error = Some(message.clone());
                         self.build
                             .log
                             .push_message(message.clone(), Severity::Error);
@@ -4694,6 +4709,7 @@ impl App {
                         let count = files.len();
                         self.board_files = Some(files);
                         self.board_error = None;
+                        self.board_file_error = None;
                         self.build
                             .log
                             .push_message(format!("芯片文件：{count} 项"), Severity::Info);
@@ -4717,6 +4733,11 @@ impl App {
                 match result {
                     Ok(content) => match std::fs::write(&local_path, content) {
                         Ok(()) => {
+                            let canonical = std::fs::canonicalize(&local_path)
+                                .unwrap_or_else(|_| local_path.clone());
+                            self.board_remote_paths
+                                .insert(canonical, remote_path.clone());
+                            self.board_file_error = None;
                             if let Some(tree) = self.tree.as_mut() {
                                 tree.refresh();
                             }
@@ -4734,6 +4755,7 @@ impl App {
                         }
                         Err(err) => {
                             let message = format!("保存芯片文件失败：{err}");
+                            self.board_file_error = Some(message.clone());
                             self.build
                                 .log
                                 .push_message(message.clone(), Severity::Error);
@@ -4741,6 +4763,7 @@ impl App {
                         }
                     },
                     Err(error) => {
+                        self.board_file_error = Some(error.clone());
                         self.build.log.push_message(error.clone(), Severity::Error);
                         self.set_toast(error, Severity::Error);
                     }
@@ -4752,6 +4775,7 @@ impl App {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.micropython_busy = false;
                 self.micropython_action = None;
+                self.board_file_error = Some("MicroPython 操作线程已退出".to_owned());
                 self.set_toast("MicroPython 操作线程已退出", Severity::Error);
             }
         }
@@ -9058,6 +9082,33 @@ mod tests {
         assert_eq!(
             unique_copy_path(dir.path(), &source),
             dir.path().join("main - 副本 (2).c")
+        );
+    }
+
+    #[test]
+    fn board_download_path_preserves_directories_and_avoids_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = crate::micropython::BoardFile {
+            path: "lib/helper.py".to_owned(),
+            name: "helper.py".to_owned(),
+            is_dir: false,
+            size: 42,
+        };
+        let first = board_download_path(dir.path(), &file).unwrap();
+        assert_eq!(first, dir.path().join("lib").join("helper.py"));
+        std::fs::write(&first, b"local").unwrap();
+        let second = board_download_path(dir.path(), &file).unwrap();
+        assert_eq!(second, dir.path().join("lib").join("helper - 副本.py"));
+
+        let unsafe_file = crate::micropython::BoardFile {
+            path: "../escape.py".to_owned(),
+            name: "escape.py".to_owned(),
+            is_dir: false,
+            size: 0,
+        };
+        assert_eq!(
+            board_download_path(dir.path(), &unsafe_file).unwrap(),
+            dir.path().join("escape.py")
         );
     }
 

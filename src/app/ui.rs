@@ -838,6 +838,12 @@ impl App {
                     ui.add(Label::new(RichText::new(error).size(9.5).color(theme::error())).wrap());
                     return;
                 }
+                if let Some(error) = &self.board_file_error {
+                    ui.add(
+                        Label::new(RichText::new(error).size(9.5).color(theme::warning())).wrap(),
+                    );
+                    ui.add_space(2.0);
+                }
 
                 if let Some(files) = &self.board_files {
                     if files.is_empty() {
@@ -903,7 +909,7 @@ impl App {
                                 }
                             });
                     }
-                } else if !self.micropython_busy && open {
+                } else if !self.micropython_busy && !self.build.is_running() && open {
                     // The first time the section is expanded, fetch the board
                     // filesystem once. A failed fetch sets board_error and stops
                     // this automatic retry.
@@ -7696,6 +7702,8 @@ impl App {
                 self.build_config = draft.config.clone();
                 self.board_files = None;
                 self.board_error = None;
+                self.board_file_error = None;
+                self.board_remote_paths.clear();
                 self.refresh_project_meta();
                 self.persist_build_config();
                 self.refresh_support_packs();
