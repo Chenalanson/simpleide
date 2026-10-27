@@ -437,6 +437,18 @@ pub fn parse_stop_location(line: &str) -> Option<(String, usize)> {
     Some((path.to_owned(), line_no))
 }
 
+pub fn parse_deleted_watchpoint(line: &str) -> Option<usize> {
+    let lower = line.to_ascii_lowercase();
+    let start = lower.find("watchpoint ")?;
+    let rest = &line[start + "watchpoint ".len()..];
+    let (number, tail) = rest.split_once(' ')?;
+    let tail = tail.trim_start().to_ascii_lowercase();
+    if !tail.starts_with("deleted") {
+        return None;
+    }
+    number.trim().parse::<usize>().ok()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WatchpointNotice {
     pub number: usize,
@@ -745,6 +757,16 @@ mod tests {
             None
         );
         assert_eq!(parse_stop_location("Continuing."), None);
+    }
+
+    #[test]
+    fn parses_deleted_watchpoints() {
+        assert_eq!(parse_deleted_watchpoint("Watchpoint 2 deleted"), Some(2));
+        assert_eq!(
+            parse_deleted_watchpoint("(gdb) Hardware watchpoint 4 deleted"),
+            Some(4)
+        );
+        assert_eq!(parse_deleted_watchpoint("Watchpoint 2: i"), None);
     }
 
     #[test]

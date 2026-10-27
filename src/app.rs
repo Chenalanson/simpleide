@@ -1602,8 +1602,18 @@ impl App {
         let mut hit = None;
         let mut bt_hit = None;
         let mut created_watch = false;
+        let mut deleted_watchpoints = Vec::new();
+        let mut evaluation_error = false;
         for (index, line) in fresh.iter().enumerate() {
             let trimmed = line.trim();
+            if trimmed.contains("Value has been optimized out")
+                || trimmed.contains("Error evaluating expression for watchpoint")
+            {
+                evaluation_error = true;
+            }
+            if let Some(number) = crate::debugger::parse_deleted_watchpoint(line) {
+                deleted_watchpoints.push(number);
+            }
             let hardware_error = trimmed.contains("Cannot insert hardware watchpoint")
                 || trimmed.contains("Could not insert hardware watchpoint")
                 || trimmed.contains("No more hardware watchpoints");
@@ -1702,7 +1712,19 @@ impl App {
                 created_watch = true;
             }
         }
-        if created_watch {
+        if !deleted_watchpoints.is_empty() {
+            self.memory_check.watchpoints.retain(|watchpoint| {
+                watchpoint
+                    .number
+                    .is_none_or(|number| !deleted_watchpoints.contains(&number))
+            });
+        }
+        if evaluation_error {
+            let message = "GDB 无法计算该变量（可能已被优化为寄存器或已离开作用域），watchpoint 已被删除。请改用全局 / volatile 变量，或用 -O0 重新编译。";
+            self.memory_check.watch_error = Some(message.to_owned());
+            self.set_toast(message.to_owned(), Severity::Warning);
+        }
+        if created_watch && !evaluation_error {
             self.memory_check.watch_error = None;
         }
         if let Some((event_id, expression)) = bt_hit {
