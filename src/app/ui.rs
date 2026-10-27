@@ -613,29 +613,38 @@ impl App {
                             };
                             let leading = 6.0 * info_openness + closed_pad * (1.0 - info_openness);
                             ui.add_space(leading);
-                            info_header_row(ui, &mut info_open, info_openness);
+                            let info_label = if micropython {
+                                "芯片文件"
+                            } else {
+                                "工程信息"
+                            };
+                            info_header_row(ui, &mut info_open, info_openness, info_label);
                             info_state.set_open(info_open);
                             info_state.show_body_unindented(ui, |ui| {
                                 ui.add_space(6.0);
-                                let height = (ui.available_height() - 2.0).max(80.0);
-                                let area = ScrollArea::vertical()
-                                    .id_salt("simple_embedded_project_meta")
-                                    .max_height(height)
-                                    .auto_shrink([false, false])
-                                    .scroll_bar_visibility(
-                                        egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
-                                    );
-                                area.show(ui, |ui| {
-                                    Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
-                                        ui,
-                                        |ui| {
-                                            ui.indent(
-                                                "simple_embedded_project_meta_indent",
-                                                |ui| self.show_project_meta(ui, actions),
-                                            );
-                                        },
-                                    );
-                                });
+                                if micropython {
+                                    self.show_chip_files(ui, actions, info_open);
+                                } else {
+                                    let height = (ui.available_height() - 2.0).max(80.0);
+                                    let area = ScrollArea::vertical()
+                                        .id_salt("simple_embedded_project_meta")
+                                        .max_height(height)
+                                        .auto_shrink([false, false])
+                                        .scroll_bar_visibility(
+                                            egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                        );
+                                    area.show(ui, |ui| {
+                                        Frame::new().inner_margin(Margin::symmetric(11, 0)).show(
+                                            ui,
+                                            |ui| {
+                                                ui.indent(
+                                                    "simple_embedded_project_meta_indent",
+                                                    |ui| self.show_project_meta(ui, actions),
+                                                );
+                                            },
+                                        );
+                                    });
+                                }
                             });
                         }
                     },
@@ -774,6 +783,138 @@ impl App {
             self.focus_editor = true;
             self.apply_immersive_viewport(ctx);
         }
+    }
+
+    fn show_chip_files(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>, open: bool) {
+        let ready = self.build_config.serial.is_ready();
+        Frame::new()
+            .inner_margin(Margin::symmetric(11, 0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let refresh = ui.add_enabled(
+                        ready && !self.micropython_busy,
+                        small_flat_button("刷新", theme::accent()),
+                    );
+                    let refresh = if ready {
+                        refresh.on_hover_text("读取芯片文件（会暂停板上正在运行的程序）")
+                    } else {
+                        refresh.on_disabled_hover_text("请先在配置 → 构建中设置串口")
+                    };
+                    if refresh.clicked() {
+                        actions.push(Action::RefreshBoardFiles);
+                    }
+                    if self.micropython_busy {
+                        ui.spinner();
+                        ui.label(
+                            RichText::new("读取中…")
+                                .size(9.5)
+                                .color(theme::text_faint()),
+                        );
+                    } else if let Some(files) = &self.board_files {
+                        ui.label(
+                            RichText::new(format!("{} 项", files.len()))
+                                .size(9.5)
+                                .color(theme::text_faint()),
+                        );
+                    }
+                });
+                ui.label(
+                    RichText::new("读取芯片文件会暂停板上正在运行的程序")
+                        .size(9.0)
+                        .color(theme::text_faint()),
+                );
+                ui.add_space(4.0);
+
+                if !ready {
+                    ui.label(
+                        RichText::new("请先在 配置 → 构建 中选择 MicroPython 串口")
+                            .size(10.5)
+                            .color(theme::warning()),
+                    );
+                    return;
+                }
+
+                if let Some(error) = &self.board_error {
+                    ui.add(Label::new(RichText::new(error).size(9.5).color(theme::error())).wrap());
+                    return;
+                }
+
+                if let Some(files) = &self.board_files {
+                    if files.is_empty() {
+                        ui.label(
+                            RichText::new("芯片上没有文件")
+                                .size(10.0)
+                                .color(theme::text_faint()),
+                        );
+                    } else {
+                        let height = (ui.available_height() - 4.0).max(80.0);
+                        ScrollArea::vertical()
+                            .id_salt("simple_embedded_chip_files")
+                            .max_height(height)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for file in files {
+                                    let display = if file.is_dir {
+                                        format!("{}/", file.path.trim_end_matches('/'))
+                                    } else {
+                                        format!(
+                                            "{}    {}",
+                                            file.path,
+                                            crate::memory::format_size(u64::from(file.size))
+                                        )
+                                    };
+                                    let color = if file.is_dir {
+                                        theme::dir()
+                                    } else {
+                                        theme::text_dim()
+                                    };
+                                    if file.is_dir {
+                                        ui.add(
+                                            Label::new(
+                                                RichText::new(display)
+                                                    .monospace()
+                                                    .size(10.5)
+                                                    .color(color),
+                                            )
+                                            .truncate(),
+                                        )
+                                        .on_hover_text("目录");
+                                    } else {
+                                        let response = ui.add(
+                                            Label::new(
+                                                RichText::new(display)
+                                                    .monospace()
+                                                    .size(10.5)
+                                                    .color(color),
+                                            )
+                                            .truncate()
+                                            .sense(Sense::click()),
+                                        );
+                                        let response = response
+                                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                            .on_hover_text(format!(
+                                                "{}\n点击读取到工程（会暂停设备程序）",
+                                                file.path
+                                            ));
+                                        if response.clicked() {
+                                            actions.push(Action::ReadBoardFile(file.clone()));
+                                        }
+                                    }
+                                }
+                            });
+                    }
+                } else if !self.micropython_busy && open {
+                    // The first time the section is expanded, fetch the board
+                    // filesystem once. A failed fetch sets board_error and stops
+                    // this automatic retry.
+                    actions.push(Action::RefreshBoardFiles);
+                    ui.label(
+                        RichText::new("读取芯片文件…")
+                            .size(10.0)
+                            .color(theme::text_faint()),
+                    );
+                }
+            });
     }
 
     fn show_project_meta(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -7553,6 +7694,8 @@ impl App {
 
             if project_root.is_some() {
                 self.build_config = draft.config.clone();
+                self.board_files = None;
+                self.board_error = None;
                 self.refresh_project_meta();
                 self.persist_build_config();
                 self.refresh_support_packs();
@@ -7879,7 +8022,7 @@ fn apply_tab_indent(
     }
 }
 
-fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool, openness: f32) {
+fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool, openness: f32, label: &str) {
     Frame::new()
         .inner_margin(Margin::symmetric(11, 6))
         .show(ui, |ui| {
@@ -7894,7 +8037,7 @@ fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool, openness: f32) {
                 if ui
                     .add(
                         Button::new(
-                            RichText::new("工程信息")
+                            RichText::new(label)
                                 .size(12.5)
                                 .strong()
                                 .color(theme::text_dim()),

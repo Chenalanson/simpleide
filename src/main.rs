@@ -26,6 +26,7 @@ mod macro_check;
 mod makefile;
 mod memory;
 mod memory_check;
+mod micropython;
 mod minimap;
 mod navigation;
 mod project_meta;

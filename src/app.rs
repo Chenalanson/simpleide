@@ -5,7 +5,7 @@ mod ui;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -72,6 +72,33 @@ enum OutputView {
     #[default]
     Build,
     Debug,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MicroPythonAction {
+    Run,
+    Upload,
+    Reset,
+}
+
+impl MicroPythonAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Run => "运行",
+            Self::Upload => "上传",
+            Self::Reset => "复位",
+        }
+    }
+}
+
+enum MicroPythonJobResult {
+    Report(Result<crate::micropython::Report, String>),
+    Files(Result<Vec<crate::micropython::BoardFile>, String>),
+    File {
+        result: Result<Vec<u8>, String>,
+        remote_path: String,
+        local_path: PathBuf,
+    },
 }
 
 struct SettingsDraft {
@@ -870,6 +897,8 @@ enum Action {
     ToggleHidden,
     OpenSettings,
     OpenThemeSettings,
+    RefreshBoardFiles,
+    ReadBoardFile(crate::micropython::BoardFile),
     EditMeta,
     DetectIncludeDirs,
     AddMetaItem(MetaListField),
@@ -932,6 +961,11 @@ pub struct App {
     array: ArrayState,
     debug: DebugState,
     debug_start: Option<Receiver<Result<(crate::debugger::DebugSession, PathBuf), String>>>,
+    micropython_busy: bool,
+    micropython_action: Option<String>,
+    micropython_rx: Option<Receiver<MicroPythonJobResult>>,
+    board_files: Option<Vec<crate::micropython::BoardFile>>,
+    board_error: Option<String>,
     create_entry: Option<CreateEntryDraft>,
     rename_entry: Option<RenameEntryDraft>,
     delete_entry: Option<DeleteEntryDraft>,
@@ -1014,6 +1048,11 @@ impl App {
             array: ArrayState::default(),
             debug: DebugState::default(),
             debug_start: None,
+            micropython_busy: false,
+            micropython_action: None,
+            micropython_rx: None,
+            board_files: None,
+            board_error: None,
             create_entry: None,
             rename_entry: None,
             delete_entry: None,
@@ -1081,6 +1120,11 @@ impl App {
     }
 
     fn load_project(&mut self, path: &Path, announce: bool) -> bool {
+        self.micropython_busy = false;
+        self.micropython_rx = None;
+        self.micropython_action = None;
+        self.board_files = None;
+        self.board_error = None;
         let path = if path.is_file() && crate::config::is_workspace_file(path) {
             match crate::config::resolve_workspace_file(path) {
                 Ok(path) => path,
@@ -4405,6 +4449,314 @@ impl App {
         }
     }
 
+    fn build_config_uses_micropython(&self) -> bool {
+        self.build_config.toolchain.is_micropython()
+    }
+
+    fn start_micropython(&mut self, action: MicroPythonAction) {
+        if self.build.is_running() {
+            self.set_toast(
+                "构建任务正在进行，暂不能操作 MicroPython",
+                Severity::Warning,
+            );
+            return;
+        }
+        if self.micropython_busy {
+            self.set_toast("MicroPython 操作正在进行", Severity::Warning);
+            return;
+        }
+        if self.build_config_uses_micropython() && !self.build_config.serial.is_ready() {
+            self.set_toast(
+                "请先在配置 → 构建中设置 MicroPython 串口和波特率",
+                Severity::Warning,
+            );
+            self.open_settings();
+            return;
+        }
+        let serial = self.build_config.serial.clone();
+        let port = serial.port.trim().to_owned();
+        let baud = serial.baud;
+        let (file_name, code) = if action == MicroPythonAction::Reset {
+            ("main.py".to_owned(), String::new())
+        } else {
+            let Some(doc) = self.active_document() else {
+                self.set_toast("请先打开一个 MicroPython 文件", Severity::Warning);
+                return;
+            };
+            if doc.binary.is_some() {
+                self.set_toast("二进制文件不能作为 MicroPython 代码运行", Severity::Warning);
+                return;
+            }
+            if !doc.name.to_ascii_lowercase().ends_with(".py") {
+                self.set_toast("请打开 .py 文件后再运行或上传", Severity::Warning);
+                return;
+            }
+            let name = if action == MicroPythonAction::Run {
+                "main.py".to_owned()
+            } else {
+                doc.name.clone()
+            };
+            (name, doc.buffer.as_string().to_owned())
+        };
+
+        let command = match action {
+            MicroPythonAction::Run => {
+                format!("MicroPython · 运行 → {port} @ {baud}（上传为 main.py 并软复位）")
+            }
+            MicroPythonAction::Upload => {
+                format!("MicroPython · 上传 {file_name} → {port} @ {baud}")
+            }
+            MicroPythonAction::Reset => format!("MicroPython · 软复位 {port} @ {baud}"),
+        };
+        self.build.log.clear_diagnostics();
+        self.build.log.push_blank();
+        self.build.log.push_message(command, Severity::Command);
+        self.output_view = OutputView::Build;
+        self.settings.output_open = true;
+        if self.settings.output_height < 100.0 {
+            self.settings.output_height = 214.0;
+        }
+        self.settings.save();
+
+        let (sender, receiver) = mpsc::channel();
+        self.micropython_busy = true;
+        self.micropython_action = Some(action.label().to_owned());
+        self.micropython_rx = Some(receiver);
+        self.set_toast(
+            format!("MicroPython 正在{}…", action.label()),
+            Severity::Info,
+        );
+
+        std::thread::spawn(move || {
+            let result = match action {
+                MicroPythonAction::Run => crate::micropython::run(&port, baud, &code),
+                MicroPythonAction::Upload => {
+                    crate::micropython::upload(&port, baud, &file_name, &code)
+                }
+                MicroPythonAction::Reset => crate::micropython::soft_reset(&port, baud),
+            };
+            let _ = sender.send(MicroPythonJobResult::Report(result));
+        });
+    }
+
+    fn start_board_files(&mut self) {
+        if self.build.is_running() || self.micropython_busy {
+            return;
+        }
+        if !self.build_config.serial.is_ready() {
+            self.set_toast(
+                "请先在配置 → 构建中设置 MicroPython 串口和波特率",
+                Severity::Warning,
+            );
+            return;
+        }
+        let serial = self.build_config.serial.clone();
+        let port = serial.port.trim().to_owned();
+        let baud = serial.baud;
+        let (sender, receiver) = mpsc::channel();
+        self.micropython_busy = true;
+        self.micropython_action = Some("读取文件".to_owned());
+        self.micropython_rx = Some(receiver);
+        self.board_error = None;
+        self.build.log.push_message(
+            format!("MicroPython · 读取芯片文件 {port} @ {baud}"),
+            Severity::Command,
+        );
+        std::thread::spawn(move || {
+            let result = crate::micropython::list_files(&port, baud);
+            let _ = sender.send(MicroPythonJobResult::Files(result));
+        });
+    }
+
+    fn start_board_file(&mut self, file: crate::micropython::BoardFile) {
+        if file.is_dir {
+            return;
+        }
+        if self.build.is_running() || self.micropython_busy {
+            self.set_toast("MicroPython 操作正在进行", Severity::Warning);
+            return;
+        }
+        if !self.build_config.serial.is_ready() {
+            self.set_toast(
+                "请先在配置 → 构建中设置 MicroPython 串口和波特率",
+                Severity::Warning,
+            );
+            return;
+        }
+        if file.size as usize > crate::micropython::MAX_READ_BYTES {
+            self.set_toast(
+                format!(
+                    "{} 超过 {} KB，暂不支持读取",
+                    file.path,
+                    crate::micropython::MAX_READ_BYTES / 1024
+                ),
+                Severity::Warning,
+            );
+            return;
+        }
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开一个工程文件夹", Severity::Warning);
+            return;
+        };
+        let local_path = match board_download_path(&root, &file) {
+            Ok(path) => path,
+            Err(error) => {
+                self.set_toast(error, Severity::Error);
+                return;
+            }
+        };
+        let serial = self.build_config.serial.clone();
+        let port = serial.port.trim().to_owned();
+        let baud = serial.baud;
+        let remote_path = file.path.clone();
+        let (sender, receiver) = mpsc::channel();
+        self.micropython_busy = true;
+        self.micropython_action = Some("读取文件".to_owned());
+        self.micropython_rx = Some(receiver);
+        self.build.log.push_message(
+            format!(
+                "MicroPython · 读取 {} → {}",
+                file.path,
+                util::display_path(&local_path)
+            ),
+            Severity::Command,
+        );
+        std::thread::spawn(move || {
+            let result = crate::micropython::read_file(&port, baud, &remote_path);
+            let _ = sender.send(MicroPythonJobResult::File {
+                result,
+                remote_path,
+                local_path,
+            });
+        });
+    }
+
+    fn poll_micropython(&mut self) {
+        let Some(receiver) = self.micropython_rx.take() else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(MicroPythonJobResult::Report(result)) => {
+                self.micropython_busy = false;
+                let action = self
+                    .micropython_action
+                    .take()
+                    .unwrap_or_else(|| "操作".to_owned());
+                match result {
+                    Ok(report) => {
+                        for line in report.output.lines() {
+                            if !line.trim().is_empty() {
+                                self.build.log.push_raw(line);
+                            }
+                        }
+                        for line in report.error.lines() {
+                            if !line.trim().is_empty() {
+                                self.build.log.push_message(line, Severity::Error);
+                            }
+                        }
+                        if report.success {
+                            let message = match action.as_str() {
+                                "上传" => "MicroPython 上传完成".to_owned(),
+                                "复位" => "MicroPython 已软复位".to_owned(),
+                                _ => "MicroPython 已启动 main.py（设备继续运行）".to_owned(),
+                            };
+                            self.build
+                                .log
+                                .push_message(message.clone(), Severity::Success);
+                            self.set_toast(message, Severity::Success);
+                        } else {
+                            let detail = report
+                                .error
+                                .lines()
+                                .find(|line| !line.trim().is_empty())
+                                .unwrap_or("MicroPython 返回错误");
+                            let message = format!("MicroPython {}失败：{detail}", action);
+                            self.build
+                                .log
+                                .push_message(message.clone(), Severity::Error);
+                            self.set_toast(message, Severity::Error);
+                        }
+                    }
+                    Err(error) => {
+                        let message = format!("MicroPython {action}失败：{error}");
+                        self.build
+                            .log
+                            .push_message(message.clone(), Severity::Error);
+                        self.set_toast(message, Severity::Error);
+                    }
+                }
+            }
+            Ok(MicroPythonJobResult::Files(result)) => {
+                self.micropython_busy = false;
+                self.micropython_action = None;
+                match result {
+                    Ok(files) => {
+                        let count = files.len();
+                        self.board_files = Some(files);
+                        self.board_error = None;
+                        self.build
+                            .log
+                            .push_message(format!("芯片文件：{count} 项"), Severity::Info);
+                        self.set_toast(format!("芯片文件：{count} 项"), Severity::Success);
+                    }
+                    Err(error) => {
+                        self.board_files = None;
+                        self.board_error = Some(error.clone());
+                        self.build.log.push_message(error.clone(), Severity::Error);
+                        self.set_toast(error, Severity::Error);
+                    }
+                }
+            }
+            Ok(MicroPythonJobResult::File {
+                result,
+                remote_path,
+                local_path,
+            }) => {
+                self.micropython_busy = false;
+                self.micropython_action = None;
+                match result {
+                    Ok(content) => match std::fs::write(&local_path, content) {
+                        Ok(()) => {
+                            if let Some(tree) = self.tree.as_mut() {
+                                tree.refresh();
+                            }
+                            self.build.log.push_message(
+                                format!(
+                                    "已读取 {} → {}",
+                                    remote_path,
+                                    util::display_path(&local_path)
+                                ),
+                                Severity::Success,
+                            );
+                            let message = format!("已读取到 {}", util::display_path(&local_path));
+                            self.set_toast(message, Severity::Success);
+                            self.open_file(local_path);
+                        }
+                        Err(err) => {
+                            let message = format!("保存芯片文件失败：{err}");
+                            self.build
+                                .log
+                                .push_message(message.clone(), Severity::Error);
+                            self.set_toast(message, Severity::Error);
+                        }
+                    },
+                    Err(error) => {
+                        self.build.log.push_message(error.clone(), Severity::Error);
+                        self.set_toast(error, Severity::Error);
+                    }
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.micropython_rx = Some(receiver);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.micropython_busy = false;
+                self.micropython_action = None;
+                self.set_toast("MicroPython 操作线程已退出", Severity::Error);
+            }
+        }
+    }
+
     fn start_task(&mut self, kind: TaskKind) {
         if self.build.is_running() {
             self.set_toast("已有任务正在运行", Severity::Warning);
@@ -4414,6 +4766,16 @@ impl App {
             self.set_toast("请先打开一个工程文件夹", Severity::Warning);
             return;
         };
+        if self.build_config_uses_micropython() {
+            match kind {
+                TaskKind::Build => self.start_micropython(MicroPythonAction::Run),
+                TaskKind::Flash => self.start_micropython(MicroPythonAction::Upload),
+                TaskKind::Clean | TaskKind::Rebuild => {
+                    self.set_toast("MicroPython 模式不执行清理或重构", Severity::Warning);
+                }
+            }
+            return;
+        }
         if !self.build_config.has_command(kind) {
             let message = if self.build_config.toolchain.is_micropython() {
                 format!(
@@ -6299,8 +6661,12 @@ impl App {
                 Action::OpenHex(path) => self.open_hex(&path),
                 Action::OpenArrayGenerator => self.open_array_generator(ctx),
                 Action::OpenDebug => {
-                    self.debug.open = true;
-                    self.focus_debug_output();
+                    if self.build_config_uses_micropython() {
+                        self.start_micropython(MicroPythonAction::Reset);
+                    } else {
+                        self.debug.open = true;
+                        self.focus_debug_output();
+                    }
                 }
                 Action::DebugContinue => self.debug_continue(),
                 Action::DebugPause => self.debug_pause(),
@@ -6386,6 +6752,8 @@ impl App {
                 }
                 Action::OpenSettings => self.open_settings(),
                 Action::OpenThemeSettings => self.open_theme_settings(),
+                Action::RefreshBoardFiles => self.start_board_files(),
+                Action::ReadBoardFile(file) => self.start_board_file(file),
                 Action::EditMeta => self.open_meta_editor(),
                 Action::DetectIncludeDirs => self.detect_include_dirs(),
                 Action::AddMetaItem(field) => self.open_meta_add(field),
@@ -6506,6 +6874,15 @@ impl App {
     }
 
     fn build_status(&self) -> (Color32, String) {
+        if self.micropython_busy {
+            return (
+                theme::accent(),
+                format!(
+                    "MicroPython {}中…",
+                    self.micropython_action.as_deref().unwrap_or("运行")
+                ),
+            );
+        }
         if let Some(kind) = self.build.running_kind() {
             let elapsed = self.build.elapsed().unwrap_or_default();
             return (
@@ -6812,6 +7189,31 @@ fn copy_recursive(source: &Path, destination: &Path) -> std::io::Result<()> {
     }
 }
 
+fn board_download_path(
+    root: &Path,
+    file: &crate::micropython::BoardFile,
+) -> Result<PathBuf, String> {
+    let relative = Path::new(&file.path);
+    let safe = !relative.is_absolute()
+        && !relative.as_os_str().is_empty()
+        && relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
+    let target = if safe {
+        root.join(relative)
+    } else {
+        root.join(&file.name)
+    };
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| format!("创建下载目录失败：{error}"))?;
+    }
+    Ok(if target.exists() {
+        unique_copy_path(target.parent().unwrap_or(root), &target)
+    } else {
+        target
+    })
+}
+
 fn unique_copy_path(directory: &Path, source: &Path) -> PathBuf {
     let stem = source
         .file_stem()
@@ -6872,6 +7274,7 @@ impl eframe::App for App {
         crate::apply_pending_icons();
         let ctx = ui.ctx().clone();
         self.build.poll();
+        self.poll_micropython();
         self.poll_debug_start();
         if let Some(session) = &mut self.debug.session {
             session.poll();
@@ -7026,6 +7429,9 @@ impl eframe::App for App {
         if self.build.is_running() {
             ctx.request_repaint_after(Duration::from_millis(80));
         }
+        if self.micropython_busy {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         if let Some(toast) = &self.toast {
             let life = toast_life(toast.severity);
             let elapsed = toast.born.elapsed();
@@ -7113,12 +7519,33 @@ impl App {
         let running = self.build.is_running();
         let has_project = self.project.is_some();
         let micropython = self.effective_toolchain().is_micropython();
-        let can_build = has_project && !running && self.build_config.has_command(TaskKind::Build);
-        let can_clean = has_project && !running && self.build_config.has_command(TaskKind::Clean);
-        let can_rebuild =
-            has_project && !running && self.build_config.has_command(TaskKind::Rebuild);
-        let can_flash = has_project && !running && self.build_config.has_command(TaskKind::Flash);
-        let can_debug = has_project && !micropython;
+        let micro_ready = micropython
+            && self.build_config.serial.is_ready()
+            && !self.micropython_busy
+            && !self.build.is_running();
+        let can_build = if micropython {
+            micro_ready
+        } else {
+            has_project && !running && self.build_config.has_command(TaskKind::Build)
+        };
+        let can_clean = !micropython
+            && has_project
+            && !running
+            && self.build_config.has_command(TaskKind::Clean);
+        let can_rebuild = !micropython
+            && has_project
+            && !running
+            && self.build_config.has_command(TaskKind::Rebuild);
+        let can_flash = if micropython {
+            micro_ready
+        } else {
+            has_project && !running && self.build_config.has_command(TaskKind::Flash)
+        };
+        let can_debug = if micropython {
+            micro_ready
+        } else {
+            has_project
+        };
 
         egui::Panel::right("simple_embedded_action_rail")
             .show_separator_line(false)
@@ -7160,20 +7587,27 @@ impl App {
                         ui.add_space(8.0);
                         ui.spinner();
                     } else {
-                        let build_tip = if can_build {
-                            "构建工程 (Ctrl+B)"
+                        let build_label = if micropython { "运行" } else { "构建" };
+                        let build_tip = if micropython && !self.build_config.serial.is_ready() {
+                            "请先在配置 → 构建中选择 MicroPython 串口和波特率"
+                        } else if micropython && self.micropython_busy {
+                            "MicroPython 操作正在进行…"
                         } else if micropython {
-                            "MicroPython 模式使用串口连接，不执行本地构建"
+                            "运行当前 .py：上传为 main.py 并软复位 ESP32"
+                        } else if can_build {
+                            "构建工程 (Ctrl+B)"
                         } else if has_project {
                             "请先在左上角工程卡片中配置构建环境"
                         } else {
                             "请先导入工程并配置构建环境"
                         };
                         let button = if can_build {
-                            theme::primary_button("构建").min_size(egui::vec2(width, 34.0))
+                            theme::primary_button(build_label).min_size(egui::vec2(width, 34.0))
                         } else {
                             egui::Button::new(
-                                RichText::new("构建").color(theme::text_faint()).size(12.5),
+                                RichText::new(build_label)
+                                    .color(theme::text_faint())
+                                    .size(12.5),
                             )
                             .fill(theme::surface())
                             .stroke(Stroke::new(1.0_f32, theme::border_soft()))
@@ -7190,63 +7624,68 @@ impl App {
                             actions.push(Action::Run(TaskKind::Build));
                         }
 
-                        ui.add_space(6.0);
-                        let clean_tip = if can_clean {
-                            "执行 Clean 命令"
-                        } else if micropython {
-                            "MicroPython 模式不执行 Clean"
-                        } else if has_project {
-                            "Clean 命令尚未配置"
-                        } else {
-                            "请先导入工程并配置构建环境"
-                        };
-                        let response = ui
-                            .add_enabled_ui(can_clean, |ui| {
-                                ui.add_sized([width, 30.0], theme::secondary_button("清理"))
-                            })
-                            .inner;
-                        let response = if can_clean {
-                            response.on_hover_text(clean_tip)
-                        } else {
-                            response.on_disabled_hover_text(clean_tip)
-                        };
-                        if response.clicked() {
-                            actions.push(Action::Run(TaskKind::Clean));
+                        if !micropython {
+                            ui.add_space(6.0);
+                            let clean_tip = if can_clean {
+                                "执行 Clean 命令"
+                            } else if has_project {
+                                "Clean 命令尚未配置"
+                            } else {
+                                "请先导入工程并配置构建环境"
+                            };
+                            let response = ui
+                                .add_enabled_ui(can_clean, |ui| {
+                                    ui.add_sized([width, 30.0], theme::secondary_button("清理"))
+                                })
+                                .inner;
+                            let response = if can_clean {
+                                response.on_hover_text(clean_tip)
+                            } else {
+                                response.on_disabled_hover_text(clean_tip)
+                            };
+                            if response.clicked() {
+                                actions.push(Action::Run(TaskKind::Clean));
+                            }
+
+                            ui.add_space(6.0);
+                            let rebuild_tip = if can_rebuild {
+                                "清理后重新构建 (Ctrl+Shift+B)"
+                            } else if has_project {
+                                "Rebuild 命令尚未配置"
+                            } else {
+                                "请先导入工程并配置构建环境"
+                            };
+                            let response = ui
+                                .add_enabled_ui(can_rebuild, |ui| {
+                                    ui.add_sized([width, 30.0], theme::secondary_button("重构"))
+                                })
+                                .inner;
+                            let response = if can_rebuild {
+                                response.on_hover_text(rebuild_tip)
+                            } else {
+                                response.on_disabled_hover_text(rebuild_tip)
+                            };
+                            if response.clicked() {
+                                actions.push(Action::Run(TaskKind::Rebuild));
+                            }
                         }
 
                         ui.add_space(6.0);
-                        let rebuild_tip = if can_rebuild {
-                            "清理后重新构建 (Ctrl+Shift+B)"
-                        } else if micropython {
-                            "MicroPython 模式不执行重构"
-                        } else if has_project {
-                            "Rebuild 命令尚未配置"
-                        } else {
-                            "请先导入工程并配置构建环境"
-                        };
-                        let response = ui
-                            .add_enabled_ui(can_rebuild, |ui| {
-                                ui.add_sized([width, 30.0], theme::secondary_button("重构"))
-                            })
-                            .inner;
-                        let response = if can_rebuild {
-                            response.on_hover_text(rebuild_tip)
-                        } else {
-                            response.on_disabled_hover_text(rebuild_tip)
-                        };
-                        if response.clicked() {
-                            actions.push(Action::Run(TaskKind::Rebuild));
-                        }
-
-                        ui.add_space(6.0);
-                        let flash_tip = if can_flash {
+                        let flash_label = if micropython { "上传" } else { "烧录" };
+                        let flash_tip = if micropython {
+                            if !self.build_config.serial.is_ready() {
+                                "请先在配置 → 构建中选择 MicroPython 串口和波特率"
+                            } else if self.micropython_busy {
+                                "MicroPython 操作正在进行…"
+                            } else {
+                                "把当前 .py 文件上传到 ESP32 文件系统"
+                            }
+                        } else if can_flash {
                             match self.build_config.flash_tool {
                                 FlashTool::OpenOcd => "使用 OpenOCD 烧录（本地工程目录）",
                                 FlashTool::PyOcd => "使用 pyOCD 烧录（本地工程目录）",
                                 FlashTool::Custom => "调用配置的烧录命令（本地工程目录）",
                             }
-                        } else if micropython {
-                            "MicroPython 模式通过串口通信，烧录命令尚未接入"
                         } else if has_project {
                             "尚未配置烧录，请在左侧“烧录配置”中设置"
                         } else {
@@ -7254,7 +7693,7 @@ impl App {
                         };
                         let response = ui
                             .add_enabled_ui(can_flash, |ui| {
-                                ui.add_sized([width, 30.0], theme::secondary_button("烧录"))
+                                ui.add_sized([width, 30.0], theme::secondary_button(flash_label))
                             })
                             .inner;
                         let response = if can_flash {
@@ -7267,8 +7706,15 @@ impl App {
                         }
 
                         ui.add_space(6.0);
+                        let debug_label = if micropython { "复位" } else { "调试" };
                         let debug_tip = if micropython {
-                            "MicroPython 串口模式不使用 gdb"
+                            if !self.build_config.serial.is_ready() {
+                                "请先在配置 → 构建中选择 MicroPython 串口和波特率"
+                            } else if self.micropython_busy {
+                                "MicroPython 操作正在进行…"
+                            } else {
+                                "软复位 ESP32（Ctrl-D），运行板上的 main.py"
+                            }
                         } else if self.debug.session.is_some() {
                             "打开调试控制 (F5 继续)"
                         } else {
@@ -7276,7 +7722,7 @@ impl App {
                         };
                         let response = ui
                             .add_enabled_ui(can_debug, |ui| {
-                                ui.add_sized([width, 30.0], theme::secondary_button("调试"))
+                                ui.add_sized([width, 30.0], theme::secondary_button(debug_label))
                             })
                             .inner;
                         let response = if can_debug {
@@ -7288,30 +7734,34 @@ impl App {
                             actions.push(Action::OpenDebug);
                         }
 
-                        ui.add_space(6.0);
-                        let can_check = has_project && !micropython;
-                        let check_tip = if micropython {
-                            "MicroPython 模式不执行 C 静态内存检测"
-                        } else if !has_project {
-                            "请先打开一个工程"
-                        } else if self.debug.session.is_some() {
-                            "打开动态监测：硬件 watchpoint（调试已连接）"
-                        } else {
-                            "静态扫描数组越界、危险字符串操作、重复释放等内存问题（无需调试）"
-                        };
-                        let response = ui
-                            .add_enabled_ui(can_check, |ui| {
-                                ui.add_sized([width, 30.0], theme::secondary_button("检测"))
-                            })
-                            .inner;
-                        let response = if can_check {
-                            response.on_hover_text(check_tip)
-                        } else {
-                            response.on_disabled_hover_text(check_tip)
-                        };
-                        if response.clicked() {
-                            actions.push(Action::RunMemoryCheck);
+                        if !micropython {
+                            ui.add_space(6.0);
+                            let can_check = has_project;
+                            let check_tip = if !has_project {
+                                "请先打开一个工程"
+                            } else if self.debug.session.is_some() {
+                                "打开动态监测：硬件 watchpoint（调试已连接）"
+                            } else {
+                                "静态扫描数组越界、危险字符串操作、重复释放等内存问题（无需调试）"
+                            };
+                            let response = ui
+                                .add_enabled_ui(can_check, |ui| {
+                                    ui.add_sized([width, 30.0], theme::secondary_button("检测"))
+                                })
+                                .inner;
+                            let response = if can_check {
+                                response.on_hover_text(check_tip)
+                            } else {
+                                response.on_disabled_hover_text(check_tip)
+                            };
+                            if response.clicked() {
+                                actions.push(Action::RunMemoryCheck);
+                            }
                         }
+                    }
+                    if self.micropython_busy {
+                        ui.add_space(8.0);
+                        ui.spinner();
                     }
                     let remaining = ui.available_height();
                     if remaining > 38.0 {
@@ -7467,8 +7917,14 @@ impl App {
                                     CornerRadius::same(1),
                                     theme::accent(),
                                 );
-                                if output_view_tab(ui, "构建输出", !debug_view)
-                                    .on_hover_text("查看构建输出")
+                                let build_view_label =
+                                    if self.build_config.toolchain.is_micropython() {
+                                        "MicroPython 输出"
+                                    } else {
+                                        "构建输出"
+                                    };
+                                if output_view_tab(ui, build_view_label, !debug_view)
+                                    .on_hover_text("查看构建 / MicroPython 输出")
                                     .clicked()
                                 {
                                     self.output_view = OutputView::Build;
@@ -7631,7 +8087,11 @@ impl App {
                             if debug_view {
                                 self.show_debug_output(ui, actions, &debug_log, auto_scroll);
                             } else {
-                                self.ensure_firmware_analysis(false);
+                                let show_firmware =
+                                    !self.build_config.toolchain.is_micropython();
+                                if show_firmware {
+                                    self.ensure_firmware_analysis(false);
+                                }
                                 let total_width = ui.available_width();
                                 let body_height = ui.available_height();
                                 let mut side_width = self.firmware_view.side_width;
@@ -7639,10 +8099,17 @@ impl App {
                                     side_width = 380.0;
                                 }
                                 let max_side = (total_width * 0.55).max(280.0);
-                                let side_width = side_width.clamp(280.0, max_side);
-                                let handle_width = 6.0;
-                                let log_width =
-                                    (total_width - side_width - handle_width).max(180.0);
+                                let side_width = if show_firmware {
+                                    side_width.clamp(280.0, max_side)
+                                } else {
+                                    0.0
+                                };
+                                let handle_width = if show_firmware { 6.0 } else { 0.0 };
+                                let log_width = if show_firmware {
+                                    (total_width - side_width - handle_width).max(180.0)
+                                } else {
+                                    total_width
+                                };
                                 let mut new_side = side_width;
                                 ui.horizontal(|ui| {
                                     ui.allocate_ui_with_layout(
@@ -7652,8 +8119,14 @@ impl App {
                                             ui.set_min_size(egui::vec2(log_width, body_height));
                                             ui.spacing_mut().item_spacing.y = 0.0;
                                             if self.build.log.is_empty() {
+                                                let empty_label =
+                                                    if self.build_config.toolchain.is_micropython() {
+                                                        "MicroPython 串口输出会显示在这里"
+                                                    } else {
+                                                        "构建输出会显示在这里"
+                                                    };
                                                 ui.label(
-                                                    RichText::new("构建输出会显示在这里")
+                                                    RichText::new(empty_label)
                                                         .size(11.0)
                                                         .color(theme::text_faint()),
                                                 );
@@ -7816,6 +8289,7 @@ impl App {
                                             }
                                         },
                                     );
+                                    if show_firmware {
                                     let (rect, response) = ui.allocate_exact_size(
                                         egui::vec2(handle_width, body_height),
                                         Sense::drag(),
@@ -7847,8 +8321,11 @@ impl App {
                                             self.show_firmware_view(ui, actions);
                                         },
                                     );
+                                    }
                                 });
-                                self.firmware_view.side_width = new_side;
+                                if show_firmware {
+                                    self.firmware_view.side_width = new_side;
+                                }
                             }
                         });
                 }
