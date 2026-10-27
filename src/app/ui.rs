@@ -3565,7 +3565,7 @@ impl App {
                                 TextEdit::singleline(&mut self.memory_check.watch_input)
                                     .id(Id::new("simple_embedded_watch_expression"))
                                     .desired_width(330.0)
-                                    .hint_text("counter 或 *(uint32_t*)0x20000000"),
+                                    .hint_text("例如 g_state、motor.pwm 或 *(uint32_t*)0x20000000"),
                             );
                             egui::ComboBox::from_id_salt("simple_embedded_watch_kind")
                                 .selected_text(self.memory_check.watch_kind.label())
@@ -3647,6 +3647,15 @@ impl App {
                                         .size(11.0)
                                         .color(theme::TEXT_FAINT),
                                     );
+                                    if self.memory_check.watchpoints.is_empty() {
+                                        ui.label(
+                                            RichText::new(
+                                                "支持你在文件中定义的全局 / 静态变量、结构体成员和数组元素；局部变量需要在所属函数暂停时添加。",
+                                            )
+                                            .size(9.5)
+                                            .color(theme::TEXT_FAINT),
+                                        );
+                                    }
                                     return;
                                 }
                                 for (index, watchpoint) in watchpoints {
@@ -3725,9 +3734,15 @@ impl App {
                                             .color(theme::TEXT_DIM),
                                         )
                                         .id_salt(("simple_watch_history", index))
-                                        .default_open(false)
+                                        .default_open(true)
                                         .show(ui, |ui| {
-                                            for event in watchpoint.history.iter().rev().take(50) {
+                                            for (event_index, event) in watchpoint
+                                                .history
+                                                .iter()
+                                                .rev()
+                                                .take(50)
+                                                .enumerate()
+                                            {
                                                 ui.horizontal(|ui| {
                                                     ui.label(
                                                         RichText::new(&event.time)
@@ -3752,9 +3767,11 @@ impl App {
                                                     if let Some(location) = &event.location {
                                                         ui.add(
                                                             Label::new(
-                                                                RichText::new(location)
-                                                                    .size(9.5)
-                                                                    .color(theme::TEXT_DIM),
+                                                                RichText::new(format!(
+                                                                    "位置：{location}"
+                                                                ))
+                                                                .size(9.5)
+                                                                .color(theme::TEXT_DIM),
                                                             )
                                                             .truncate(),
                                                         )
@@ -3772,7 +3789,7 @@ impl App {
                                                         index,
                                                         event.id,
                                                     ))
-                                                    .default_open(false)
+                                                    .default_open(event_index == 0)
                                                     .show(ui, |ui| {
                                                         for frame in &event.stack {
                                                             ui.label(
