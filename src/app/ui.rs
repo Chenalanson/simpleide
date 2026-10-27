@@ -504,62 +504,11 @@ impl App {
                                         ui,
                                         |ui| {
                                             if has_project {
-                                                if let Some(tree) = self.tree.as_mut() {
-                                                    let tree_actions = tree.show(
-                                                        ui,
-                                                        active_path.as_deref(),
-                                                        self.file_clipboard.is_some(),
-                                                    );
-                                                    for tree_action in tree_actions {
-                                                        actions.push(match tree_action {
-                                                            TreeAction::OpenFile(path) => {
-                                                                Action::OpenFile(path)
-                                                            }
-                                                            TreeAction::Reveal(path) => {
-                                                                Action::Reveal(path)
-                                                            }
-                                                            TreeAction::OpenInVscode(path) => {
-                                                                Action::OpenVscode(path)
-                                                            }
-                                                            TreeAction::HexView(path) => {
-                                                                Action::OpenHex(path)
-                                                            }
-                                                            TreeAction::PreviewImage(path) => {
-                                                                Action::PreviewImage(path)
-                                                            }
-                                                            TreeAction::NewFile(path) => {
-                                                                Action::NewFile(path)
-                                                            }
-                                                            TreeAction::NewFolder(path) => {
-                                                                Action::NewFolder(path)
-                                                            }
-                                                            TreeAction::CopyPath(path) => {
-                                                                Action::CopyPath(path)
-                                                            }
-                                                            TreeAction::CopyRelativePath(path) => {
-                                                                Action::CopyRelativePath(path)
-                                                            }
-                                                            TreeAction::OpenToSide(path) => {
-                                                                Action::OpenToSide(path)
-                                                            }
-                                                            TreeAction::Cut(path) => {
-                                                                Action::CutFile(path)
-                                                            }
-                                                            TreeAction::Copy(path) => {
-                                                                Action::CopyFile(path)
-                                                            }
-                                                            TreeAction::Paste(path) => {
-                                                                Action::PasteFile(path)
-                                                            }
-                                                            TreeAction::Rename(path) => {
-                                                                Action::RenameFile(path)
-                                                            }
-                                                            TreeAction::Delete(path) => {
-                                                                Action::DeleteFile(path)
-                                                            }
-                                                        });
-                                                    }
-                                                }
+                                                self.show_project_tree(
+                                                    ui,
+                                                    active_path.as_deref(),
+                                                    actions,
+                                                );
                                             } else {
                                                 ui.add_space(16.0);
                                                 ui.vertical_centered(|ui| {
@@ -667,6 +616,120 @@ impl App {
                 self.settings.left_panel_width = width.clamp(300.0, 520.0);
                 self.settings.save();
             }
+        }
+    }
+
+    fn show_project_tree(
+        &mut self,
+        ui: &mut egui::Ui,
+        active: Option<&Path>,
+        actions: &mut Vec<Action>,
+    ) {
+        let can_paste = self.file_clipboard.is_some();
+        let Some(tree) = self.tree.as_mut() else {
+            return;
+        };
+        for tree_action in tree.show(ui, active, can_paste) {
+            actions.push(tree_action_to_action(tree_action));
+        }
+    }
+
+    /// Floating file explorer used by the immersive coding mode. It sits above
+    /// the editor and can be dragged/resized; closing it leaves the mode.
+    pub(super) fn show_immersive_explorer(
+        &mut self,
+        ctx: &egui::Context,
+        actions: &mut Vec<Action>,
+    ) {
+        let screen = ctx.content_rect();
+        let project_name = self
+            .project
+            .as_ref()
+            .map(|project| project.name.clone())
+            .unwrap_or_else(|| "未打开工程".to_owned());
+        let active_path = self.active_document().map(|doc| doc.path.clone());
+        let mut open = true;
+        egui::Window::new("资源管理器")
+            .id(Id::new("simple_embedded_immersive_explorer"))
+            .default_pos(egui::pos2(
+                (screen.right() - 306.0).max(screen.left() + 12.0),
+                screen.top() + 12.0,
+            ))
+            .default_size([286.0, 560.0])
+            .min_width(220.0)
+            .max_width(420.0)
+            .max_height((screen.height() - 24.0).max(240.0))
+            .resizable(true)
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(&project_name)
+                            .size(11.5)
+                            .strong()
+                            .color(theme::TEXT_DIM),
+                    )
+                    .on_hover_text("当前工程");
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(small_flat_button("刷新", theme::TEXT_FAINT))
+                            .on_hover_text("重新读取目录")
+                            .clicked()
+                        {
+                            actions.push(Action::RefreshTree);
+                        }
+                        let hidden_color = if self.settings.show_hidden {
+                            theme::ACCENT
+                        } else {
+                            theme::TEXT_FAINT
+                        };
+                        if ui
+                            .add(small_flat_button("隐藏文件", hidden_color))
+                            .on_hover_text(if self.settings.show_hidden {
+                                "当前显示以 . 开头的文件，点击隐藏"
+                            } else {
+                                "显示以 . 开头的文件"
+                            })
+                            .clicked()
+                        {
+                            actions.push(Action::ToggleHidden);
+                        }
+                    });
+                });
+                ui.separator();
+                if self.project.is_none() {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("未打开工程。按 Ctrl+Shift+Enter 退出沉浸模式后再导入工程。")
+                            .size(11.0)
+                            .color(theme::TEXT_FAINT),
+                    );
+                } else {
+                    let tree_height = (ui.available_height() - 48.0).max(160.0);
+                    ScrollArea::vertical()
+                        .id_salt("simple_embedded_immersive_file_tree")
+                        .max_height(tree_height)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            Frame::new()
+                                .inner_margin(Margin::symmetric(4, 2))
+                                .show(ui, |ui| {
+                                    self.show_project_tree(ui, active_path.as_deref(), actions);
+                                });
+                        });
+                }
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Ctrl+Shift+Enter 退出沉浸模式")
+                        .size(9.5)
+                        .color(theme::TEXT_FAINT),
+                );
+            });
+        if !open {
+            self.immersive = false;
+            self.focus_editor = true;
         }
     }
 
@@ -7450,6 +7513,26 @@ fn info_header_row(ui: &mut egui::Ui, info_open: &mut bool, openness: f32) {
                 }
             });
         });
+}
+
+fn tree_action_to_action(action: TreeAction) -> Action {
+    match action {
+        TreeAction::OpenFile(path) => Action::OpenFile(path),
+        TreeAction::Reveal(path) => Action::Reveal(path),
+        TreeAction::OpenInVscode(path) => Action::OpenVscode(path),
+        TreeAction::HexView(path) => Action::OpenHex(path),
+        TreeAction::PreviewImage(path) => Action::PreviewImage(path),
+        TreeAction::NewFile(path) => Action::NewFile(path),
+        TreeAction::NewFolder(path) => Action::NewFolder(path),
+        TreeAction::CopyPath(path) => Action::CopyPath(path),
+        TreeAction::CopyRelativePath(path) => Action::CopyRelativePath(path),
+        TreeAction::OpenToSide(path) => Action::OpenToSide(path),
+        TreeAction::Cut(path) => Action::CutFile(path),
+        TreeAction::Copy(path) => Action::CopyFile(path),
+        TreeAction::Paste(path) => Action::PasteFile(path),
+        TreeAction::Rename(path) => Action::RenameFile(path),
+        TreeAction::Delete(path) => Action::DeleteFile(path),
+    }
 }
 
 fn section_chevron(ui: &mut egui::Ui, openness: f32) -> egui::Response {

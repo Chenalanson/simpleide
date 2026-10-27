@@ -882,6 +882,7 @@ pub struct App {
     split_direction: SplitDirection,
     split_focus: usize,
     scroll_to_cursor: bool,
+    immersive: bool,
     chord_k_at: Option<Instant>,
     log_filter: LogFilter,
     diagnostics: Vec<Diagnostic>,
@@ -961,6 +962,7 @@ impl App {
             split_direction: SplitDirection::Right,
             split_focus: 0,
             scroll_to_cursor: false,
+            immersive: false,
             chord_k_at: None,
             log_filter: LogFilter::All,
             diagnostics: Vec::new(),
@@ -5085,6 +5087,21 @@ impl App {
             return;
         }
 
+        let toggle_immersive = ctx.input_mut(|input| {
+            input.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::Enter,
+            )
+        });
+        if toggle_immersive {
+            self.immersive = !self.immersive;
+            self.focus_editor = true;
+            self.find.open = false;
+            self.completion.open = false;
+            self.goto_line.open = false;
+            ctx.request_repaint();
+        }
+
         if self
             .chord_k_at
             .is_some_and(|at| at.elapsed() > Duration::from_millis(1500))
@@ -6653,17 +6670,26 @@ impl eframe::App for App {
 
         let mut actions = Vec::new();
 
-        self.show_status_bar(ui, &mut actions);
+        if !self.immersive {
+            self.show_status_bar(ui, &mut actions);
+        }
         let old_spacing = ui.spacing().item_spacing;
         let old_resize = ui.style().interaction.resize_grab_radius_side;
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.style_mut().interaction.resize_grab_radius_side = 0.0;
-        self.show_action_rail(ui, &mut actions);
-        self.show_side_panel(ui, &mut actions);
-        self.show_output_panel(ui, &mut actions);
-        self.show_center(ui, &mut actions);
+        if self.immersive {
+            self.show_center(ui, &mut actions);
+        } else {
+            self.show_action_rail(ui, &mut actions);
+            self.show_side_panel(ui, &mut actions);
+            self.show_output_panel(ui, &mut actions);
+            self.show_center(ui, &mut actions);
+        }
         ui.spacing_mut().item_spacing = old_spacing;
         ui.style_mut().interaction.resize_grab_radius_side = old_resize;
+        if self.immersive {
+            self.show_immersive_explorer(&ctx, &mut actions);
+        }
         self.update_completion(&ctx);
 
         if self.settings_draft.is_some() {
@@ -6731,7 +6757,7 @@ impl eframe::App for App {
         if self.array.open && !modal_open {
             self.show_array_generator(&ctx);
         }
-        if self.debug.open && !modal_open {
+        if self.debug.open && !self.immersive && !modal_open {
             self.show_debug_overlay(&ctx, &mut actions);
         }
         if self.image_preview.is_some() {
