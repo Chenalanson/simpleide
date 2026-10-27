@@ -730,6 +730,7 @@ impl App {
         if !open {
             self.immersive = false;
             self.focus_editor = true;
+            self.apply_immersive_viewport(ctx);
         }
     }
 

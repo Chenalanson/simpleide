@@ -5069,6 +5069,18 @@ impl App {
         });
     }
 
+    /// Apply the OS-level fullscreen/topmost state that goes with the
+    /// immersive mode. Borderless fullscreen removes both the title bar and the
+    /// taskbar; the topmost level keeps the taskbar from drawing over it.
+    fn apply_immersive_viewport(&self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(self.immersive));
+        ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if self.immersive {
+            egui::WindowLevel::AlwaysOnTop
+        } else {
+            egui::WindowLevel::Normal
+        }));
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let modal_open = self.has_modal();
         if modal_open {
@@ -5099,6 +5111,7 @@ impl App {
             self.find.open = false;
             self.completion.open = false;
             self.goto_line.open = false;
+            self.apply_immersive_viewport(ctx);
             ctx.request_repaint();
         }
 
