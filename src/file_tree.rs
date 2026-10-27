@@ -153,6 +153,7 @@ impl FileTree {
 
         let mut context_action = None;
         row.response.context_menu(|ui| {
+            compact_context_menu(ui);
             if ui.button("新建文件...").clicked() {
                 context_action = Some(TreeAction::NewFile(root.clone()));
                 ui.close();
@@ -255,6 +256,7 @@ impl FileTree {
 
             let mut context_action = None;
             row.response.context_menu(|ui| {
+                compact_context_menu(ui);
                 if entry.is_dir {
                     if ui.button("新建文件...").clicked() {
                         context_action = Some(TreeAction::NewFile(entry.path.clone()));
@@ -382,6 +384,12 @@ fn is_image_path(path: &Path) -> bool {
                 "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "tif" | "tiff"
             )
         })
+}
+
+fn compact_context_menu(ui: &mut egui::Ui) {
+    ui.spacing_mut().item_spacing.y = 2.0;
+    ui.spacing_mut().button_padding = egui::vec2(8.0, 3.0);
+    ui.spacing_mut().interact_size.y = 22.0;
 }
 
 fn collapsing_state(

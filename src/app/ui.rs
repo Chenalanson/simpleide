@@ -3376,7 +3376,7 @@ impl App {
             });
         });
         if delete {
-            self.commit_delete();
+            self.commit_delete(draft);
         } else if !close {
             self.delete_entry = Some(draft);
         }

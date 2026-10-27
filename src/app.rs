@@ -6448,10 +6448,9 @@ impl App {
         self.delete_entry = Some(DeleteEntryDraft { path, is_dir });
     }
 
-    fn commit_delete(&mut self) {
-        let Some(draft) = self.delete_entry.take() else {
-            return;
-        };
+    /// The confirmation modal takes the draft out of `delete_entry`, so the
+    /// draft is passed back explicitly instead of being read from `self`.
+    fn commit_delete(&mut self, draft: DeleteEntryDraft) {
         if path_has_dirty_tab(&self.tabs, &draft.path) {
             self.set_toast("请先保存或关闭该文件，再删除", Severity::Warning);
             return;
