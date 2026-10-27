@@ -54,6 +54,9 @@ pub struct DebugSession {
     pub preg_output: Vec<String>,
     pub started: bool,
     server: Option<Child>,
+    /// OpenOCD telnet port used to halt the target from another connection.
+    openocd_telnet: Option<u16>,
+    openocd_telnet_stream: Option<TcpStream>,
 }
 
 impl DebugSession {
@@ -70,9 +73,11 @@ impl DebugSession {
         server_spec: RunSpec,
         port: u16,
         kind: ServerKind,
+        telnet_port: Option<u16>,
     ) -> Result<Self, String> {
         let (tx, rx) = channel();
         let mut session = Self::spawn_gdb(program, gdb, tx.clone(), rx)?;
+        session.openocd_telnet = telnet_port;
         let mut server = match spawn_server(&server_spec, kind, tx) {
             Ok(server) => server,
             Err(err) => {
@@ -152,11 +157,18 @@ impl DebugSession {
             preg_output: Vec::new(),
             started: false,
             server: None,
+            openocd_telnet: None,
+            openocd_telnet_stream: None,
         };
         session.send("set pagination off");
         session.send("set confirm off");
         session.send("set print pretty on");
         session.send("set breakpoint pending on");
+        // Allow the Pause button to interrupt a running target through the
+        // normal gdb stdin pipe. Without async mode gdb is blocked inside
+        // `continue` and a raw 0x03 byte written to the pipe is not treated as
+        // an interrupt on Windows.
+        session.send("set mi-async on");
         // Prefer the target's comparators over very slow software watchpoints.
         session.send("set can-use-hw-watchpoints 1");
         Ok(session)
@@ -169,13 +181,35 @@ impl DebugSession {
         }
     }
 
-    /// Interrupt a running target. GDB treats Ctrl+C on stdin as an interrupt
-    /// request even when the CLI prompt is not active.
-    pub fn interrupt(&mut self) {
-        if let Some(stdin) = &mut self.stdin {
-            let _ = stdin.write_all(&[3]);
-            let _ = stdin.flush();
+    /// Halt a running target. OpenOCD is stopped through its telnet console;
+    /// pyOCD / host gdb use gdb's async `interrupt` command as a fallback.
+    pub fn interrupt(&mut self) -> bool {
+        if let Some(port) = self.openocd_telnet {
+            if self.openocd_telnet_stream.is_none() {
+                let address = SocketAddr::from(([127, 0, 0, 1], port));
+                if let Ok(stream) = TcpStream::connect_timeout(&address, Duration::from_millis(500))
+                {
+                    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+                    self.openocd_telnet_stream = Some(stream);
+                }
+            }
+            if let Some(stream) = &mut self.openocd_telnet_stream {
+                if stream.write_all(b"halt\n").is_ok() && stream.flush().is_ok() {
+                    // Keep the connection open. Reconnecting for every pause
+                    // makes OpenOCD log "Bad file descriptor" and can drop the
+                    // halt command.
+                    let mut buffer = [0u8; 512];
+                    let _ = stream.read(&mut buffer);
+                    return true;
+                }
+                self.openocd_telnet_stream = None;
+            }
         }
+        // Fallback for pyOCD / host gdb: the session runs gdb in async mode
+        // (`set mi-async on`), so `interrupt` can be sent through stdin.
+        self.send("interrupt");
+        false
     }
 
     pub fn poll(&mut self) {
@@ -379,7 +413,13 @@ pub fn parse_stop_location(line: &str) -> Option<(String, usize)> {
     if line.is_empty() {
         return None;
     }
-    let after = line.rfind(" at ").map(|index| &line[index + 4..])?;
+    // gdb usually prints `#0 func () at file:line`, but long frames wrap the
+    // location onto its own line: `    at Drivers/.../stm32f1xx_hal.c:382`.
+    let after = if let Some(index) = line.rfind(" at ") {
+        &line[index + 4..]
+    } else {
+        line.strip_prefix("at ")?
+    };
     let after = after.trim();
     let (path, line_no) = after.rsplit_once(':')?;
     let path = path.trim().trim_matches('"');
@@ -692,6 +732,13 @@ mod tests {
         assert_eq!(
             parse_stop_location("0x08000b24 in HAL_Delay () at C:\\work\\Src\\stm32f1xx_hal.c:402"),
             Some(("C:\\work\\Src\\stm32f1xx_hal.c".to_owned(), 402))
+        );
+        assert_eq!(
+            parse_stop_location("    at Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal.c:382"),
+            Some((
+                "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal.c".to_owned(),
+                382
+            ))
         );
         assert_eq!(
             parse_stop_location("Breakpoint 1 at 0x08000b24: file ../Core/Src/main.c, line 95."),

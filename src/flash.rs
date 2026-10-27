@@ -334,11 +334,12 @@ pub fn openocd_server_spec(
     config: &OpenOcdConfig,
     root: &Path,
     port: u16,
+    telnet_port: u16,
 ) -> Result<RunSpec, String> {
     let interface = resolve_script(root, &config.interface_config, "interface")?;
     let target = resolve_script(root, &config.target_config, "target")?;
     let executable = resolve_executable(effective_executable(config), root);
-    let server_command = format!("gdb_port {port}; telnet_port disabled; tcl_port disabled");
+    let server_command = format!("gdb_port {port}; telnet_port {telnet_port}; tcl_port disabled");
     let args: Vec<OsString> = vec![
         "-f".into(),
         interface.clone().into(),
@@ -1008,9 +1009,9 @@ mod tests {
     }
 
     #[test]
-    fn openocd_server_spec_uses_requested_port_and_disables_extra_servers() {
+    fn openocd_server_spec_uses_requested_ports_and_disables_tcl() {
         let dir = tempfile::tempdir().unwrap();
-        let spec = openocd_server_spec(&sample_config(), dir.path(), 3456).unwrap();
+        let spec = openocd_server_spec(&sample_config(), dir.path(), 3456, 3457).unwrap();
         let args = spec
             .args
             .iter()
@@ -1024,10 +1025,11 @@ mod tests {
                 "-f",
                 "target/stm32f1x.cfg",
                 "-c",
-                "gdb_port 3456; telnet_port disabled; tcl_port disabled",
+                "gdb_port 3456; telnet_port 3457; tcl_port disabled",
             ]
         );
         assert!(spec.display.contains("gdb_port 3456"));
+        assert!(spec.display.contains("telnet_port 3457"));
     }
 
     #[test]

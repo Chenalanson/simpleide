@@ -2279,9 +2279,28 @@ impl App {
                         Ok(port) => port,
                         Err(err) => return self.debug_start_error(err),
                     };
-                    match crate::flash::openocd_server_spec(&self.build_config.openocd, &root, port)
-                    {
-                        Ok(spec) => Some((spec, port, crate::debugger::ServerKind::OpenOcd)),
+                    let mut telnet_port = match crate::debugger::free_tcp_port() {
+                        Ok(port) => port,
+                        Err(err) => return self.debug_start_error(err),
+                    };
+                    if telnet_port == port {
+                        telnet_port = match crate::debugger::free_tcp_port() {
+                            Ok(port) => port,
+                            Err(err) => return self.debug_start_error(err),
+                        };
+                    }
+                    match crate::flash::openocd_server_spec(
+                        &self.build_config.openocd,
+                        &root,
+                        port,
+                        telnet_port,
+                    ) {
+                        Ok(spec) => Some((
+                            spec,
+                            port,
+                            crate::debugger::ServerKind::OpenOcd,
+                            Some(telnet_port),
+                        )),
                         Err(err) => return self.debug_start_error(err),
                     }
                 }
@@ -2296,7 +2315,7 @@ impl App {
                         Err(err) => return self.debug_start_error(err),
                     };
                     match crate::flash::pyocd_server_spec(&self.build_config.pyocd, &root, port) {
-                        Ok(spec) => Some((spec, port, crate::debugger::ServerKind::PyOcd)),
+                        Ok(spec) => Some((spec, port, crate::debugger::ServerKind::PyOcd, None)),
                         Err(err) => return self.debug_start_error(err),
                     }
                 }
@@ -2339,13 +2358,14 @@ impl App {
         let target_for_thread = target;
         let gdb_for_thread = gdb;
         std::thread::spawn(move || {
-            let result = if let Some((spec, port, server_kind)) = server {
+            let result = if let Some((spec, port, server_kind, telnet_port)) = server {
                 crate::debugger::DebugSession::start_embedded(
                     &target_for_thread,
                     &gdb_for_thread,
                     spec,
                     port,
                     server_kind,
+                    telnet_port,
                 )
                 .map(|session| (session, target_for_thread))
             } else {
@@ -2470,8 +2490,21 @@ impl App {
             self.set_toast("调试会话尚未启动", Severity::Info);
             return;
         };
-        session.interrupt();
-        self.set_toast("正在暂停目标", Severity::Info);
+        let halted = session.interrupt();
+        if halted {
+            // OpenOCD stopped the target from its telnet console. Ask gdb for
+            // the current frame so the editor can update the source marker.
+            session.send("frame");
+            self.debug.running = false;
+        }
+        self.set_toast(
+            if halted {
+                "已请求暂停"
+            } else {
+                "正在暂停目标"
+            },
+            Severity::Info,
+        );
     }
 
     fn debug_command(&mut self, command: &str) {
