@@ -660,7 +660,7 @@ impl App {
             .max_width(420.0)
             .max_height((screen.height() - 24.0).max(240.0))
             .resizable(true)
-            .collapsible(false)
+            .collapsible(true)
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
