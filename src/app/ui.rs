@@ -5,7 +5,7 @@ use crate::config::autodetect;
 use crate::micropython::{BoardFile, BoardNode};
 use eframe::egui::{
     self, Align, Align2, Button, Checkbox, Color32, FontId, Frame, Id, Label, Layout, Margin,
-    RadioButton, Rect, RichText, ScrollArea, Sense, Shape, Stroke, TextBuffer, TextEdit,
+    RadioButton, Rect, RichText, ScrollArea, Sense, Shape, Stroke, TextEdit,
 };
 
 impl App {
@@ -878,27 +878,48 @@ impl App {
     }
 
     fn show_folded_editor(&mut self, ui: &mut egui::Ui, pane_index: usize) {
+        let active = self.active == Some(pane_index);
+        let focus = active && std::mem::take(&mut self.focus_editor);
+        let scroll_to_cursor = active && std::mem::take(&mut self.scroll_to_cursor);
         let code_theme = *self.code_theme();
         let font_size = self.settings.font_size;
         let word_wrap = self.settings.word_wrap;
+        let relative_line_numbers = self.settings.relative_line_numbers;
+        let show_indent_guides = self.settings.show_indent_guides;
+        let indent_width = self.settings.indent_width.max(1) as usize;
         let available_width = ui.available_width();
+        let full_height = ui.available_height();
+        let show_minimap = self.settings.show_minimap && available_width > 520.0;
+        let minimap_width = crate::minimap::WIDTH;
+        let viewport_width = if show_minimap {
+            (available_width - minimap_width - 8.0).max(180.0)
+        } else {
+            available_width
+        };
         let Some(doc) = self.tabs.get_mut(pane_index) else {
             return;
         };
         let path = doc.path.clone();
+        let cursor_index = doc.cursor_index;
+        let cursor_line = doc.cursor_line;
+        let read_only = doc.read_only;
         let text = doc.buffer.as_string().to_owned();
-        let ranges = crate::fold::ranges(&text);
-        let (view_text, markers, source_lines) = crate::fold::view(&text, &doc.folds, &ranges);
-        let mut view_text = ReadOnlyText(view_text);
-        let fold_count = doc.folds.len();
+        let mut fold_buffer = crate::fold::FoldBuffer::new(text, doc.folds.clone());
         let cache = doc.layout_cache.clone();
-        let revision = doc.buffer.revision().wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let fold_key = doc.folds.iter().fold(0u64, |hash, line| {
+            hash.wrapping_mul(31).wrapping_add(*line as u64 + 1)
+        });
+        let revision = doc
+            .buffer
+            .revision()
+            .wrapping_add(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(fold_key.rotate_left(17));
         let syntax_name = doc.syntax_name.clone();
         let highlighter = Arc::clone(&self.highlighter);
         let font_id = FontId::monospace(font_size);
         let theme_key = code_theme.key();
         let gutter_font = FontId::monospace((font_size - 1.0).max(9.0));
-        let source_line_count = text.split('\n').count().max(1);
+        let source_line_count = doc.buffer.as_string().split('\n').count().max(1);
         let digits = source_line_count.to_string().len().max(2) as f32;
         let digit_width = ui
             .ctx()
@@ -923,155 +944,308 @@ impl App {
                 &cache,
             )
         };
-        let folded_id = Id::new(("simple_embedded_folded_editor", &path));
-        let mut unfold_all = false;
+        let editor_id = Id::new(("simple_embedded_folded_editor", &path));
+        let scroll_id = Id::new(("simple_embedded_code_scroll", &path));
+        let view_cursor = fold_buffer.source_to_view(cursor_index);
         let mut unfold_start = None;
+        let mut source_cursor = None;
+        let mut editor_output = None;
+        let mut scroll_output = None;
         Frame::new().fill(code_theme.bg).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("折叠视图（只读）")
-                        .size(11.0)
-                        .strong()
-                        .color(theme::text_dim()),
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.allocate_ui_with_layout(
+                    egui::vec2(viewport_width, full_height),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        scroll_output = Some(
+                            ScrollArea::both()
+                                .id_salt(scroll_id)
+                                .auto_shrink([false, false])
+                                .max_height(full_height)
+                                .show(ui, |ui| {
+                                    ui.set_min_width(viewport_width.max(80.0));
+                                    let old_selection = ui.visuals().selection;
+                                    ui.visuals_mut().selection.bg_fill = code_theme.selection;
+                                    ui.visuals_mut().selection.stroke =
+                                        Stroke::new(1.0_f32, code_theme.text);
+                                    let output = TextEdit::multiline(&mut fold_buffer)
+                                        .id(editor_id)
+                                        .code_editor()
+                                        .interactive(!read_only)
+                                        .font(FontId::monospace(font_size))
+                                        .desired_width(if word_wrap {
+                                            viewport_width.max(80.0)
+                                        } else {
+                                            f32::INFINITY
+                                        })
+                                        .background_color(code_theme.bg)
+                                        .frame(Frame::new().inner_margin(Margin {
+                                            left: text_margin_left,
+                                            right: 8,
+                                            top: 8,
+                                            bottom: 8,
+                                        }))
+                                        .layouter(&mut layouter)
+                                        .show(ui);
+                                    ui.visuals_mut().selection = old_selection;
+                                    if focus {
+                                        output.response.response.request_focus();
+                                        let mut state = output.state.clone();
+                                        state.cursor.set_char_range(Some(
+                                            egui::text::CCursorRange::one(
+                                                egui::text::CCursor::new(view_cursor),
+                                            ),
+                                        ));
+                                        state.store(ui.ctx(), output.response.response.id);
+                                    } else if let Some(cursor_range) = output.cursor_range {
+                                        source_cursor = Some(
+                                            fold_buffer.view_to_source(cursor_range.primary.index),
+                                        );
+                                    }
+                                    if scroll_to_cursor {
+                                        let caret = output
+                                            .galley
+                                            .pos_from_cursor(egui::text::CCursor::new(view_cursor))
+                                            .translate(output.galley_pos.to_vec2());
+                                        ui.scroll_to_rect(caret, None);
+                                    }
+                                    editor_output = Some(output);
+                                }),
+                        );
+                    },
                 );
-                ui.label(
-                    RichText::new(format!("· {fold_count} 个块"))
-                        .size(9.5)
-                        .color(theme::text_faint()),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add(theme::secondary_button("展开全部"))
-                        .on_hover_text("展开所有折叠块，恢复编辑")
-                        .clicked()
-                    {
-                        unfold_all = true;
+                if show_minimap {
+                    ui.add_space(8.0);
+                    if let Some(scroll_output) = &scroll_output {
+                        crate::minimap::show(
+                            ui,
+                            crate::minimap::View {
+                                text: fold_buffer.view(),
+                                revision,
+                                theme_key,
+                                colors: crate::minimap::Colors {
+                                    comment: code_theme.comment,
+                                    preproc: code_theme.function,
+                                    string: code_theme.string,
+                                    keyword: code_theme.keyword,
+                                    normal: code_theme.text,
+                                },
+                                scroll: scroll_output,
+                                width: minimap_width,
+                                height: full_height,
+                                line_count: fold_buffer.view().split('\n').count().max(1),
+                                background: code_theme.bg,
+                                foreground: code_theme.text,
+                            },
+                            &mut doc.minimap_cache,
+                        );
                     }
-                });
+                }
             });
-            ui.add_space(3.0);
-            ScrollArea::both()
-                .id_salt("simple_embedded_folded_scroll")
-                .auto_shrink([false, false])
-                .max_height((ui.available_height() - 6.0).max(80.0))
-                .show(ui, |ui| {
-                    let output = TextEdit::multiline(&mut view_text)
-                        .id(folded_id)
-                        .code_editor()
-                        .font(FontId::monospace(font_size))
-                        .desired_width(if word_wrap {
-                            available_width.max(80.0)
-                        } else {
-                            f32::INFINITY
-                        })
-                        .background_color(code_theme.bg)
-                        .frame(Frame::new().inner_margin(Margin {
-                            left: text_margin_left,
-                            right: 8,
-                            top: 8,
-                            bottom: 8,
-                        }))
-                        .layouter(&mut layouter)
-                        .show(ui);
-                    let fold_viewport = output.response.response.rect;
-                    let gutter_right = output.galley_pos.x - 12.0;
-                    let gutter_rect = egui::Rect::from_min_max(
-                        egui::pos2(fold_viewport.left(), fold_viewport.top()),
-                        egui::pos2(gutter_right, fold_viewport.bottom()),
-                    );
-                    let gutter_painter = ui.painter().with_clip_rect(fold_viewport);
-                    gutter_painter.rect_filled(gutter_rect, CornerRadius::ZERO, code_theme.bg);
-                    gutter_painter.line_segment(
-                        [
-                            egui::pos2(gutter_right, fold_viewport.top()),
-                            egui::pos2(gutter_right, fold_viewport.bottom()),
-                        ],
-                        Stroke::new(1.0_f32, code_theme.selection),
-                    );
-                    let text = view_text.as_str();
-                    for (line_index, source_line) in source_lines.iter().enumerate() {
-                        if *source_line == 0 {
-                            continue;
-                        }
-                        let line_start = crate::util::char_index_at_line(text, line_index + 1);
-                        let caret = output
-                            .galley
-                            .pos_from_cursor(egui::text::CCursor::new(line_start))
-                            .translate(output.galley_pos.to_vec2());
-                        let color = if *source_line == doc.cursor_line {
-                            code_theme.text
-                        } else {
-                            code_theme.comment
-                        };
-                        gutter_painter.text(
-                            egui::pos2(gutter_right - 8.0, caret.center().y),
-                            Align2::RIGHT_CENTER,
-                            source_line.to_string(),
-                            gutter_font.clone(),
-                            color,
-                        );
-                    }
-                    if output.response.response.clicked() {
-                        if let Some(pointer) = ui.ctx().input(|input| input.pointer.interact_pos())
-                        {
-                            let cursor = output.galley.cursor_from_pos(pointer - output.galley_pos);
-                            let line =
-                                crate::util::line_column_at_char(view_text.as_str(), cursor.index)
-                                    .0
-                                    .saturating_sub(1);
-                            if let Some((_, start)) =
-                                markers.iter().find(|(marker_line, _)| *marker_line == line)
-                            {
-                                unfold_start = Some(*start);
-                            }
-                        }
-                    }
-                    let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
-                    for (marker_line, start) in &markers {
-                        let line_start =
-                            crate::util::char_index_at_line(view_text.as_str(), marker_line + 1);
-                        let caret = output
-                            .galley
-                            .pos_from_cursor(egui::text::CCursor::new(line_start))
-                            .translate(output.galley_pos.to_vec2());
-                        let center = egui::pos2(output.galley_pos.x - 6.0, caret.center().y);
-                        let rect = egui::Rect::from_center_size(center, egui::vec2(15.0, 18.0));
-                        let response = ui.interact(
-                            rect,
-                            Id::new(("simple_embedded_fold_open", &path, start)),
-                            Sense::click(),
-                        );
-                        let clicked = response.clicked()
-                            || ui.ctx().input(|input| {
-                                input.pointer.primary_clicked()
-                                    && input
-                                        .pointer
-                                        .interact_pos()
-                                        .is_some_and(|pointer| rect.contains(pointer))
-                            });
-                        if clicked {
-                            unfold_start = Some(*start);
-                        }
-                        if pointer.is_some_and(|pointer| {
-                            pointer.y >= caret.top() && pointer.y <= caret.bottom()
-                        }) {
-                            paint_fold_chevron(ui.painter(), center, false);
-                        }
-                    }
-                });
         });
-        if unfold_all {
-            doc.folds.clear();
-        } else if let Some(start) = unfold_start {
-            doc.folds.remove(&start);
+        let scroll_output = scroll_output.expect("scroll area is always created");
+        let output = editor_output.expect("editor is always created");
+        let viewport = scroll_output.inner_rect;
+        let gutter_right = (viewport.left() + gutter_width).min(viewport.right());
+        let gutter_rect = egui::Rect::from_min_max(
+            egui::pos2(viewport.left(), viewport.top()),
+            egui::pos2(gutter_right, viewport.bottom()),
+        );
+        let painter = ui.painter().with_clip_rect(viewport);
+        let view = fold_buffer.view();
+        let markers = fold_buffer.markers().to_vec();
+        if show_indent_guides {
+            let active_level = doc
+                .buffer
+                .as_string()
+                .split('\n')
+                .nth(cursor_line.saturating_sub(1))
+                .map(|line| leading_indent_columns(line, indent_width) / indent_width)
+                .unwrap_or(0);
+            paint_indent_guides(
+                &painter,
+                &output.galley,
+                output.galley_pos,
+                viewport,
+                indent_width,
+                active_level,
+            );
         }
-        if unfold_all || unfold_start.is_some() {
+        let mut rows = Vec::new();
+        let mut line_start = 0usize;
+        for (source_line, line) in fold_buffer
+            .view_lines()
+            .iter()
+            .zip(view.split_inclusive('\n'))
+        {
+            let line_chars = line.chars().count();
+            let body_chars = line.trim_end_matches('\n').chars().count();
+            let caret = output
+                .galley
+                .pos_from_cursor(egui::text::CCursor::new(line_start))
+                .translate(output.galley_pos.to_vec2());
+            if *source_line == cursor_line {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(viewport.left(), caret.top()),
+                        egui::pos2(viewport.right(), caret.bottom()),
+                    ),
+                    CornerRadius::ZERO,
+                    Color32::from_rgba_unmultiplied(
+                        code_theme.line_highlight.r(),
+                        code_theme.line_highlight.g(),
+                        code_theme.line_highlight.b(),
+                        78,
+                    ),
+                );
+            }
+            rows.push((
+                *source_line,
+                caret.center().y,
+                caret.top(),
+                caret.bottom(),
+                line_start,
+                line_start + body_chars,
+            ));
+            line_start += line_chars;
+        }
+        painter.rect_filled(gutter_rect, CornerRadius::ZERO, code_theme.bg);
+        if let Some((_, _, top, bottom, _, _)) = rows.iter().find(|row| row.0 == cursor_line) {
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(gutter_rect.left(), *top),
+                    egui::pos2(gutter_rect.right(), *bottom),
+                ),
+                CornerRadius::ZERO,
+                code_theme.line_highlight,
+            );
+        }
+        painter.line_segment(
+            [
+                egui::pos2(gutter_right, viewport.top()),
+                egui::pos2(gutter_right, viewport.bottom()),
+            ],
+            Stroke::new(1.0_f32, code_theme.selection),
+        );
+        for (source_line, center_y, _, _, _, _) in &rows {
+            let text_color = if *source_line == cursor_line {
+                code_theme.text
+            } else {
+                code_theme.comment
+            };
+            let display_no = if relative_line_numbers && *source_line != cursor_line {
+                source_line.abs_diff(cursor_line)
+            } else {
+                *source_line
+            };
+            painter.text(
+                egui::pos2(gutter_right - 8.0, *center_y),
+                Align2::RIGHT_CENTER,
+                display_no.to_string(),
+                gutter_font.clone(),
+                text_color,
+            );
+        }
+        let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
+        for (marker_line, start, end_line) in &markers {
+            let Some((_, center_y, top, bottom, _, line_end)) = rows.get(*marker_line) else {
+                continue;
+            };
+            let end = output
+                .galley
+                .pos_from_cursor(egui::text::CCursor::new(*line_end))
+                .translate(output.galley_pos.to_vec2());
+            let marker_pos = end.left_center() + egui::vec2(8.0, 0.0);
+            painter.rect_filled(
+                egui::Rect::from_min_size(
+                    marker_pos - egui::vec2(2.0, 8.0),
+                    egui::vec2(24.0, 16.0),
+                ),
+                CornerRadius::same(3),
+                theme::with_alpha(code_theme.comment, 26),
+            );
+            painter.text(
+                marker_pos,
+                Align2::LEFT_CENTER,
+                "...",
+                FontId::monospace(font_size),
+                code_theme.comment,
+            );
+            let marker_rect = egui::Rect::from_min_size(
+                marker_pos - egui::vec2(2.0, 9.0),
+                egui::vec2(26.0, 18.0),
+            );
+            let response = ui.interact(
+                marker_rect,
+                Id::new(("simple_embedded_fold_marker", &path, start)),
+                Sense::click(),
+            );
+            let response =
+                response.on_hover_text(format!("已折叠 {} 行，点击展开", *end_line - *start));
+            let marker_clicked = response.clicked()
+                || ui.ctx().input(|input| {
+                    input.pointer.primary_clicked()
+                        && input
+                            .pointer
+                            .interact_pos()
+                            .is_some_and(|pointer| marker_rect.contains(pointer))
+                });
+            if marker_clicked {
+                unfold_start = Some(*start);
+            }
+            let center = egui::pos2(gutter_right + 8.0, *center_y);
+            let chevron = egui::Rect::from_center_size(center, egui::vec2(14.0, 18.0));
+            let response = ui.interact(
+                chevron,
+                Id::new(("simple_embedded_fold_open", &path, start)),
+                Sense::click(),
+            );
+            let response = response.on_hover_text("点击展开折叠块");
+            let chevron_clicked = response.clicked()
+                || ui.ctx().input(|input| {
+                    input.pointer.primary_clicked()
+                        && input
+                            .pointer
+                            .interact_pos()
+                            .is_some_and(|pointer| chevron.contains(pointer))
+                });
+            if chevron_clicked {
+                unfold_start = Some(*start);
+            }
+            if pointer.is_some_and(|pointer| pointer.y >= *top && pointer.y <= *bottom) {
+                paint_fold_chevron(&painter, center, false);
+            }
+        }
+        let mut cursor_override = None;
+        if !read_only && fold_buffer.changed() {
+            doc.buffer.set_text(fold_buffer.source().to_owned());
+            doc.folds = fold_buffer.folds().clone();
+            if fold_buffer.lines_changed() {
+                doc.folds.clear();
+                cursor_override = fold_buffer.cursor_hint();
+                if active {
+                    self.focus_editor = true;
+                    self.scroll_to_cursor = true;
+                }
+            }
+            doc.macro_issue_revision = u64::MAX;
+            self.find.dirty = true;
+            ui.ctx().request_repaint();
+        }
+        if let Some(cursor) = cursor_override {
+            doc.update_cursor(cursor);
+            set_editor_cursor(ui.ctx(), &doc.path, cursor);
+        } else if let Some(cursor) = source_cursor {
+            doc.update_cursor(cursor);
+        }
+        if let Some(start) = unfold_start {
+            doc.folds.remove(&start);
             self.find.dirty = true;
             self.focus_editor = true;
             ui.ctx().request_repaint();
         }
     }
-
     fn show_project_meta(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let meta = &self.project_meta;
         let effective_toolchain = self.build_config.effective_toolchain(meta);
@@ -5484,23 +5658,29 @@ impl App {
         };
         let editor_id = Id::new(("simple_embedded_code_editor", &fold_path));
         let editor_focused = ui.memory(|memory| memory.has_focus(editor_id));
-        let folded_id = Id::new(("simple_embedded_folded_editor", &fold_path));
+        if is_active_pane && self.scroll_to_cursor {
+            if let Some(doc) = self.tabs.get_mut(pane_index) {
+                if !doc.folds.is_empty() {
+                    let ranges = crate::fold::ranges(doc.buffer.as_string());
+                    let target = doc.cursor_line.saturating_sub(1);
+                    doc.folds.retain(|start| {
+                        !ranges.iter().any(|range| {
+                            range.start_line == *start
+                                && range.end_line > range.start_line
+                                && target > range.start_line
+                                && target <= range.end_line
+                        })
+                    });
+                }
+            }
+        }
         if self
             .tabs
             .get(pane_index)
             .is_some_and(|doc| !doc.folds.is_empty())
         {
-            let edit_event = ui.ctx().input(has_edit_event);
-            let folded_focused = ui.memory(|memory| memory.has_focus(folded_id));
-            if edit_event && (editor_focused || folded_focused) {
-                if let Some(doc) = self.tabs.get_mut(pane_index) {
-                    doc.folds.clear();
-                }
-                self.focus_editor = true;
-            } else {
-                self.show_folded_editor(ui, pane_index);
-                return;
-            }
+            self.show_folded_editor(ui, pane_index);
+            return;
         }
         let Some(doc) = self.tabs.get_mut(pane_index) else {
             return;
@@ -6301,6 +6481,7 @@ impl App {
                 if clicked {
                     doc.folds.insert(range.start_line);
                     self.find.dirty = true;
+                    self.focus_editor = true;
                     ui.ctx().request_repaint();
                 }
                 if center.y >= viewport.top() && center.y <= viewport.bottom() {
@@ -8392,48 +8573,6 @@ fn paint_fold_chevron(painter: &egui::Painter, center: egui::Pos2, expanded: boo
     };
     painter.line_segment([first, middle], stroke);
     painter.line_segment([middle, last], stroke);
-}
-
-struct ReadOnlyText(String);
-
-impl egui::TextBuffer for ReadOnlyText {
-    fn is_mutable(&self) -> bool {
-        false
-    }
-
-    fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    fn insert_text(&mut self, _text: &str, _char_index: usize) -> usize {
-        0
-    }
-
-    fn delete_char_range(&mut self, _char_range: std::ops::Range<usize>) {}
-
-    fn type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<Self>()
-    }
-}
-
-fn has_edit_event(input: &egui::InputState) -> bool {
-    let paste = input
-        .events
-        .iter()
-        .any(|event| matches!(event, egui::Event::Paste(_)));
-    let modified = input.modifiers.ctrl || input.modifiers.command || input.modifiers.alt;
-    let text = !modified
-        && input
-            .events
-            .iter()
-            .any(|event| matches!(event, egui::Event::Text(_)));
-    paste
-        || text
-        || (!modified
-            && (input.key_pressed(egui::Key::Backspace)
-                || input.key_pressed(egui::Key::Delete)
-                || input.key_pressed(egui::Key::Enter)
-                || input.key_pressed(egui::Key::Tab)))
 }
 
 fn handle_multi_cursor_shortcuts(

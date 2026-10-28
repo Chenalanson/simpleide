@@ -4260,6 +4260,7 @@ impl App {
             doc.folds.insert(start);
         }
         self.find.dirty = true;
+        self.focus_editor = true;
         ctx.request_repaint();
     }
 
@@ -4273,6 +4274,7 @@ impl App {
         if !doc.folds.is_empty() {
             doc.folds.clear();
             self.find.dirty = true;
+            self.focus_editor = true;
             ctx.request_repaint();
         }
     }
