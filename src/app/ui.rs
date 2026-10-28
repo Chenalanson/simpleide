@@ -975,6 +975,38 @@ impl App {
                             }
                         }
                     }
+                    let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
+                    for (marker_line, start) in &markers {
+                        let line_start =
+                            crate::util::char_index_at_line(view_text.as_str(), marker_line + 1);
+                        let caret = output
+                            .galley
+                            .pos_from_cursor(egui::text::CCursor::new(line_start))
+                            .translate(output.galley_pos.to_vec2());
+                        let center = egui::pos2(output.galley_pos.x - 6.0, caret.center().y);
+                        let rect = egui::Rect::from_center_size(center, egui::vec2(15.0, 18.0));
+                        let response = ui.interact(
+                            rect,
+                            Id::new(("simple_embedded_fold_open", &path, start)),
+                            Sense::click(),
+                        );
+                        let clicked = response.clicked()
+                            || ui.ctx().input(|input| {
+                                input.pointer.primary_clicked()
+                                    && input
+                                        .pointer
+                                        .interact_pos()
+                                        .is_some_and(|pointer| rect.contains(pointer))
+                            });
+                        if clicked {
+                            unfold_start = Some(*start);
+                        }
+                        if pointer.is_some_and(|pointer| {
+                            pointer.y >= caret.top() && pointer.y <= caret.bottom()
+                        }) {
+                            paint_fold_chevron(ui.painter(), center, false);
+                        }
+                    }
                 });
         });
         if unfold_all {
@@ -6188,6 +6220,42 @@ impl App {
             }
 
             let editor_text = doc.buffer.as_string();
+            let fold_ranges = crate::fold::ranges(editor_text);
+            let hover_line = ui
+                .ctx()
+                .input(|input| input.pointer.hover_pos())
+                .filter(|pointer| viewport.contains(*pointer))
+                .map(|pointer| {
+                    let cursor = galley.cursor_from_pos(pointer - galley_pos);
+                    crate::util::line_column_at_char(editor_text, cursor.index).0
+                });
+            if let Some(range) = hover_line.and_then(|line| {
+                fold_ranges
+                    .iter()
+                    .find(|range| range.start_line + 1 == line && range.end_line > range.start_line)
+            }) {
+                let line_start = crate::util::char_index_at_line(editor_text, range.start_line + 1);
+                let caret = galley
+                    .pos_from_cursor(egui::text::CCursor::new(line_start))
+                    .translate(galley_pos.to_vec2());
+                let center = egui::pos2(gutter_rect.right() + 8.0, caret.center().y);
+                let rect = egui::Rect::from_center_size(center, egui::vec2(14.0, 18.0));
+                let clicked = ui.ctx().input(|input| {
+                    input.pointer.primary_clicked()
+                        && input
+                            .pointer
+                            .interact_pos()
+                            .is_some_and(|pointer| rect.contains(pointer))
+                });
+                if clicked {
+                    doc.folds.insert(range.start_line);
+                    self.find.dirty = true;
+                    ui.ctx().request_repaint();
+                }
+                if center.y >= viewport.top() && center.y <= viewport.bottom() {
+                    paint_fold_chevron(&painter, center, true);
+                }
+            }
             let squiggle_painter = painter.with_clip_rect(viewport);
             for issue in &macro_issues {
                 let line_start = crate::util::char_index_at_line(editor_text, issue.line);
@@ -8254,6 +8322,25 @@ impl App {
         }
         self.theme_settings = Some(draft);
     }
+}
+
+fn paint_fold_chevron(painter: &egui::Painter, center: egui::Pos2, expanded: bool) {
+    let stroke = Stroke::new(1.5_f32, theme::accent());
+    let (first, middle, last) = if expanded {
+        (
+            center + egui::vec2(-4.0, -2.0),
+            center + egui::vec2(0.0, 2.0),
+            center + egui::vec2(4.0, -2.0),
+        )
+    } else {
+        (
+            center + egui::vec2(-2.0, -4.0),
+            center + egui::vec2(2.0, 0.0),
+            center + egui::vec2(-2.0, 4.0),
+        )
+    };
+    painter.line_segment([first, middle], stroke);
+    painter.line_segment([middle, last], stroke);
 }
 
 struct ReadOnlyText(String);
