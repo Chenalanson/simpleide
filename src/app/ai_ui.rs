@@ -1,7 +1,7 @@
 //! AI mode layout: three large panels, chat rendering and the enter transition.
 //!
 //! The layout intentionally does not reuse the editor panels. AI mode owns the
-//! whole window so the "shatter into a meteor" transition can cover every
+//! whole window so the fog/desktop reveal and the two meteors can cover every
 //! widget without fighting panel clipping.
 
 use std::time::Duration;
@@ -15,13 +15,32 @@ use super::{AiChatMessage, App};
 use crate::log::Severity;
 use crate::theme;
 
-const TRANSITION_SECS: f32 = 2.75;
-const METEOR_START: f32 = 0.72;
-const METEOR_END: f32 = 1.72;
-const PANEL_START: f32 = 1.48;
+pub(super) const AI_EARLY_FOG_SECS: f32 = 0.50;
+const TRANSITION_SECS: f32 = 3.05;
+const METEOR_RIGHT_START: f32 = 1.15;
+const METEOR_RIGHT_END: f32 = 1.95;
+const METEOR_OUTPUT_START: f32 = 1.35;
+const METEOR_OUTPUT_END: f32 = 2.25;
+const PANEL_START: f32 = 1.75;
 const PANEL_STAGGER: f32 = 0.14;
-const PANEL_DURATION: f32 = 0.92;
+const PANEL_DURATION: f32 = 0.95;
 const INPUT_ID: &str = "simple_embedded_ai_input";
+
+#[derive(Default)]
+struct WorkbenchActions {
+    original_mode: bool,
+    open_settings: bool,
+    refresh_skill: bool,
+}
+
+#[derive(Clone, Copy)]
+struct MeteorSpec {
+    target: egui::Pos2,
+    start: f32,
+    end: f32,
+    seed: f32,
+    scale: f32,
+}
 
 impl App {
     pub(super) fn show_ai_mode(&mut self, ui: &mut egui::Ui) {
@@ -39,6 +58,14 @@ impl App {
             .map(|(started, _)| started.elapsed().as_secs_f32())
             .unwrap_or(TRANSITION_SECS);
         let progress = (elapsed / TRANSITION_SECS).clamp(0.0, 1.0);
+
+        if self.ai.transition.is_some() && self.ai.fog_texture.is_none() {
+            self.ai.fog_texture = Some(ui.ctx().load_texture(
+                "simple_embedded_ai_fog",
+                fog_image(256),
+                egui::TextureOptions::LINEAR_REPEAT,
+            ));
+        }
 
         let margin = 12.0_f32;
         let gap = 10.0_f32;
@@ -58,26 +85,26 @@ impl App {
         let input = Rect::from_min_max(egui::pos2(left.left(), output.bottom() + gap), left.max);
 
         let reveal_right = reveal_at(elapsed, 0);
-        let reveal_input = reveal_at(elapsed, 1);
-        let reveal_output = reveal_at(elapsed, 2);
+        let reveal_output = reveal_at(elapsed, 1);
+        let reveal_input = reveal_at(elapsed, 2);
+        let right_orb = egui::pos2(right.center().x, right.top() + 66.0);
+        let output_orb = egui::pos2(output.center().x, output.top() + 99.0);
 
         let mut send = false;
         let mut clear = false;
         let mut quick_prompt = None;
-        let mut open_settings = false;
-        let mut original_mode = false;
-        let mut refresh_skill = false;
+        let mut workbench = WorkbenchActions::default();
 
-        self.ai_output_panel(ui, output, reveal_output, &mut clear, &mut quick_prompt);
-        self.ai_input_panel(ui, input, reveal_input, &mut send);
-        self.ai_workbench_panel(
+        self.ai_output_panel(
             ui,
-            right,
-            reveal_right,
-            &mut original_mode,
-            &mut open_settings,
-            &mut refresh_skill,
+            output,
+            reveal_output,
+            output_orb,
+            &mut clear,
+            &mut quick_prompt,
         );
+        self.ai_input_panel(ui, input, reveal_input, &mut send);
+        self.ai_workbench_panel(ui, right, reveal_right, right_orb, &mut workbench);
 
         if clear {
             self.clear_ai_chat();
@@ -86,13 +113,13 @@ impl App {
             self.ai.input = prompt.to_owned();
             self.ai.focus_input = true;
         }
-        if refresh_skill {
+        if workbench.refresh_skill {
             self.refresh_ai_skill();
         }
-        if open_settings {
+        if workbench.open_settings {
             self.open_ai_settings();
         }
-        if original_mode {
+        if workbench.original_mode {
             self.exit_ai_mode();
         }
         if send {
@@ -104,16 +131,52 @@ impl App {
             let from = transition
                 .map(|(_, from)| from)
                 .filter(|from| from.width() > 1.0 && from.height() > 1.0);
-            paint_transition(ui, from, view, right, elapsed);
+            paint_transition(
+                ui,
+                from,
+                view,
+                elapsed,
+                self.ai.fog_texture.as_ref(),
+                right_orb,
+                output_orb,
+            );
         } else if self.ai.transition.is_some() {
             self.ai.transition = None;
         }
 
-        // Slow orb animation while AI mode is idle; faster while waiting for a
-        // reply so the panel still feels alive during long requests.
-        let repaint = if self.ai.sending { 60 } else { 180 };
+        // Keep the orb rotation smooth instead of stepping at the old 180 ms
+        // idle rate; 30 fps is enough for the slow rings, 60 fps while waiting.
+        let repaint = if self.ai.sending { 16 } else { 33 };
         ui.ctx()
             .request_repaint_after(Duration::from_millis(repaint));
+    }
+
+    /// The first ~0.3 s still render the editor (under an increasing fog) so
+    /// the dissolve is visible; then `show_ai_mode` takes over while the fog is
+    /// already opaque.
+    pub(super) fn show_ai_early_fog(&mut self, ui: &mut egui::Ui, elapsed: f32) {
+        if self.ai.fog_texture.is_none() {
+            self.ai.fog_texture = Some(ui.ctx().load_texture(
+                "simple_embedded_ai_fog",
+                fog_image(256),
+                egui::TextureOptions::LINEAR_REPEAT,
+            ));
+        }
+        let strength = smoothstep((elapsed / AI_EARLY_FOG_SECS).clamp(0.0, 1.0));
+        if strength <= 0.001 {
+            return;
+        }
+        let view = ui.max_rect();
+        if let Some(fog) = &self.ai.fog_texture {
+            paint_fog(
+                ui.painter(),
+                view,
+                self.last_editor_rect,
+                fog,
+                elapsed,
+                strength,
+            );
+        }
     }
 
     fn ai_output_panel(
@@ -121,10 +184,11 @@ impl App {
         ui: &mut egui::Ui,
         rect: Rect,
         reveal: f32,
+        origin: egui::Pos2,
         clear: &mut bool,
         quick_prompt: &mut Option<&'static str>,
     ) {
-        ai_panel(ui, rect, reveal, |ui| {
+        ai_panel(ui, rect, reveal, origin, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new("AI 输出")
@@ -195,7 +259,7 @@ impl App {
             && !self.ai.input.trim().is_empty();
         let mut remove_context = false;
 
-        ai_panel(ui, rect, reveal, |ui| {
+        ai_panel(ui, rect, reveal, rect.right_bottom(), |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new("输入")
@@ -295,11 +359,10 @@ impl App {
         ui: &mut egui::Ui,
         rect: Rect,
         reveal: f32,
-        original_mode: &mut bool,
-        open_settings: &mut bool,
-        refresh_skill: &mut bool,
+        origin: egui::Pos2,
+        actions: &mut WorkbenchActions,
     ) {
-        ai_panel(ui, rect, reveal, |ui| {
+        ai_panel(ui, rect, reveal, origin, |ui| {
             let footer = 42.0;
             let content_height = (ui.available_height() - footer).max(60.0);
             ScrollArea::vertical()
@@ -366,7 +429,7 @@ impl App {
                         self.ai.skill_files,
                         self.ai.skill_builtin,
                         self.ai.skill_error.as_deref(),
-                        refresh_skill,
+                        &mut actions.refresh_skill,
                     );
 
                     ui.add_space(10.0);
@@ -425,7 +488,7 @@ impl App {
                     .on_hover_text("填写 API Key、接口地址和模型名称")
                     .clicked()
                 {
-                    *open_settings = true;
+                    actions.open_settings = true;
                 }
                 ui.add_space(4.0);
                 if ui
@@ -433,7 +496,7 @@ impl App {
                     .on_hover_text("返回编辑器（Ctrl+Alt+A）")
                     .clicked()
                 {
-                    *original_mode = true;
+                    actions.original_mode = true;
                 }
             });
         });
@@ -592,6 +655,31 @@ fn reveal_at(elapsed: f32, index: usize) -> f32 {
     smoothstep(((elapsed - start) / PANEL_DURATION).clamp(0.0, 1.0))
 }
 
+/// Native window opacity during the transition. `0` makes the whole window
+/// (including its title bar) transparent, exposing the desktop behind it.
+pub(super) fn ai_window_alpha(elapsed: f32) -> u8 {
+    let value = if elapsed < 0.45 {
+        1.0
+    } else if elapsed < 1.20 {
+        1.0 - smoothstep((elapsed - 0.45) / 0.75)
+    } else if elapsed < 1.65 {
+        0.0
+    } else if elapsed < 2.15 {
+        smoothstep((elapsed - 1.65) / 0.50)
+    } else {
+        1.0
+    };
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn fog_strength(elapsed: f32) -> f32 {
+    if elapsed < 0.45 {
+        1.0
+    } else {
+        (1.0 - (elapsed - 0.45) / 0.85).clamp(0.0, 1.0)
+    }
+}
+
 fn smoothstep(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -606,7 +694,7 @@ fn ease_in_out(t: f32) -> f32 {
     smoothstep(t)
 }
 
-fn ai_panel(ui: &mut Ui, rect: Rect, reveal: f32, add: impl FnOnce(&mut Ui)) {
+fn ai_panel(ui: &mut Ui, rect: Rect, reveal: f32, origin: egui::Pos2, add: impl FnOnce(&mut Ui)) {
     let p = reveal.clamp(0.0, 1.0);
     if p <= 0.0 {
         return;
@@ -628,25 +716,27 @@ fn ai_panel(ui: &mut Ui, rect: Rect, reveal: f32, add: impl FnOnce(&mut Ui)) {
     );
 
     let content_rect = rect.shrink2(egui::vec2(14.0, 12.0));
-    let anchor = rect.right_bottom();
+    let origin = egui::pos2(
+        origin.x.clamp(rect.left(), rect.right()),
+        origin.y.clamp(rect.top(), rect.bottom()),
+    );
     let eased = ease_out_cubic(p);
+    let left = (origin.x - rect.left()).max(0.0);
+    let right = (rect.right() - origin.x).max(0.0);
+    let top = (origin.y - rect.top()).max(0.0);
+    let bottom = (rect.bottom() - origin.y).max(0.0);
     let revealed = Rect::from_min_max(
-        egui::pos2(
-            anchor.x + (rect.left() - anchor.x) * eased,
-            anchor.y + (rect.top() - anchor.y) * eased,
-        ),
-        anchor,
+        egui::pos2(origin.x - left * eased, origin.y - top * eased),
+        egui::pos2(origin.x + right * eased, origin.y + bottom * eased),
     );
     let clip = revealed.intersect(content_rect);
     if p < 0.999 {
         let glow = theme::with_alpha(theme::accent(), ((1.0 - p) * 150.0) as u8);
-        painter.line_segment(
-            [clip.left_top(), clip.right_top()],
+        painter.rect_stroke(
+            clip,
+            CornerRadius::same(8),
             Stroke::new(1.3_f32, glow),
-        );
-        painter.line_segment(
-            [clip.left_top(), clip.left_bottom()],
-            Stroke::new(1.3_f32, glow),
+            egui::StrokeKind::Inside,
         );
     }
 
@@ -1117,148 +1207,217 @@ fn paint_orb(ui: &Ui, center: egui::Pos2, radius: f32, time: f64, active: bool) 
     );
 }
 
-fn paint_transition(ui: &Ui, from: Option<Rect>, view: Rect, target: Rect, elapsed: f32) {
+fn fog_image(size: usize) -> egui::ColorImage {
+    let mut pixels = Vec::with_capacity(size * size);
+    for y in 0..size {
+        for x in 0..size {
+            let u = x as f32 / size as f32;
+            let v = y as f32 / size as f32;
+            let mut value = 0.0;
+            let mut amplitude = 0.55;
+            let mut frequency = 4u32;
+            for octave in 0..4u32 {
+                value += amplitude * value_noise(u, v, frequency, octave * 97 + 13);
+                amplitude *= 0.5;
+                frequency *= 2;
+            }
+            let alpha = (value.clamp(0.0, 1.0) * 255.0) as u8;
+            pixels.push(Color32::from_white_alpha(alpha));
+        }
+    }
+    egui::ColorImage::new([size, size], pixels)
+}
+
+fn value_noise(u: f32, v: f32, frequency: u32, seed: u32) -> f32 {
+    let x = u.clamp(0.0, 1.0) * frequency as f32;
+    let y = v.clamp(0.0, 1.0) * frequency as f32;
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let tx = smoothstep(x - x.floor());
+    let ty = smoothstep(y - y.floor());
+    let wrap = |n: u32| n % frequency.max(1);
+    let a = hash_noise(wrap(x0), wrap(y0), seed);
+    let b = hash_noise(wrap(x0 + 1), wrap(y0), seed);
+    let c = hash_noise(wrap(x0), wrap(y0 + 1), seed);
+    let d = hash_noise(wrap(x0 + 1), wrap(y0 + 1), seed);
+    let top = a + (b - a) * tx;
+    let bottom = c + (d - c) * tx;
+    top + (bottom - top) * ty
+}
+
+fn hash_noise(x: u32, y: u32, seed: u32) -> f32 {
+    let mut h = x.wrapping_mul(374_761_393) ^ y.wrapping_mul(668_265_263) ^ seed;
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    ((h ^ (h >> 16)) & 0xFFFF) as f32 / 65_535.0
+}
+
+fn paint_transition(
+    ui: &Ui,
+    from: Option<Rect>,
+    view: Rect,
+    elapsed: f32,
+    fog: Option<&egui::TextureHandle>,
+    right_orb: egui::Pos2,
+    output_orb: egui::Pos2,
+) {
     let painter = ui.painter();
-    let veil = if elapsed < 0.55 {
-        (elapsed / 0.55 * 120.0).clamp(0.0, 120.0)
-    } else {
-        120.0 * (1.0 - ((elapsed - 1.1) / 0.55).clamp(0.0, 1.0))
-    };
+    let strength = fog_strength(elapsed);
+    if strength > 0.001 {
+        if let Some(fog) = fog {
+            paint_fog(painter, view, from, fog, elapsed, strength);
+        } else {
+            paint_fog_fallback(painter, view, from, elapsed, strength);
+        }
+    }
+    // One meteor lands on each AI core. The second one is slightly smaller and
+    // later so the two impacts read as a pair rather than a single blink.
+    paint_meteor(
+        painter,
+        view,
+        MeteorSpec {
+            target: right_orb,
+            start: METEOR_RIGHT_START,
+            end: METEOR_RIGHT_END,
+            seed: 0.0,
+            scale: 1.0,
+        },
+        elapsed,
+    );
+    paint_meteor(
+        painter,
+        view,
+        MeteorSpec {
+            target: output_orb,
+            start: METEOR_OUTPUT_START,
+            end: METEOR_OUTPUT_END,
+            seed: 1.0,
+            scale: 0.82,
+        },
+        elapsed,
+    );
+}
+
+fn paint_fog(
+    painter: &egui::Painter,
+    view: Rect,
+    editor: Option<Rect>,
+    fog: &egui::TextureHandle,
+    elapsed: f32,
+    strength: f32,
+) {
+    let tint = theme::blend(Color32::WHITE, theme::accent(), 0.18);
+    let drift = elapsed * 0.035;
+    let first = Rect::from_min_max(
+        egui::pos2(drift * 0.35, drift * 0.2),
+        egui::pos2(1.0 + drift * 0.35, 1.0 + drift * 0.2),
+    );
+    painter.image(
+        fog.id(),
+        view.expand(90.0),
+        first,
+        theme::with_alpha(tint, (strength * 118.0) as u8),
+    );
+    let second = Rect::from_min_max(
+        egui::pos2(0.55 - drift * 0.5, 0.15 + drift * 0.42),
+        egui::pos2(1.55 - drift * 0.5, 1.15 + drift * 0.42),
+    );
+    painter.image(
+        fog.id(),
+        view.expand(140.0),
+        second,
+        theme::with_alpha(tint, (strength * 78.0) as u8),
+    );
+    paint_mist_particles(painter, view, editor, elapsed, strength, tint);
+}
+
+fn paint_fog_fallback(
+    painter: &egui::Painter,
+    view: Rect,
+    editor: Option<Rect>,
+    elapsed: f32,
+    strength: f32,
+) {
+    let tint = theme::blend(theme::editor_bg(), theme::text(), 0.36);
     painter.rect_filled(
         view,
         CornerRadius::ZERO,
-        Color32::from_black_alpha(veil as u8),
+        theme::with_alpha(tint, (strength * 54.0) as u8),
     );
-    if let Some(from) = from {
-        paint_shatter(painter, from, elapsed);
-    }
-    paint_meteor(painter, view, target, elapsed);
+    paint_mist_particles(painter, view, editor, elapsed, strength, tint);
 }
 
-fn paint_shatter(painter: &egui::Painter, from: Rect, elapsed: f32) {
-    if from.width() < 24.0 || from.height() < 24.0 {
-        return;
-    }
-    let cols = 18usize;
-    let rows = ((from.height() / from.width() * cols as f32).round() as usize).clamp(6, 30);
-    let cell_w = from.width() / cols as f32;
-    let cell_h = from.height() / rows as f32;
-    let center = from.center();
-    let palette = [
-        theme::text(),
-        theme::accent(),
-        theme::success(),
-        theme::warning(),
-        theme::info(),
-    ];
-
-    for row in 0..rows {
-        for col in 0..cols {
-            let seed = (row * cols + col) as u32 * 2_654_435_761 + 0x9E37;
-            let mut rng = Lcg::new(seed);
-            let delay = rng.next() * 0.22;
-            let life = 0.55 + rng.next() * 0.45;
-            let local = ((elapsed - delay) / life).clamp(0.0, 1.0);
-            if local >= 1.0 {
-                continue;
-            }
-            let cell = Rect::from_min_size(
-                egui::pos2(
-                    from.left() + col as f32 * cell_w,
-                    from.top() + row as f32 * cell_h,
-                ),
-                egui::vec2(cell_w, cell_h),
-            );
-            let tint = palette[(rng.next() * palette.len() as f32) as usize % palette.len()];
-            let base = theme::blend(theme::editor_bg(), tint, 0.04 + rng.next() * 0.11);
-            let alpha = ((1.0 - local) * 255.0) as u8;
-            let fill = theme::with_alpha(base, alpha);
-
-            let mut direction = cell.center() - center;
-            if direction.length_sq() < 1.0 {
-                direction = egui::vec2(1.0, -1.0);
-            }
-            let jitter = egui::vec2(rng.next() - 0.5, rng.next() - 0.5) * 0.9;
-            let speed = 40.0 + rng.next() * 250.0;
-            let travel = local * local;
-            let offset = (direction.normalized() + jitter) * (speed * travel)
-                + egui::vec2(0.0, 80.0 * travel);
-            let angle = (rng.next() - 0.5) * 2.4 * local;
-
-            let corners = rotated_corners(cell.shrink(0.6), angle)
-                .into_iter()
-                .map(|point| point + offset)
-                .collect::<Vec<_>>();
-            painter.add(egui::Shape::convex_polygon(
-                corners.clone(),
-                fill,
-                Stroke::NONE,
-            ));
-
-            if cell_w > 16.0 && cell_h > 8.0 {
-                for line in 0..2 {
-                    let ratio = if line == 0 { 0.36 } else { 0.68 };
-                    let y = cell.top() + cell_h * ratio;
-                    let start = egui::pos2(cell.left() + cell_w * 0.12, y);
-                    let end = egui::pos2(cell.right() - cell_w * (0.12 + rng.next() * 0.42), y);
-                    let start = rotate_point(start, cell.center(), angle) + offset;
-                    let end = rotate_point(end, cell.center(), angle) + offset;
-                    painter.line_segment(
-                        [start, end],
-                        Stroke::new(
-                            1.0_f32,
-                            theme::with_alpha(tint, (f32::from(alpha) * 0.5) as u8),
-                        ),
-                    );
-                }
-            }
-            if local < 0.3 && rng.next() > 0.82 {
-                painter.line_segment(
-                    [corners[0], corners[1]],
-                    Stroke::new(
-                        0.8_f32,
-                        theme::with_alpha(Color32::WHITE, (f32::from(alpha) * 0.35) as u8),
-                    ),
-                );
-            }
+fn paint_mist_particles(
+    painter: &egui::Painter,
+    view: Rect,
+    editor: Option<Rect>,
+    elapsed: f32,
+    strength: f32,
+    tint: Color32,
+) {
+    let source = editor.unwrap_or(view);
+    let mut rng = Lcg::new(0xF09_1A2B);
+    for _ in 0..48 {
+        let delay = rng.next() * 0.35;
+        let life = 0.65 + rng.next() * 0.7;
+        let local = ((elapsed - delay) / life).clamp(0.0, 1.0);
+        if local >= 1.0 {
+            continue;
         }
-    }
-
-    let spark = (elapsed / 0.95).clamp(0.0, 1.0);
-    if spark < 1.0 {
-        let mut rng = Lcg::new(0x51A7_9E01);
-        for _ in 0..44 {
-            let angle = rng.next() * std::f32::consts::TAU;
-            let speed = 30.0 + rng.next() * 280.0;
-            let direction = egui::vec2(angle.cos(), angle.sin());
-            let position =
-                center + direction * (speed * spark) + egui::vec2(0.0, 120.0 * spark * spark);
-            let alpha = ((1.0 - spark) * 200.0) as u8;
+        let start = egui::pos2(
+            source.left() + rng.next() * source.width(),
+            source.top() + rng.next() * source.height(),
+        );
+        let drift = egui::vec2(
+            (rng.next() - 0.5) * 190.0 * local,
+            -35.0 * local - 110.0 * local * local,
+        );
+        let position = start + drift;
+        let radius = 16.0 + rng.next() * 52.0;
+        let alpha = ((1.0 - local) * strength * 26.0) as u8;
+        for ring in 0..3 {
             painter.circle_filled(
                 position,
-                1.0 + rng.next() * 1.9,
-                theme::with_alpha(theme::accent(), alpha),
+                radius * (1.0 - ring as f32 * 0.22),
+                theme::with_alpha(tint, alpha / (ring as u8 + 1)),
             );
         }
     }
 }
 
-fn paint_meteor(painter: &egui::Painter, view: Rect, target: Rect, elapsed: f32) {
-    let travel = ((elapsed - METEOR_START) / (METEOR_END - METEOR_START)).clamp(0.0, 1.0);
+fn paint_meteor(painter: &egui::Painter, view: Rect, spec: MeteorSpec, elapsed: f32) {
+    let travel = ((elapsed - spec.start) / (spec.end - spec.start)).clamp(0.0, 1.0);
     if travel <= 0.0 {
         return;
     }
-    let start = egui::pos2(view.right() + 140.0, view.bottom() + 190.0);
-    let end = egui::pos2(target.right() - 26.0, target.bottom() - 24.0);
-    let control = egui::pos2(view.right() - 20.0, view.bottom() - 150.0);
-    let head = bezier(start, control, end, ease_in_out(travel));
+    let start = egui::pos2(
+        view.right() + 140.0 + spec.seed * 90.0,
+        view.bottom() + 190.0 + spec.seed * 70.0,
+    );
+    let control = if spec.target.x > view.center().x {
+        egui::pos2(view.right() - 20.0, view.bottom() - 150.0)
+    } else {
+        egui::pos2(view.center().x + view.width() * 0.12, view.bottom() - 60.0)
+    };
+    let head = bezier(start, control, spec.target, ease_in_out(travel));
 
-    for step in (0..=28).rev() {
+    let steps = 28;
+    let mut previous = None;
+    for step in (0..=steps).rev() {
         let t = (travel - step as f32 * 0.011).clamp(0.0, 1.0);
-        let position = bezier(start, control, end, ease_in_out(t));
-        let fraction = step as f32 / 28.0;
-        let alpha = ((1.0 - fraction) * (travel * 1.8).min(1.0) * 190.0) as u8;
-        let radius = (5.6 - fraction * 4.3).max(0.5);
+        let position = bezier(start, control, spec.target, ease_in_out(t));
+        let fraction = step as f32 / steps as f32;
+        let alpha = ((1.0 - fraction) * (travel * 1.8).min(1.0) * 190.0 * spec.scale) as u8;
+        let radius = ((5.6 - fraction * 4.3) * spec.scale).max(0.5);
+        if let Some(previous) = previous {
+            painter.line_segment(
+                [previous, position],
+                Stroke::new(
+                    (1.2 * spec.scale).max(0.5),
+                    theme::with_alpha(theme::accent(), alpha),
+                ),
+            );
+        }
+        previous = Some(position);
         painter.circle_filled(position, radius, theme::with_alpha(theme::accent(), alpha));
     }
     for (radius, alpha) in [(30.0_f32, 16_u8), (18.0, 36), (10.0, 90), (4.4, 255)] {
@@ -1267,16 +1426,16 @@ fn paint_meteor(painter: &egui::Painter, view: Rect, target: Rect, elapsed: f32)
         } else {
             theme::with_alpha(theme::accent(), alpha)
         };
-        painter.circle_filled(head, radius, color);
+        painter.circle_filled(head, radius * spec.scale, color);
     }
 
     if travel >= 1.0 {
-        let impact = ((elapsed - METEOR_END) / 0.55).clamp(0.0, 1.0);
+        let impact = ((elapsed - spec.end) / 0.55).clamp(0.0, 1.0);
         if impact < 1.0 {
             for ring in 0..3 {
-                let radius = 8.0 + (impact + ring as f32 * 0.18) * 140.0;
+                let radius = (8.0 + (impact + ring as f32 * 0.18) * 140.0) * spec.scale;
                 painter.circle_stroke(
-                    end,
+                    spec.target,
                     radius,
                     Stroke::new(
                         2.0_f32,
@@ -1284,28 +1443,16 @@ fn paint_meteor(painter: &egui::Painter, view: Rect, target: Rect, elapsed: f32)
                     ),
                 );
             }
+            let flash = ((elapsed - spec.end) / 0.16).clamp(0.0, 1.0);
+            if flash < 1.0 {
+                painter.circle_filled(
+                    spec.target,
+                    (10.0 + flash * 22.0) * spec.scale,
+                    theme::with_alpha(Color32::WHITE, ((1.0 - flash) * 180.0) as u8),
+                );
+            }
         }
     }
-}
-
-fn rotated_corners(rect: Rect, angle: f32) -> [egui::Pos2; 4] {
-    let center = rect.center();
-    [
-        rotate_point(rect.left_top(), center, angle),
-        rotate_point(rect.right_top(), center, angle),
-        rotate_point(rect.right_bottom(), center, angle),
-        rotate_point(rect.left_bottom(), center, angle),
-    ]
-}
-
-fn rotate_point(point: egui::Pos2, center: egui::Pos2, angle: f32) -> egui::Pos2 {
-    let (sin, cos) = angle.sin_cos();
-    let offset = point - center;
-    center
-        + egui::vec2(
-            offset.x * cos - offset.y * sin,
-            offset.x * sin + offset.y * cos,
-        )
 }
 
 fn bezier(start: egui::Pos2, control: egui::Pos2, end: egui::Pos2, t: f32) -> egui::Pos2 {
@@ -1354,7 +1501,23 @@ mod tests {
     fn transition_duration_covers_all_panels() {
         let end = PANEL_START + 2.0 * PANEL_STAGGER + PANEL_DURATION;
         assert!(end < TRANSITION_SECS);
-        assert!(METEOR_END < end);
+        assert!(METEOR_RIGHT_END < end);
+        assert!(METEOR_OUTPUT_END < end);
+    }
+
+    #[test]
+    fn window_alpha_exposes_desktop_and_restores() {
+        assert_eq!(ai_window_alpha(0.0), 255);
+        assert_eq!(ai_window_alpha(1.4), 0);
+        assert_eq!(ai_window_alpha(2.4), 255);
+    }
+
+    #[test]
+    fn fog_image_is_varied_noise() {
+        let image = fog_image(32);
+        assert_eq!(image.size, [32, 32]);
+        assert!(image.pixels.iter().any(|pixel| pixel.a() > 0));
+        assert!(image.pixels.iter().any(|pixel| pixel.a() < 255));
     }
 
     #[test]

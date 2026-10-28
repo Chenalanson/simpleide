@@ -748,6 +748,8 @@ struct AiState {
     skill_files: usize,
     skill_error: Option<String>,
     skill_builtin: bool,
+    fog_texture: Option<egui::TextureHandle>,
+    window_layered: bool,
 }
 
 struct AiSettingsDraft {
@@ -8485,6 +8487,43 @@ impl App {
         }
     }
 
+    /// Fade the whole native window while AI mode is dissolving, so the
+    /// desktop is visible between the old editor and the new AI surface.
+    /// Layered windows keep the current OpenGL renderer; the alpha is applied
+    /// by DWM when the window is composited.
+    fn apply_ai_window_opacity(&mut self, frame: &eframe::Frame) {
+        #[cfg(target_os = "windows")]
+        {
+            let target = if self.ai.enabled {
+                self.ai
+                    .transition
+                    .as_ref()
+                    .map(|transition| {
+                        crate::app::ai_ui::ai_window_alpha(
+                            transition.started.elapsed().as_secs_f32(),
+                        )
+                    })
+                    .unwrap_or(255)
+            } else {
+                255
+            };
+            let Some(hwnd) = window_hwnd(frame) else {
+                return;
+            };
+            if self.ai.enabled && self.ai.transition.is_some() {
+                if target < 255 || self.ai.window_layered {
+                    set_window_alpha(hwnd, target, false, &mut self.ai.window_layered);
+                }
+            } else if self.ai.window_layered {
+                set_window_alpha(hwnd, 255, true, &mut self.ai.window_layered);
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = frame;
+        }
+    }
+
     fn sync_title(&mut self, ctx: &egui::Context) {
         let base = if self.ai.enabled {
             format!("AI 模式 · {APP_NAME}")
@@ -8960,15 +8999,25 @@ impl eframe::App for App {
         self.style_native_window(&ctx, frame);
 
         let mut actions = Vec::new();
+        let ai_elapsed = if self.ai.enabled {
+            self.ai
+                .transition
+                .as_ref()
+                .map(|transition| transition.started.elapsed().as_secs_f32())
+        } else {
+            None
+        };
+        let early_ai_fog =
+            ai_elapsed.is_some_and(|elapsed| elapsed < crate::app::ai_ui::AI_EARLY_FOG_SECS);
 
-        if !self.immersive && !self.ai.enabled {
+        if !self.immersive && (!self.ai.enabled || early_ai_fog) {
             self.show_status_bar(ui, &mut actions);
         }
         let old_spacing = ui.spacing().item_spacing;
         let old_resize = ui.style().interaction.resize_grab_radius_side;
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.style_mut().interaction.resize_grab_radius_side = 0.0;
-        if self.ai.enabled {
+        if self.ai.enabled && !early_ai_fog {
             self.show_ai_mode(ui);
         } else if self.immersive {
             self.show_center(ui, &mut actions);
@@ -8980,9 +9029,15 @@ impl eframe::App for App {
         }
         ui.spacing_mut().item_spacing = old_spacing;
         ui.style_mut().interaction.resize_grab_radius_side = old_resize;
+        if early_ai_fog {
+            if let Some(elapsed) = ai_elapsed {
+                self.show_ai_early_fog(ui, elapsed);
+            }
+        }
         if self.immersive && !self.ai.enabled {
             self.show_immersive_explorer(&ctx, &mut actions);
         }
+        self.apply_ai_window_opacity(frame);
         self.update_completion(&ctx);
         if self
             .lsp
@@ -9201,6 +9256,81 @@ fn style_windows_titlebar(hwnd: isize) {
             (&text as *const u32).cast(),
             std::mem::size_of::<u32>() as u32,
         );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn window_hwnd(frame: &eframe::Frame) -> Option<isize> {
+    if let Ok(handle) = frame.window_handle() {
+        if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+            return Some(win32.hwnd.get());
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn set_window_alpha(hwnd: isize, alpha: u8, remove: bool, layered: &mut bool) {
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_EX_LAYERED: u32 = 0x0008_0000;
+    const LWA_ALPHA: u32 = 0x0000_0002;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetWindowLongW(hwnd: isize, index: i32) -> i32;
+        fn SetWindowLongW(hwnd: isize, index: i32, value: i32) -> i32;
+        fn SetLayeredWindowAttributes(hwnd: isize, key: u32, alpha: u8, flags: u32) -> i32;
+        fn SetWindowPos(
+            hwnd: isize,
+            after: isize,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> i32;
+    }
+
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if remove {
+            if *layered || style & WS_EX_LAYERED != 0 {
+                SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+                if style & WS_EX_LAYERED != 0 {
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, (style & !WS_EX_LAYERED) as i32);
+                    SetWindowPos(
+                        hwnd,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                    );
+                }
+            }
+            *layered = false;
+            return;
+        }
+        if style & WS_EX_LAYERED == 0 {
+            SetWindowLongW(hwnd, GWL_EXSTYLE, (style | WS_EX_LAYERED) as i32);
+            SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
+        *layered = true;
     }
 }
 
