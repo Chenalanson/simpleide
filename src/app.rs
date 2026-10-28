@@ -2521,6 +2521,11 @@ impl App {
         }) else {
             return;
         };
+        if !crate::lsp::supports_lsp(&path) {
+            self.set_toast("当前文件不支持代码补全", Severity::Info);
+            self.completion.open = false;
+            return;
+        }
         let items = self.completion_items(&context);
         self.completion.query = context.prefix;
         self.completion.prefix_start = context.prefix_start;
@@ -2635,6 +2640,13 @@ impl App {
             self.completion.open = false;
             return;
         };
+        if !crate::lsp::supports_lsp(&path) {
+            self.completion.open = false;
+            self.completion.path = Some(path);
+            self.completion.last_revision = revision;
+            self.completion.last_cursor = cursor;
+            return;
+        }
         let editor_id = egui::Id::new(("simple_embedded_code_editor", &path));
         let focused = ctx.memory(|memory| memory.has_focus(editor_id));
         if !focused || self.has_modal() {
@@ -5696,6 +5708,9 @@ impl App {
             return;
         };
         let path = doc.path.clone();
+        if !crate::lsp::supports_lsp(&path) {
+            return;
+        }
         let text = doc.buffer.as_string().to_owned();
         let cursor = crate::util::char_index_at_line(&text, line) + column.saturating_sub(1);
         if let Some(session) = self.lsp.as_mut() {
@@ -5730,6 +5745,10 @@ impl App {
         };
         if doc.read_only {
             self.set_toast("只读文件不能重命名", Severity::Warning);
+            return;
+        }
+        if !crate::lsp::supports_lsp(&doc.path) {
+            self.set_toast("clangd 只支持 C/C++ 文件", Severity::Info);
             return;
         }
         let Some(word) = self.current_word() else {

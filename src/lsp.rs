@@ -761,11 +761,18 @@ impl Session {
         if !self.is_ready() {
             return Vec::new();
         }
+        // Never send Makefiles, Python files or project JSON to clangd. It
+        // would parse them as C and produce a large diagnostics stream on every
+        // keystroke, which made editing non-C files feel sluggish.
+        let docs = docs
+            .iter()
+            .filter(|(path, _)| supports_lsp(path))
+            .collect::<Vec<_>>();
         let now = Instant::now();
         let mut needed = Vec::new();
         let current = docs
             .iter()
-            .map(|(path, _)| path.clone())
+            .map(|(path, _)| (*path).clone())
             .collect::<BTreeSet<_>>();
         let stale = self
             .opened
@@ -800,6 +807,9 @@ impl Session {
     }
 
     pub fn feed(&mut self, path: &Path, text: &str, revision: u64) {
+        if !supports_lsp(path) {
+            return;
+        }
         let uri = path_to_uri(path);
         if !self.opened.contains(path) {
             self.opened.insert(path.to_path_buf());
@@ -833,6 +843,9 @@ impl Session {
     }
 
     pub fn definition(&mut self, path: &Path, text: &str, cursor: usize) -> Result<(), String> {
+        if !supports_lsp(path) {
+            return Err("当前文件不是 C/C++，使用轻量符号索引".to_owned());
+        }
         self.text_request(
             "textDocument/definition",
             path,
@@ -843,6 +856,9 @@ impl Session {
     }
 
     pub fn references(&mut self, path: &Path, text: &str, cursor: usize) -> Result<(), String> {
+        if !supports_lsp(path) {
+            return Err("当前文件不是 C/C++，使用工程搜索".to_owned());
+        }
         if !self.is_ready() {
             return Err("clangd 尚未就绪".to_owned());
         }
@@ -857,7 +873,7 @@ impl Session {
     }
 
     pub fn hover(&mut self, path: &Path, text: &str, cursor: usize) -> Result<(), String> {
-        if !self.is_ready() {
+        if !self.is_ready() || !supports_lsp(path) {
             return Ok(());
         }
         let line_column = char_to_position(text, cursor);
@@ -897,7 +913,7 @@ impl Session {
         revision: u64,
         prefix_start: usize,
     ) -> Result<(), String> {
-        if !self.is_ready() {
+        if !self.is_ready() || !supports_lsp(path) {
             return Ok(());
         }
         if self
@@ -928,6 +944,9 @@ impl Session {
         cursor: usize,
         new_name: &str,
     ) -> Result<(), String> {
+        if !supports_lsp(path) {
+            return Err("当前文件不是 C/C++".to_owned());
+        }
         let mut params = text_position_params(path, text, cursor);
         params["newName"] = Value::String(new_name.to_owned());
         let id = self.client.request("textDocument/rename", params)?;
@@ -1047,6 +1066,17 @@ impl Session {
         }
         events
     }
+}
+
+/// clangd only understands C/C++ translation units; feeding Makefiles or
+/// Python files to it makes it parse them as C and burns CPU on diagnostics.
+pub fn supports_lsp(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .as_deref(),
+        Some("c" | "h" | "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" | "ino")
+    )
 }
 
 fn language_id(path: &Path) -> &'static str {
@@ -1363,6 +1393,16 @@ mod tests {
         assert!(text.contains("-DSTM32G431xx"));
         let normalized = text.replace('\\', "/");
         assert!(normalized.contains("-ID:/demo/Core/Inc"));
+    }
+
+    #[test]
+    fn only_c_family_files_go_to_clangd() {
+        assert!(supports_lsp(Path::new("Core/Src/main.c")));
+        assert!(supports_lsp(Path::new("BSP/bsp_usart.h")));
+        assert!(supports_lsp(Path::new("lib/foo.cpp")));
+        assert!(!supports_lsp(Path::new("Makefile")));
+        assert!(!supports_lsp(Path::new("main.py")));
+        assert!(!supports_lsp(Path::new(".simple-embedded/settings.json")));
     }
 
     #[test]

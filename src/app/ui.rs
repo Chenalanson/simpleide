@@ -976,6 +976,29 @@ impl App {
                                     ui.visuals_mut().selection.bg_fill = code_theme.selection;
                                     ui.visuals_mut().selection.stroke =
                                         Stroke::new(1.0_f32, code_theme.text);
+                                    if ui.memory(|memory| memory.has_focus(editor_id))
+                                        && ui.ctx().input(|input| {
+                                            !input.modifiers.shift && !input.modifiers.alt
+                                        })
+                                        && ui.ctx().input_mut(|input| {
+                                            input
+                                                .consume_key(egui::Modifiers::COMMAND, egui::Key::A)
+                                        })
+                                    {
+                                        let end = fold_buffer.view().chars().count();
+                                        let mut state = egui::text_edit::TextEditState::load(
+                                            ui.ctx(),
+                                            editor_id,
+                                        )
+                                        .unwrap_or_default();
+                                        state.cursor.set_char_range(Some(
+                                            egui::text::CCursorRange::two(
+                                                egui::text::CCursor::new(0),
+                                                egui::text::CCursor::new(end),
+                                            ),
+                                        ));
+                                        state.store(ui.ctx(), editor_id);
+                                    }
                                     let output = TextEdit::multiline(&mut fold_buffer)
                                         .id(editor_id)
                                         .code_editor()
@@ -6126,6 +6149,30 @@ impl App {
                                 ui.visuals_mut().selection.bg_fill = code_theme.selection;
                                 ui.visuals_mut().selection.stroke =
                                     Stroke::new(1.0_f32, code_theme.text);
+                                // egui scrolls to the primary cursor whenever the
+                                // selection changes, so Ctrl+A would jump to the
+                                // end of the file. Select all ourselves and let the
+                                // TextEdit see an unchanged selection.
+                                if editor_focused
+                                    && ui.ctx().input(|input| {
+                                        !input.modifiers.shift && !input.modifiers.alt
+                                    })
+                                    && ui.ctx().input_mut(|input| {
+                                        input.consume_key(egui::Modifiers::COMMAND, egui::Key::A)
+                                    })
+                                {
+                                    let end = doc.buffer.as_string().chars().count();
+                                    let mut state =
+                                        egui::text_edit::TextEditState::load(ui.ctx(), editor_id)
+                                            .unwrap_or_default();
+                                    state.cursor.set_char_range(Some(
+                                        egui::text::CCursorRange::two(
+                                            egui::text::CCursor::new(0),
+                                            egui::text::CCursor::new(end),
+                                        ),
+                                    ));
+                                    state.store(ui.ctx(), editor_id);
+                                }
                                 let output = TextEdit::multiline(&mut doc.buffer)
                                     .id(editor_id)
                                     .code_editor()
@@ -6624,7 +6671,11 @@ impl App {
             }
 
             let editor_text = doc.buffer.as_string();
-            let fold_ranges = crate::fold::ranges(editor_text);
+            let fold_ranges = if crate::lsp::supports_lsp(&doc.path) {
+                crate::fold::ranges(editor_text)
+            } else {
+                Vec::new()
+            };
             let hover_line = ui
                 .ctx()
                 .input(|input| input.pointer.hover_pos())
