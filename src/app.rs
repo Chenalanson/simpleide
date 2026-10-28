@@ -294,6 +294,15 @@ struct ColumnSelectionState {
     cursor_col: usize,
 }
 
+#[derive(Clone, Debug)]
+struct MultiCursorState {
+    path: PathBuf,
+    /// Primary caret (head); the actual primary selection lives in egui.
+    primary: usize,
+    /// Secondary selections as normalized `(start, end)` character ranges.
+    secondary: Vec<(usize, usize)>,
+}
+
 #[derive(Default)]
 struct GotoLineState {
     open: bool,
@@ -986,6 +995,7 @@ pub struct App {
     goto_line: GotoLineState,
     column_edit: ColumnEditState,
     column_selection: Option<ColumnSelectionState>,
+    multi_cursor: Option<MultiCursorState>,
     split_path: Option<PathBuf>,
     split_primary: Option<PathBuf>,
     split_direction: SplitDirection,
@@ -1076,6 +1086,7 @@ impl App {
             goto_line: GotoLineState::default(),
             column_edit: ColumnEditState::default(),
             column_selection: None,
+            multi_cursor: None,
             split_path: None,
             split_primary: None,
             split_direction: SplitDirection::Right,
@@ -1286,6 +1297,7 @@ impl App {
         self.split_primary = None;
         self.split_focus = 0;
         self.column_selection = None;
+        self.multi_cursor = None;
         self.focus_editor = false;
         self.git_line_marks.clear();
         self.git_line_key = None;
@@ -6111,10 +6123,11 @@ impl App {
             self.goto_line.open = false;
             self.focus_editor = true;
         }
-        if self.column_selection.is_some()
+        if (self.column_selection.is_some() || self.multi_cursor.is_some())
             && ctx.input(|input| input.key_pressed(egui::Key::Escape))
         {
             self.column_selection = None;
+            self.multi_cursor = None;
         }
         if zoom_in || zoom_out {
             let delta = if zoom_in { 1.0 } else { -1.0 };
@@ -7346,6 +7359,18 @@ fn set_editor_cursor(ctx: &egui::Context, path: &Path, char_index: usize) {
         .cursor
         .set_char_range(Some(egui::text::CCursorRange::one(
             egui::text::CCursor::new(char_index),
+        )));
+    state.store(ctx, editor_id);
+}
+
+fn set_editor_selection(ctx: &egui::Context, path: &Path, start: usize, end: usize) {
+    let editor_id = egui::Id::new(("simple_embedded_code_editor", path));
+    let mut state = egui::text_edit::TextEditState::load(ctx, editor_id).unwrap_or_default();
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(start),
+            egui::text::CCursor::new(end),
         )));
     state.store(ctx, editor_id);
 }

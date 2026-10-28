@@ -5282,6 +5282,8 @@ impl App {
                 .filter(|(path, _)| same_path(path, &doc.path))
                 .map(|(_, line)| *line)
         });
+        let indent_width = self.settings.indent_width.max(1) as usize;
+        let use_spaces = self.settings.use_spaces;
         let Some(doc) = self.tabs.get_mut(pane_index) else {
             return;
         };
@@ -5311,11 +5313,35 @@ impl App {
         let editor_id = Id::new(("simple_embedded_code_editor", &doc.path));
         let scroll_id = Id::new(("simple_embedded_code_scroll", &doc.path));
         let read_only = doc.read_only;
+        let editor_focused = ui.memory(|memory| memory.has_focus(editor_id));
+        let primary_before_edit = doc.cursor_index;
         let has_column_selection = self
             .column_selection
             .as_ref()
             .is_some_and(|selection| same_path(&selection.path, &doc.path));
-        if has_column_selection && !read_only && ui.memory(|memory| memory.has_focus(editor_id)) {
+        if self.multi_cursor.as_ref().is_some_and(|state| {
+            !same_path(&state.path, &doc.path)
+                || state.primary != doc.cursor_index
+                || state.secondary.is_empty()
+        }) {
+            self.multi_cursor = None;
+        }
+        if !read_only && editor_focused && !has_column_selection {
+            let changed = handle_multi_cursor_shortcuts(
+                ui.ctx(),
+                doc,
+                &mut self.multi_cursor,
+                indent_width,
+                use_spaces,
+            );
+            if changed {
+                self.column_selection = None;
+                self.find.dirty = true;
+                self.find
+                    .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+            }
+        }
+        if has_column_selection && !read_only && editor_focused {
             let mut copy = false;
             let mut remove = false;
             let mut typed = None;
@@ -5632,13 +5658,26 @@ impl App {
             let ctrl_alt = ui
                 .ctx()
                 .input(|input| input.modifiers.ctrl && input.modifiers.alt);
+            let alt_click = ui.ctx().input(|input| {
+                input.modifiers.alt && !input.modifiers.ctrl && !input.modifiers.command
+            });
             if let Some(pointer) = pointer.filter(|pointer| viewport.contains(*pointer)) {
                 let cursor = galley.cursor_from_pos(pointer - *galley_pos);
                 let (line, column) =
                     crate::util::line_column_at_char(doc.buffer.as_string(), cursor.index);
                 let line = line.saturating_sub(1);
                 let column = column.saturating_sub(1);
-                if ctrl_alt && pointer_pressed {
+                if alt_click && pointer_pressed && !read_only {
+                    add_multi_cursor_at(
+                        &mut self.multi_cursor,
+                        &doc.path,
+                        primary_before_edit,
+                        cursor.index,
+                    );
+                    self.column_selection = None;
+                    doc.update_cursor(cursor.index);
+                    set_editor_cursor(ui.ctx(), &doc.path, cursor.index);
+                } else if ctrl_alt && pointer_pressed {
                     self.column_selection = Some(ColumnSelectionState {
                         path: doc.path.clone(),
                         anchor_line: line,
@@ -5646,6 +5685,7 @@ impl App {
                         cursor_line: line,
                         cursor_col: column,
                     });
+                    self.multi_cursor = None;
                 } else if ctrl_alt && pointer_down {
                     if let Some(selection) = self
                         .column_selection
@@ -5657,6 +5697,7 @@ impl App {
                     }
                 } else if pointer_pressed {
                     self.column_selection = None;
+                    self.multi_cursor = None;
                 }
             }
             if let Some(selection) = self
@@ -5713,6 +5754,33 @@ impl App {
                             theme::with_alpha(code_theme.keyword, 55),
                         );
                     }
+                }
+            }
+        }
+        if self
+            .multi_cursor
+            .as_ref()
+            .is_some_and(|state| state.primary != doc.cursor_index)
+        {
+            self.multi_cursor = None;
+        }
+
+        if let Some(state) = self
+            .multi_cursor
+            .as_ref()
+            .filter(|state| same_path(&state.path, &doc.path))
+        {
+            if !read_only && editor_focused {
+                if let Some((galley, galley_pos)) = &gutter {
+                    paint_multi_cursor(
+                        ui,
+                        galley,
+                        *galley_pos,
+                        scroll_output.inner_rect,
+                        doc.buffer.as_string(),
+                        state,
+                        code_theme.text,
+                    );
                 }
             }
         }
@@ -8029,6 +8097,351 @@ impl App {
             return;
         }
         self.theme_settings = Some(draft);
+    }
+}
+
+fn handle_multi_cursor_shortcuts(
+    ctx: &egui::Context,
+    doc: &mut Document,
+    state: &mut Option<MultiCursorState>,
+    indent_width: usize,
+    use_spaces: bool,
+) -> bool {
+    let add_up = ctx.input_mut(|input| {
+        input.consume_key(
+            egui::Modifiers::COMMAND | egui::Modifiers::ALT,
+            egui::Key::ArrowUp,
+        )
+    });
+    let add_down = ctx.input_mut(|input| {
+        input.consume_key(
+            egui::Modifiers::COMMAND | egui::Modifiers::ALT,
+            egui::Key::ArrowDown,
+        )
+    });
+    if add_up || add_down {
+        add_vertical_cursor(doc, state, add_up);
+        return false;
+    }
+    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::D)) {
+        add_next_occurrence(ctx, doc, state);
+        return false;
+    }
+    if ctx.input(|input| input.modifiers.shift && input.key_pressed(egui::Key::Tab)) {
+        // Let the existing single-cursor unindent path handle Shift+Tab.
+        *state = None;
+        return false;
+    }
+
+    let multi_active = state.as_ref().is_some_and(|state| {
+        same_path(&state.path, &doc.path)
+            && state.primary == doc.cursor_index
+            && !state.secondary.is_empty()
+    });
+    if !multi_active {
+        return false;
+    }
+
+    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::C)) {
+        let primary =
+            selected_char_range(ctx, &doc.path).unwrap_or((doc.cursor_index, doc.cursor_index));
+        let secondary = state
+            .as_ref()
+            .map(|state| state.secondary.clone())
+            .unwrap_or_default();
+        let copied =
+            crate::multi_cursor::selected_text(doc.buffer.as_string(), primary, &secondary);
+        if !copied.is_empty() {
+            ctx.copy_text(copied);
+        }
+        return false;
+    }
+
+    let mut typed = String::new();
+    let mut paste: Option<String> = None;
+    let mut backspace = false;
+    let mut delete = false;
+    let mut enter = false;
+    let mut tab = false;
+    ctx.input_mut(|input| {
+        backspace = input.consume_key(egui::Modifiers::NONE, egui::Key::Backspace);
+        delete = input.consume_key(egui::Modifiers::NONE, egui::Key::Delete);
+        enter = input.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+        tab = input.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
+        input.events.retain(|event| match event {
+            egui::Event::Text(value) => {
+                typed.push_str(value);
+                false
+            }
+            egui::Event::Paste(value) => {
+                if paste.is_none() {
+                    paste = Some(value.clone());
+                }
+                false
+            }
+            _ => true,
+        });
+    });
+    if typed.is_empty() && paste.is_none() && !backspace && !delete && !enter && !tab {
+        return false;
+    }
+
+    let primary =
+        selected_char_range(ctx, &doc.path).unwrap_or((doc.cursor_index, doc.cursor_index));
+    let secondary = state
+        .as_ref()
+        .map(|state| state.secondary.clone())
+        .unwrap_or_default();
+    let text = doc.buffer.as_string();
+    let result = if let Some(paste) = paste {
+        crate::multi_cursor::insert(text, primary, &secondary, &paste)
+    } else if !typed.is_empty() {
+        crate::multi_cursor::insert(text, primary, &secondary, &typed)
+    } else if backspace {
+        crate::multi_cursor::backspace(text, primary, &secondary)
+    } else if delete {
+        crate::multi_cursor::delete(text, primary, &secondary)
+    } else if enter {
+        crate::multi_cursor::enter(text, primary, &secondary, indent_width, use_spaces)
+    } else {
+        crate::multi_cursor::insert(
+            text,
+            primary,
+            &secondary,
+            &crate::indent::indent_unit(indent_width, use_spaces),
+        )
+    };
+    if result.text == text {
+        return false;
+    }
+
+    doc.buffer.set_text(result.text);
+    doc.update_cursor(result.primary);
+    set_editor_cursor(ctx, &doc.path, result.primary);
+    let new_secondary = result
+        .secondary
+        .into_iter()
+        .map(|cursor| (cursor, cursor))
+        .collect::<Vec<_>>();
+    if new_secondary.is_empty() {
+        *state = None;
+    } else {
+        *state = Some(MultiCursorState {
+            path: doc.path.clone(),
+            primary: result.primary,
+            secondary: new_secondary,
+        });
+    }
+    true
+}
+
+fn add_multi_cursor_at(
+    state: &mut Option<MultiCursorState>,
+    path: &Path,
+    old_primary: usize,
+    clicked: usize,
+) {
+    let mut heads = vec![old_primary];
+    if let Some(existing) = state.take().filter(|state| same_path(&state.path, path)) {
+        heads.push(existing.primary);
+        heads.extend(existing.secondary.iter().map(|(_, end)| *end));
+    }
+    heads.retain(|head| *head != clicked);
+    heads.sort_unstable();
+    heads.dedup();
+    if heads.is_empty() {
+        *state = None;
+    } else {
+        *state = Some(MultiCursorState {
+            path: path.to_path_buf(),
+            primary: clicked,
+            secondary: heads.into_iter().map(|head| (head, head)).collect(),
+        });
+    }
+}
+
+fn add_vertical_cursor(doc: &mut Document, state: &mut Option<MultiCursorState>, up: bool) {
+    let text = doc.buffer.as_string();
+    let len = text.chars().count();
+    let primary = doc.cursor_index.min(len);
+    let (line, column) = crate::util::line_column_at_char(text, primary);
+    let line_count = text.split('\n').count();
+    if (up && line <= 1) || (!up && line >= line_count) {
+        return;
+    }
+    let target_line = if up { line - 1 } else { line + 1 };
+    let line_start = crate::util::char_index_at_line(text, target_line);
+    let line_len = text
+        .split('\n')
+        .nth(target_line.saturating_sub(1))
+        .map(|value| value.chars().count())
+        .unwrap_or(0);
+    let index = line_start + column.saturating_sub(1).min(line_len);
+    let mut current = state
+        .take()
+        .filter(|state| same_path(&state.path, &doc.path) && state.primary == primary)
+        .unwrap_or(MultiCursorState {
+            path: doc.path.clone(),
+            primary,
+            secondary: Vec::new(),
+        });
+    if !current
+        .secondary
+        .iter()
+        .any(|(start, end)| (*start..=*end).contains(&index))
+    {
+        current.secondary.push((index, index));
+        current.secondary.sort_unstable();
+        current.secondary.dedup();
+    }
+    *state = Some(current);
+}
+
+fn add_next_occurrence(
+    ctx: &egui::Context,
+    doc: &mut Document,
+    state: &mut Option<MultiCursorState>,
+) {
+    let text = doc.buffer.as_string();
+    let chars = text.chars().collect::<Vec<_>>();
+    let len = chars.len();
+    let primary_range =
+        selected_char_range(ctx, &doc.path).unwrap_or((doc.cursor_index, doc.cursor_index));
+    let (needle, needle_start, needle_end) = if primary_range.1 > primary_range.0 {
+        (
+            chars[primary_range.0.min(len)..primary_range.1.min(len)]
+                .iter()
+                .collect::<String>(),
+            primary_range.0,
+            primary_range.1,
+        )
+    } else {
+        let Some((word, start, end)) = crate::navigation::word_at(text, doc.cursor_index) else {
+            return;
+        };
+        (word, start, end)
+    };
+    if needle.is_empty() {
+        return;
+    }
+    let needle_chars = needle.chars().collect::<Vec<_>>();
+    let primary_end = needle_end.min(len);
+    let matches = |from: usize| -> Option<usize> {
+        if needle_chars.len() > len {
+            return None;
+        }
+        (from..=len.saturating_sub(needle_chars.len()))
+            .find(|index| chars[*index..*index + needle_chars.len()] == needle_chars[..])
+    };
+    let overlaps = |start: usize, end: usize, ranges: &[(usize, usize)]| {
+        ranges
+            .iter()
+            .any(|(range_start, range_end)| start < *range_end && end > *range_start)
+    };
+    let mut existing = state
+        .as_ref()
+        .filter(|state| same_path(&state.path, &doc.path) && state.primary == primary_end)
+        .map(|state| state.secondary.clone())
+        .unwrap_or_default();
+    let mut search = primary_end;
+    let mut found = None;
+    while let Some(index) = matches(search) {
+        let end = index + needle_chars.len();
+        if index != needle_start && !overlaps(index, end, &existing) {
+            found = Some(index);
+            break;
+        }
+        search = index + 1;
+    }
+    if found.is_none() {
+        search = 0;
+        while search < needle_start {
+            let Some(index) = matches(search) else {
+                break;
+            };
+            let end = index + needle_chars.len();
+            if index + needle_chars.len() <= needle_start
+                && index != needle_start
+                && !overlaps(index, end, &existing)
+            {
+                found = Some(index);
+                break;
+            }
+            search = index + 1;
+        }
+    }
+    let Some(match_start) = found else {
+        return;
+    };
+    let match_end = match_start + needle_chars.len();
+    set_editor_selection(ctx, &doc.path, needle_start, needle_end);
+    doc.update_cursor(primary_end);
+    existing.push((match_start, match_end));
+    existing.sort_unstable();
+    existing.dedup();
+    *state = Some(MultiCursorState {
+        path: doc.path.clone(),
+        primary: primary_end,
+        secondary: existing,
+    });
+}
+
+fn paint_multi_cursor(
+    ui: &egui::Ui,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    viewport: egui::Rect,
+    text: &str,
+    state: &MultiCursorState,
+    caret_color: Color32,
+) {
+    let painter = ui.painter().with_clip_rect(viewport);
+    for (start, end) in &state.secondary {
+        let end = (*start).max(*end);
+        let start = (*start).min(end);
+        if end > start {
+            let (start_line, _) = crate::util::line_column_at_char(text, start);
+            let (end_line, _) = crate::util::line_column_at_char(text, end);
+            for line in start_line..=end_line {
+                let line_start = crate::util::char_index_at_line(text, line);
+                let line_len = text
+                    .split('\n')
+                    .nth(line.saturating_sub(1))
+                    .map(|value| value.chars().count())
+                    .unwrap_or(0);
+                let segment_start = start.max(line_start);
+                let segment_end = end.min(line_start + line_len);
+                if segment_end <= segment_start {
+                    continue;
+                }
+                let start_rect = galley
+                    .pos_from_cursor(egui::text::CCursor::new(segment_start))
+                    .translate(galley_pos.to_vec2());
+                let end_rect = galley
+                    .pos_from_cursor(egui::text::CCursor::new(segment_end))
+                    .translate(galley_pos.to_vec2());
+                let top = start_rect.top().min(end_rect.top());
+                let height = start_rect.height().max(end_rect.height());
+                let rect = egui::Rect::from_min_max(
+                    egui::pos2(start_rect.left(), top),
+                    egui::pos2(end_rect.left().max(start_rect.left() + 1.0), top + height),
+                );
+                if rect.intersects(viewport) {
+                    painter.rect_filled(
+                        rect,
+                        CornerRadius::ZERO,
+                        theme::with_alpha(caret_color, 40),
+                    );
+                }
+            }
+        }
+        let caret = galley
+            .pos_from_cursor(egui::text::CCursor::new(end))
+            .translate(galley_pos.to_vec2());
+        let rect = egui::Rect::from_min_size(caret.min, egui::vec2(2.0, caret.height().max(10.0)));
+        if rect.intersects(viewport) {
+            painter.rect_filled(rect, CornerRadius::same(1), caret_color);
+        }
     }
 }
 

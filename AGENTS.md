@@ -82,6 +82,7 @@ src/formatting.rs      clang-format
 src/debugger.rs        gdb 会话、ARM GDB server 与目标识别
 src/column.rs          旧批量列编辑算法
 src/column_select.rs   矩形列选择文本操作
+src/multi_cursor.rs    多光标文本编辑和光标位置重映射
 examples/blink/        可编译的演示固件
 assets/                应用图标源图：icon-word.png（Simple 字标）、icon-mark.png（S 标记）
 build.rs               从 assets 生成 ICO，并用 winres 嵌入 exe 资源
@@ -154,7 +155,7 @@ docs/                  README 截图和使用教程
 - 资源管理器、工程信息、构建配置、芯片支持包、烧录配置、C/C++ 列表等可折叠区域使用缓动动画，不直接瞬间显示/隐藏：侧栏高度动画 0.22s、`cubic_in_out`，其余折叠组使用 egui `CollapsingState` 和全局 0.20s 动画；箭头随 openness 旋转。动画期间主动 `request_repaint()`，避免掉帧式跳变。
 - Toast 使用 12.5px 正文、10.5px 状态文字、14×10 内边距，最大宽度 460px；不要再把提示字号设为 9–11px。
 - `column.rs` 仍保留旧列编辑算法；`column_select.rs` + `ColumnSelectionState` 提供 Ctrl+Alt+鼠标左键拖动的矩形列选择，蓝色高亮，Ctrl+C 复制、Delete/Backspace 删除、直接输入替换。列编辑对话框已不在任何可见入口暴露。
-- 目前没有多光标；列选择是单一矩形区域，不支持多个独立光标。
+- `multi_cursor.rs` + `MultiCursorState` 提供多光标：Alt+Click 添加光标，Ctrl+Alt+Up/Down 在上下行添加光标，Ctrl+D 选择当前词并添加下一个匹配，Esc 清除；输入、Backspace/Delete、Enter、Tab、粘贴对所有主/次选择生效，Ctrl+C 复制全部选择。次级选择用半透明高亮和独立竖线绘制；普通点击或方向键移动主光标时清除多光标。多光标和矩形列选择互斥。
 - `log.rs` 的 `parse_location` 解析 `file:line:col`；日志行带位置时可点击跳转。`LogStore` 维护最多 1000 条问题诊断，`App::refresh_diagnostics` 解析为本地路径并在行号栏右侧画红/黄竖条；输出面板的构建视图可过滤全部/错误/警告，调试视图显示 gdb 日志和命令输入。
 - 当前版本未内置 LSP；补全、跳转和引用搜索是轻量符号索引，调试是基础 gdb 控制台，不是完整 IDE 调试前端。后续增强在 `xiug` 分支分批接入，不要伪造未接通的能力。
 
@@ -247,7 +248,7 @@ docs/                  README 截图和使用教程
 - OpenOCD 自动检测是 USB VID/PID 启发式：Windows 使用 PnP，Linux 使用 `lsusb`；同时连接多个探针时按 ST-Link、CMSIS-DAP/DAPLink、J-Link 的优先级取第一个，用户可在接口下拉中改选。它不是对 OpenOCD 支持的全部适配器做穷举。
 - 没有 LSP/语义级跳转；符号搜索、TODO、寄存器浏览器都是轻量索引。补全/定义/引用是启发式功能；成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型。
 - 内存布局的起始地址/大小只写入工程 `.simple-embedded/settings.json`，不会自动改写链接脚本；Flash/RAM 总量优先来自链接脚本，其次来自芯片支持包。`.bin` 使用内存布局里的下载起始地址。
-- 不支持多光标；Ctrl+Alt+左键只提供单一矩形列选择。分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
+- 多光标支持 Alt+Click、Ctrl+Alt+Up/Down、Ctrl+D 和统一编辑；方向键只移动主光标并清除次级光标，不实现 VS Code 的多光标同时移动、Ctrl+U 回退光标和跨文件多光标。Ctrl+Alt+左键仍提供单一矩形列选择；分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
 - 调试支持主机 gdb 和 ARM GDB server：ARM ELF/AXF 会复用 OpenOCD / pyOCD 配置启动 server，连接 arm-none-eabi-gdb 并 `load` 程序；调试侧栏提供变量 Live Watch 和只读寄存器表，通过 gdb `echo` 标记解析输出，但没有调用栈、内存或外设寄存器编辑面板。“动态监测”支持 `watch` / `rwatch` / `awatch` 硬件 watchpoint，命中时暂停并记录本机时间、新旧值、源码位置和 `bt 6` 调用栈；OpenOCD 的 Cortex-M 命中常报告为 `SIGTRAP`，应用会查询创建时保存的旧值和当前表达式值补记录。数量受目标硬件限制，GDB 可能退化为软件 watchpoint（界面标记“软件”），OpenOCD/pyOCD 不支持时以 gdb 错误为准。watchpoint 表达式和历史在停止调试后保留，下次会话在 `main` 暂停后自动或手动重新启用；调试控制浮层可关闭但不会自动停止会话。
 - 工作区只使用第一个 folder，不实现 VS Code 的多根工作区、任务和扩展配置；双击关联写入 HKCU，移动程序后需要重新关联。
 - 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走本地自定义命令、内置 OpenOCD 或内置 pyOCD。内置烧录支持 `.hex` / `.elf` / `.axf`，以及按内存布局下载地址烧录的 `.bin`。
@@ -266,7 +267,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、图标 ICO 条目与 exe 嵌入资源一致性。当前共 205 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、图标 ICO 条目与 exe 嵌入资源一致性。当前共 213 个测试。
 
 UI 改动后建议：
 
@@ -274,6 +275,17 @@ UI 改动后建议：
 2. 用 `examples/blink` 打开 `src/main.c`
 3. 实际点击右侧操作栏 Build，确认输出面板、操作栏、文件树正常
 4. 如果界面视觉有变化，更新 `docs/editor.png` / `docs/welcome.png`
+
+## Context-mode 使用原则
+
+本项目安装了 context-mode 1.0.169，作为可选的 MCP + skill 工具，用于抑制大输出占用上下文。
+
+- 安装位置：MCP 配置 `.opencode/opencode.json`；本地 npm 包 `tools/context-mode`（`tools/` 已 gitignore）；skill 在 `.opencode/skills/context-mode` 及 `ctx-doctor` / `ctx-index` / `ctx-search` / `ctx-stats` / `ctx-upgrade` / `ctx-purge` / `ctx-insight`。
+- 当前 OpenCode 2.x 使用 V2 插件 API，而 context-mode 1.0.169 的 OpenCode 适配器是 V1 hook 插件，因此采用 MCP-only 安装：工具名为 `context-mode_ctx_*`；没有 PreToolUse 硬拦截和自动 SessionStart / 压缩快照。`ctx_doctor` 的 `Plugin registration: FAIL` 是 MCP-only 模式下的预期项。
+- 默认使用原生工具完成普通编辑、构建、git 和小范围查看；不要把所有命令都改走 context-mode。
+- 输出可能较大（长构建/测试日志、全仓扫描、批量 JSON/日志、网页/API 文档、跨会话资料）时，优先用 `context-mode_ctx_execute` / `context-mode_ctx_batch_execute` / `context-mode_ctx_fetch_and_index` / `context-mode_ctx_index` / `context-mode_ctx_search`，只把摘要或检索结果放回上下文。
+- 读取文件是为了编辑时直接用编辑器/Read；为了分析/汇总大文件时用 `context-mode_ctx_execute_file`。
+- 项目 `AGENTS.md` 和 `safe-shell` 的安全规则优先于 context-mode 的 routing skill；不得用 context-mode 绕过删除、覆盖、递归清理等确认流程。
 
 ## Git / 工作流
 

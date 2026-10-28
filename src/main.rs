@@ -28,6 +28,7 @@ mod memory;
 mod memory_check;
 mod micropython;
 mod minimap;
+mod multi_cursor;
 mod navigation;
 mod project_meta;
 mod registers;
