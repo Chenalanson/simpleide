@@ -3,6 +3,7 @@
 mod ai;
 mod ai_edit;
 mod app;
+mod architecture;
 mod arraygen;
 mod brackets;
 mod build;

@@ -4,6 +4,7 @@
 //! whole window so the fog/desktop reveal and the two meteors can cover every
 //! widget without fighting panel clipping.
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use eframe::egui::{
@@ -12,6 +13,7 @@ use eframe::egui::{
 };
 
 use super::{AiChatMessage, AiEditStatus, App};
+use crate::architecture::ArchitectureReport;
 use crate::log::Severity;
 use crate::theme;
 
@@ -22,8 +24,8 @@ const METEOR_RIGHT_END: f32 = 1.95;
 const METEOR_OUTPUT_START: f32 = 1.35;
 const METEOR_OUTPUT_END: f32 = 2.25;
 const PANEL_START: f32 = 1.75;
-const PANEL_STAGGER: f32 = 0.14;
-const PANEL_DURATION: f32 = 0.95;
+const PANEL_STAGGER: f32 = 0.12;
+const PANEL_DURATION: f32 = 0.82;
 const INPUT_ID: &str = "simple_embedded_ai_input";
 
 #[derive(Default)]
@@ -70,15 +72,24 @@ impl App {
         let margin = 12.0_f32;
         let gap = 10.0_f32;
         let area = view.shrink(margin);
-        let right_width = (area.width() * 0.28)
-            .clamp(250.0, 360.0)
-            .min((area.width() * 0.4).max(220.0));
-        let left_width = (area.width() - right_width - gap).max(220.0);
-        let left = Rect::from_min_size(area.min, egui::vec2(left_width, area.height()));
+        // D (workbench) is intentionally narrower than the old layout so the
+        // new project-architecture column gets a readable share of the width.
+        let right_width = (area.width() * 0.20).clamp(208.0, 288.0);
+        let arch_space = (area.width() - right_width - gap * 2.0 - 240.0).max(160.0);
+        let arch_width = (area.width() * 0.29).clamp(260.0, 420.0).min(arch_space);
         let right = Rect::from_min_size(
-            egui::pos2(left.right() + gap, area.top()),
+            egui::pos2(area.right() - right_width, area.top()),
             egui::vec2(right_width, area.height()),
         );
+        let architecture = Rect::from_min_size(
+            egui::pos2(
+                (right.left() - gap - arch_width).max(area.left()),
+                area.top(),
+            ),
+            egui::vec2(arch_width, area.height()),
+        );
+        let left_width = (architecture.left() - gap - area.left()).max(240.0);
+        let left = Rect::from_min_size(area.min, egui::vec2(left_width, area.height()));
         let output_height =
             ((left.height() - gap) * 0.64).clamp(110.0, (left.height() - gap - 70.0).max(110.0));
         let output = Rect::from_min_size(left.min, egui::vec2(left.width(), output_height));
@@ -86,15 +97,20 @@ impl App {
 
         let reveal_right = reveal_at(elapsed, 0);
         let reveal_output = reveal_at(elapsed, 1);
-        let reveal_input = reveal_at(elapsed, 2);
+        let reveal_arch = reveal_at(elapsed, 2);
+        let reveal_input = reveal_at(elapsed, 3);
         let right_orb = egui::pos2(right.center().x, right.top() + 66.0);
         let output_orb = egui::pos2(output.center().x, output.top() + 99.0);
+        let arch_origin = egui::pos2(architecture.center().x, architecture.top() + 100.0);
 
         let mut send = false;
         let mut clear = false;
         let mut quick_prompt = None;
         let mut workbench = WorkbenchActions::default();
+        let mut architecture_refresh = false;
+        let mut architecture_jump = None;
 
+        self.poll_ai_architecture(ui.ctx());
         self.ai_output_panel(
             ui,
             output,
@@ -104,8 +120,30 @@ impl App {
             &mut quick_prompt,
         );
         self.ai_input_panel(ui, input, reveal_input, &mut send);
+        ai_architecture_panel(
+            ui,
+            architecture,
+            reveal_arch,
+            arch_origin,
+            self.ai.architecture.as_ref(),
+            self.ai.architecture_receiver.is_some(),
+            self.ai.architecture_error.as_deref(),
+            self.project.as_ref().map(|project| project.root.as_path()),
+            &mut architecture_refresh,
+            &mut architecture_jump,
+        );
         self.ai_workbench_panel(ui, right, reveal_right, right_orb, &mut workbench);
 
+        if architecture_refresh {
+            self.refresh_ai_architecture();
+        }
+        if let Some((path, line)) = architecture_jump {
+            self.exit_ai_mode();
+            self.jump_to_debug_source(ui.ctx(), &path, line);
+            self.focus_editor = true;
+            ui.ctx().request_repaint();
+            return;
+        }
         if clear {
             self.clear_ai_chat();
         }
@@ -661,6 +699,488 @@ impl App {
             self.ai_settings_draft = Some(draft);
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ai_architecture_panel(
+    ui: &mut Ui,
+    rect: Rect,
+    reveal: f32,
+    origin: egui::Pos2,
+    report: Option<&ArchitectureReport>,
+    busy: bool,
+    error: Option<&str>,
+    root: Option<&Path>,
+    refresh: &mut bool,
+    jump: &mut Option<(PathBuf, usize)>,
+) {
+    ai_panel(ui, rect, reveal, origin, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("项目架构")
+                    .size(13.0)
+                    .strong()
+                    .color(theme::text()),
+            );
+            if busy {
+                ui.spinner();
+                ui.label(RichText::new("分析中").size(9.0).color(theme::accent()));
+            } else if error.is_some() {
+                ui.label(RichText::new("分析失败").size(9.0).color(theme::error()));
+            } else if report.is_some() {
+                paint_dot(ui, theme::success());
+                ui.label(RichText::new("已就绪").size(9.0).color(theme::success()));
+            } else {
+                paint_dot(ui, theme::text_faint());
+                ui.label(RichText::new("待分析").size(9.0).color(theme::text_faint()));
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ai_ghost_button(ui, "刷新") {
+                    *refresh = true;
+                }
+            });
+        });
+        ui.label(
+            RichText::new("从已保存源码推断分层、调度、框架和设计模式")
+                .size(9.0)
+                .color(theme::text_faint()),
+        );
+        ai_rule(ui);
+        if let Some(error) = error {
+            ui.add(Label::new(RichText::new(error).size(9.5).color(theme::error())).wrap());
+            ui.add_space(4.0);
+        }
+        if busy && report.is_none() {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(
+                    RichText::new("正在扫描工程源文件，稍后自动显示…")
+                        .size(10.0)
+                        .color(theme::text_dim()),
+                );
+            });
+            return;
+        }
+        let Some(report) = report else {
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("还没有架构分析结果。打开工程或点击“刷新”开始分析。")
+                    .size(10.0)
+                    .color(theme::text_dim()),
+            );
+            return;
+        };
+
+        let height = ui.available_height().max(60.0);
+        ScrollArea::vertical()
+            .id_salt("simple_embedded_ai_architecture_scroll")
+            .auto_shrink([false, false])
+            .max_height(height)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                arch_stats(ui, report);
+                ui.add_space(9.0);
+
+                ai_section(ui, "分层架构");
+                if report.layers.is_empty() {
+                    arch_empty_line(ui, "未识别到分层目录");
+                } else {
+                    for layer in &report.layers {
+                        arch_layer_row(ui, layer);
+                    }
+                }
+                ui.add_space(9.0);
+
+                ai_section(ui, "调度模式");
+                Frame::new()
+                    .fill(theme::with_alpha(theme::accent(), 14))
+                    .stroke(Stroke::new(1.0_f32, theme::with_alpha(theme::accent(), 65)))
+                    .corner_radius(8)
+                    .inner_margin(Margin::symmetric(9, 7))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            RichText::new(&report.schedule.kind)
+                                .size(12.5)
+                                .strong()
+                                .color(theme::accent()),
+                        );
+                        ui.add(
+                            Label::new(
+                                RichText::new(&report.schedule.summary)
+                                    .size(9.5)
+                                    .color(theme::text_dim()),
+                            )
+                            .wrap(),
+                        );
+                        if !report.schedule.evidence.is_empty() {
+                            ui.add_space(4.0);
+                            for evidence in &report.schedule.evidence {
+                                arch_bullet(ui, evidence);
+                            }
+                        }
+                    });
+                ui.add_space(9.0);
+
+                if !report.framework.is_empty() {
+                    ai_section(ui, "执行框架");
+                    let names = report
+                        .framework
+                        .iter()
+                        .map(|item| item.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join("  ·  ");
+                    let details = report
+                        .framework
+                        .iter()
+                        .filter(|item| !item.evidence.is_empty())
+                        .map(|item| format!("{}：{}", item.name, item.evidence))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    Frame::new()
+                        .fill(theme::with_alpha(theme::accent(), 11))
+                        .stroke(Stroke::new(1.0_f32, theme::with_alpha(theme::accent(), 45)))
+                        .corner_radius(5)
+                        .inner_margin(Margin::symmetric(7, 4))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                paint_dot(ui, theme::accent());
+                                let response = ui.add(
+                                    Label::new(
+                                        RichText::new(names)
+                                            .size(9.8)
+                                            .strong()
+                                            .color(theme::text()),
+                                    )
+                                    .wrap(),
+                                );
+                                if !details.is_empty() {
+                                    response.on_hover_text(details);
+                                }
+                            });
+                        });
+                    ui.add_space(9.0);
+                }
+
+                ai_section(ui, "设计模式");
+                if report.patterns.is_empty() {
+                    arch_empty_line(ui, "未匹配到明显设计模式");
+                } else {
+                    for pattern in &report.patterns {
+                        arch_pattern_row(ui, pattern);
+                    }
+                }
+                ui.add_space(9.0);
+
+                if !report.flow.is_empty() {
+                    ai_section(ui, "函数调度图");
+                    for stage in &report.flow {
+                        ui.label(
+                            RichText::new(&stage.title)
+                                .size(9.5)
+                                .strong()
+                                .color(theme::text_dim()),
+                        );
+                        let separator = match stage.title.as_str() {
+                            "启动" => "  →  ",
+                            "主循环" => "  ·  ",
+                            _ => "  ｜  ",
+                        };
+                        let mut line = stage.nodes.join(separator);
+                        if stage.title == "主循环" {
+                            line = format!("while(1) · {line}");
+                        }
+                        Frame::new()
+                            .fill(theme::with_alpha(theme::surface(), 120))
+                            .corner_radius(5)
+                            .inner_margin(Margin::symmetric(7, 4))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.add(
+                                    Label::new(RichText::new(line).size(9.0).color(theme::text()))
+                                        .wrap(),
+                                );
+                            });
+                        ui.add_space(5.0);
+                    }
+                    ui.add_space(4.0);
+                }
+
+                ai_section(ui, "中断与任务");
+                if report.interrupts.is_empty() && report.tasks.is_empty() {
+                    arch_empty_line(ui, "未发现 IRQHandler 或 RTOS 任务");
+                } else {
+                    for interrupt in &report.interrupts {
+                        arch_interrupt_row(ui, interrupt, root, jump);
+                    }
+                    for task in &report.tasks {
+                        arch_task_row(ui, task, root, jump);
+                    }
+                }
+                ui.add_space(9.0);
+
+                if !report.roots.is_empty() {
+                    ai_section(ui, "调度入口");
+                    for root in &report.roots {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(&root.name)
+                                    .size(9.8)
+                                    .strong()
+                                    .color(theme::text()),
+                            );
+                            arch_badge(ui, &root.kind, theme::text_faint());
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if root.count > 0 {
+                                    ui.label(
+                                        RichText::new(format!("{} 个调用", root.count))
+                                            .size(8.5)
+                                            .color(theme::text_faint()),
+                                    );
+                                }
+                            });
+                        });
+                        if !root.callees.is_empty() {
+                            ui.add(
+                                Label::new(
+                                    RichText::new(format!("→ {}", root.callees.join("、")))
+                                        .size(8.8)
+                                        .color(theme::text_dim()),
+                                )
+                                .wrap(),
+                            );
+                        }
+                        ui.add_space(3.0);
+                    }
+                }
+
+                if !report.notes.is_empty() {
+                    ui.add_space(7.0);
+                    for note in &report.notes {
+                        ui.add(
+                            Label::new(RichText::new(note).size(8.5).color(theme::text_faint()))
+                                .wrap(),
+                        );
+                    }
+                }
+                ui.add_space(6.0);
+            });
+    });
+}
+
+fn arch_stats(ui: &mut Ui, report: &ArchitectureReport) {
+    let gap = 4.0;
+    let content = ((ui.available_width() - gap * 3.0 - 48.0) / 4.0).max(42.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        for (value, label) in [
+            (report.file_count, "应用文件"),
+            (report.function_count, "应用函数"),
+            (report.edge_count, "调用边"),
+            (report.interrupts.len(), "中断"),
+        ] {
+            Frame::new()
+                .fill(theme::with_alpha(theme::surface(), 150))
+                .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+                .corner_radius(6)
+                .inner_margin(Margin::symmetric(6, 4))
+                .show(ui, |ui| {
+                    ui.set_width(content);
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            RichText::new(value.to_string())
+                                .size(14.0)
+                                .strong()
+                                .color(theme::text()),
+                        );
+                        ui.label(RichText::new(label).size(8.5).color(theme::text_faint()));
+                    });
+                });
+        }
+    });
+}
+
+fn arch_layer_row(ui: &mut Ui, layer: &crate::architecture::LayerInfo) {
+    let color = arch_layer_color(&layer.key);
+    Frame::new()
+        .fill(theme::with_alpha(theme::surface(), 110))
+        .stroke(Stroke::new(1.0_f32, theme::with_alpha(color, 45)))
+        .corner_radius(6)
+        .inner_margin(Margin::symmetric(7, 4))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                paint_dot(ui, color);
+                ui.label(
+                    RichText::new(&layer.name)
+                        .size(10.0)
+                        .strong()
+                        .color(theme::text()),
+                )
+                .on_hover_text(&layer.role);
+                let counts = if layer.functions > 0 {
+                    format!("{} 文件 · {} 函数", layer.files, layer.functions)
+                } else {
+                    format!("{} 文件", layer.files)
+                };
+                ui.label(RichText::new(counts).size(8.5).color(theme::text_dim()));
+            });
+            if !layer.examples.is_empty() {
+                ui.add(
+                    Label::new(
+                        RichText::new(format!("例：{}", layer.examples.join("、")))
+                            .size(8.5)
+                            .color(theme::text_faint()),
+                    )
+                    .wrap(),
+                );
+            }
+        });
+    ui.add_space(4.0);
+}
+
+fn arch_pattern_row(ui: &mut Ui, pattern: &crate::architecture::PatternInfo) {
+    let color = arch_confidence_color(&pattern.confidence);
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(&pattern.name)
+                .size(9.8)
+                .strong()
+                .color(theme::text()),
+        );
+        arch_badge(ui, &pattern.confidence, color);
+    });
+    if !pattern.evidence.is_empty() {
+        ui.add(
+            Label::new(
+                RichText::new(&pattern.evidence)
+                    .size(8.5)
+                    .color(theme::text_faint()),
+            )
+            .wrap(),
+        );
+    }
+    ui.add_space(3.0);
+}
+
+fn arch_interrupt_row(
+    ui: &mut Ui,
+    interrupt: &crate::architecture::InterruptInfo,
+    root: Option<&Path>,
+    jump: &mut Option<(PathBuf, usize)>,
+) {
+    ui.horizontal(|ui| {
+        let response = ui.add(
+            Label::new(
+                RichText::new(&interrupt.handler)
+                    .size(9.6)
+                    .color(theme::accent()),
+            )
+            .sense(Sense::click()),
+        );
+        if response.clicked() {
+            if let Some(root) = root {
+                *jump = Some((root.join(&interrupt.file), interrupt.line));
+            }
+        }
+        response.on_hover_text(format!("跳转到 {}:{}", interrupt.file, interrupt.line));
+        arch_badge(ui, &interrupt.peripheral, theme::info());
+    });
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("{}:{}", short_rel(&interrupt.file), interrupt.line))
+                .size(8.3)
+                .color(theme::text_faint()),
+        );
+        if let Some(priority) = &interrupt.priority {
+            arch_badge(ui, &format!("NVIC {priority}"), theme::warning());
+        }
+    });
+    if !interrupt.calls.is_empty() {
+        ui.add(
+            Label::new(
+                RichText::new(format!("→ {}", interrupt.calls.join("、")))
+                    .size(8.5)
+                    .color(theme::text_dim()),
+            )
+            .wrap(),
+        );
+    }
+    ui.add_space(4.0);
+}
+
+fn arch_task_row(
+    ui: &mut Ui,
+    task: &crate::architecture::TaskInfo,
+    root: Option<&Path>,
+    jump: &mut Option<(PathBuf, usize)>,
+) {
+    ui.horizontal(|ui| {
+        let response = ui.add(
+            Label::new(RichText::new(&task.name).size(9.6).color(theme::accent()))
+                .sense(Sense::click()),
+        );
+        if response.clicked() {
+            if let Some(root) = root {
+                *jump = Some((root.join(&task.file), task.line));
+            }
+        }
+        response.on_hover_text(format!("跳转到 {}:{}", task.file, task.line));
+        arch_badge(ui, &task.api, theme::success());
+    });
+    let mut detail = format!("{}:{}", short_rel(&task.file), task.line);
+    if !task.detail.is_empty() {
+        detail.push_str(" · ");
+        detail.push_str(&task.detail);
+    }
+    ui.add(Label::new(RichText::new(detail).size(8.3).color(theme::text_faint())).wrap());
+    ui.add_space(4.0);
+}
+
+fn arch_badge(ui: &mut Ui, text: &str, color: Color32) {
+    Frame::new()
+        .fill(theme::with_alpha(color, 18))
+        .stroke(Stroke::new(1.0_f32, theme::with_alpha(color, 70)))
+        .corner_radius(4)
+        .inner_margin(Margin::symmetric(5, 1))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).size(8.3).color(color));
+        });
+}
+
+fn arch_bullet(ui: &mut Ui, text: &str) {
+    ui.horizontal(|ui| {
+        paint_dot(ui, theme::text_faint());
+        ui.add(Label::new(RichText::new(text).size(8.8).color(theme::text_dim())).wrap());
+    });
+}
+
+fn arch_empty_line(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).size(9.0).color(theme::text_faint()));
+}
+
+fn arch_confidence_color(confidence: &str) -> Color32 {
+    match confidence {
+        "高" => theme::success(),
+        "中" => theme::warning(),
+        _ => theme::text_faint(),
+    }
+}
+
+fn arch_layer_color(key: &str) -> Color32 {
+    match key {
+        "app" => theme::accent(),
+        "bsp" => theme::warning(),
+        "hal" => theme::success(),
+        "cmsis" => theme::info(),
+        _ => theme::text_dim(),
+    }
+}
+
+fn short_rel(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 fn reveal_at(elapsed: f32, index: usize) -> f32 {

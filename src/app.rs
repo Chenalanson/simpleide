@@ -780,6 +780,12 @@ struct AiState {
     skill_builtin: bool,
     fog_texture: Option<egui::TextureHandle>,
     window_layered: bool,
+    architecture: Option<crate::architecture::ArchitectureReport>,
+    architecture_receiver:
+        Option<Receiver<Result<crate::architecture::ArchitectureReport, String>>>,
+    architecture_root: Option<PathBuf>,
+    architecture_error: Option<String>,
+    architecture_dirty: bool,
 }
 
 struct AiSettingsDraft {
@@ -3492,9 +3498,12 @@ impl App {
 
     /// Show the paused source line without replacing the debug console focus.
     fn jump_to_debug_source(&mut self, ctx: &egui::Context, path: &Path, line: usize) {
-        self.open_file(path.to_path_buf());
+        // Callers may pass a project-relative path with `/` separators; the
+        // open tab stores the canonical Windows path, so normalize first.
+        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        self.open_file(path.clone());
         self.focus_editor = false;
-        let Some(index) = self.tabs.iter().position(|doc| same_path(&doc.path, path)) else {
+        let Some(index) = self.tabs.iter().position(|doc| same_path(&doc.path, &path)) else {
             return;
         };
         self.active = Some(index);
@@ -3506,7 +3515,7 @@ impl App {
         set_editor_cursor(ctx, &doc.path, start);
         self.scroll_to_cursor = true;
         if let Some(tree) = &mut self.tree {
-            tree.reveal(path);
+            tree.reveal(&path);
         }
     }
 
@@ -4151,6 +4160,9 @@ impl App {
                 if same_root {
                     self.relations.index = Some(Arc::new(index));
                     self.relations.error = None;
+                    if self.ai.enabled {
+                        self.refresh_ai_architecture();
+                    }
                 }
                 self.relations.receiver = None;
                 ctx.request_repaint();
@@ -4330,6 +4342,7 @@ impl App {
         self.ai.context_file = self.active_document().map(|doc| doc.path.clone());
         self.ai.focus_input = true;
         self.refresh_ai_skill();
+        self.refresh_ai_architecture();
         self.ai.transition = Some(AiTransition {
             started: Instant::now(),
             from: self.last_editor_rect.unwrap_or(egui::Rect::NOTHING),
@@ -4372,6 +4385,92 @@ impl App {
                 self.ai.skill_files = bundle.files.len();
                 self.ai.skill_builtin = true;
             }
+        }
+    }
+
+    fn refresh_ai_architecture(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.ai.architecture = None;
+            self.ai.architecture_receiver = None;
+            self.ai.architecture_root = None;
+            self.ai.architecture_error = None;
+            self.ai.architecture_dirty = false;
+            return;
+        };
+        if self.ai.architecture_receiver.is_some() {
+            self.ai.architecture_dirty = true;
+            return;
+        }
+        let relation = self.relations.index.clone();
+        let respect_gitignore = self.settings.respect_gitignore;
+        let ignore_patterns = self.settings.ignore_patterns.clone();
+        let (sender, receiver) = mpsc::channel();
+        self.ai.architecture_receiver = Some(receiver);
+        self.ai.architecture_root = Some(root.clone());
+        self.ai.architecture_error = None;
+        self.ai.architecture_dirty = false;
+        let spawned = std::thread::Builder::new()
+            .name("simple-embedded-architecture".to_owned())
+            .spawn(move || {
+                let ignore = IgnoreRules::load(&root, respect_gitignore, &ignore_patterns);
+                let result = crate::architecture::analyze(&root, relation.as_deref(), &ignore);
+                let _ = sender.send(result);
+            });
+        if let Err(err) = spawned {
+            self.ai.architecture_receiver = None;
+            self.ai.architecture_error = Some(format!("无法启动架构分析：{err}"));
+        }
+    }
+
+    fn poll_ai_architecture(&mut self, ctx: &egui::Context) {
+        let received = self
+            .ai
+            .architecture_receiver
+            .as_ref()
+            .map(|receiver| receiver.try_recv());
+        match received {
+            Some(Ok(Ok(report))) => {
+                let same_root = self.project.as_ref().is_some_and(|project| {
+                    self.ai
+                        .architecture_root
+                        .as_ref()
+                        .is_some_and(|root| same_path(root, &project.root))
+                });
+                if same_root {
+                    self.ai.architecture = Some(report);
+                    self.ai.architecture_error = None;
+                } else {
+                    self.ai.architecture = None;
+                }
+                self.ai.architecture_receiver = None;
+                if self.ai.architecture_dirty {
+                    self.ai.architecture_dirty = false;
+                    self.refresh_ai_architecture();
+                }
+                ctx.request_repaint();
+            }
+            Some(Ok(Err(err))) => {
+                self.ai.architecture_receiver = None;
+                self.ai.architecture_error = Some(err);
+                if self.ai.architecture_dirty {
+                    self.ai.architecture_dirty = false;
+                    self.refresh_ai_architecture();
+                }
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.ai.architecture_receiver = None;
+                self.ai.architecture_error = Some("架构分析线程已结束".to_owned());
+                if self.ai.architecture_dirty {
+                    self.ai.architecture_dirty = false;
+                    self.refresh_ai_architecture();
+                }
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                ctx.request_repaint_after(Duration::from_millis(120));
+            }
+            None => {}
         }
     }
 
