@@ -108,12 +108,13 @@ pub fn fold_start_for_line(line: usize, ranges: &[FoldRange]) -> Option<usize> {
         .map(|range| range.start_line)
 }
 
-/// Build the folded display text and the view-line -> fold-start map.
+/// Build the folded display text, the view-line -> fold-start map, and the
+/// source line number for each displayed line (0 marks a collapsed marker).
 pub fn view(
     text: &str,
     folds: &BTreeSet<usize>,
     ranges: &[FoldRange],
-) -> (String, Vec<(usize, usize)>) {
+) -> (String, Vec<(usize, usize)>, Vec<usize>) {
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let mut selected = ranges
         .iter()
@@ -124,6 +125,7 @@ pub fn view(
 
     let mut output = String::new();
     let mut markers = Vec::new();
+    let mut source_lines = Vec::new();
     let mut view_line = 0usize;
     let mut skip_until = 0usize;
     for (line_index, line) in lines.iter().enumerate() {
@@ -136,18 +138,24 @@ pub fn view(
                 output.push('\n');
             }
             markers.push((view_line + 1, range.start_line));
+            source_lines.push(line_index + 1);
             output.push_str(&format!(
                 "    ...   ({} 行)\n",
                 range.end_line - range.start_line
             ));
+            source_lines.push(0);
             view_line += 2;
             skip_until = range.end_line + 1;
         } else {
             output.push_str(line);
-            view_line += line.chars().filter(|ch| *ch == '\n').count().max(1);
+            let line_count = line.chars().filter(|ch| *ch == '\n').count().max(1);
+            for _ in 0..line_count {
+                source_lines.push(line_index + 1);
+            }
+            view_line += line_count;
         }
     }
-    (output, markers)
+    (output, markers, source_lines)
 }
 
 #[cfg(test)]
@@ -175,9 +183,10 @@ mod tests {
         let text = "void f() {\n    a();\n    b();\n}\nint x;\n";
         let ranges = ranges(text);
         let folds = BTreeSet::from([0usize]);
-        let (view, markers) = view(text, &folds, &ranges);
+        let (view, markers, source_lines) = view(text, &folds, &ranges);
         assert!(view.contains("void f() {"));
         assert!(view.contains("..."));
+        assert_eq!(source_lines, vec![1, 0, 5]);
         assert!(!view.contains("a();"));
         assert!(view.contains("int x;"));
         assert_eq!(markers, vec![(1, 0)]);
@@ -188,8 +197,9 @@ mod tests {
         let text = "void f() {\n    if (x) {\n        y();\n    }\n}\n";
         let ranges = ranges(text);
         let folds = BTreeSet::from([0usize, 1usize]);
-        let (view, markers) = view(text, &folds, &ranges);
+        let (view, markers, source_lines) = view(text, &folds, &ranges);
         assert_eq!(markers, vec![(1, 0)]);
+        assert_eq!(source_lines, vec![1, 0]);
         assert!(!view.contains("y();"));
     }
 }

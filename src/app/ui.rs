@@ -888,7 +888,7 @@ impl App {
         let path = doc.path.clone();
         let text = doc.buffer.as_string().to_owned();
         let ranges = crate::fold::ranges(&text);
-        let (view_text, markers) = crate::fold::view(&text, &doc.folds, &ranges);
+        let (view_text, markers, source_lines) = crate::fold::view(&text, &doc.folds, &ranges);
         let mut view_text = ReadOnlyText(view_text);
         let fold_count = doc.folds.len();
         let cache = doc.layout_cache.clone();
@@ -897,6 +897,14 @@ impl App {
         let highlighter = Arc::clone(&self.highlighter);
         let font_id = FontId::monospace(font_size);
         let theme_key = code_theme.key();
+        let gutter_font = FontId::monospace((font_size - 1.0).max(9.0));
+        let source_line_count = text.split('\n').count().max(1);
+        let digits = source_line_count.to_string().len().max(2) as f32;
+        let digit_width = ui
+            .ctx()
+            .fonts_mut(|fonts| fonts.glyph_width(&gutter_font, '0'));
+        let gutter_width = (digits * digit_width + 20.0).clamp(34.0, 96.0);
+        let text_margin_left = (gutter_width + 12.0).round() as i8;
         let mut layouter = move |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
             let effective_wrap = if word_wrap { wrap_width } else { f32::INFINITY };
             highlight::layout_cached(
@@ -957,9 +965,52 @@ impl App {
                             f32::INFINITY
                         })
                         .background_color(code_theme.bg)
-                        .frame(Frame::new().inner_margin(Margin::symmetric(8, 8)))
+                        .frame(Frame::new().inner_margin(Margin {
+                            left: text_margin_left,
+                            right: 8,
+                            top: 8,
+                            bottom: 8,
+                        }))
                         .layouter(&mut layouter)
                         .show(ui);
+                    let fold_viewport = output.response.response.rect;
+                    let gutter_right = output.galley_pos.x - 12.0;
+                    let gutter_rect = egui::Rect::from_min_max(
+                        egui::pos2(fold_viewport.left(), fold_viewport.top()),
+                        egui::pos2(gutter_right, fold_viewport.bottom()),
+                    );
+                    let gutter_painter = ui.painter().with_clip_rect(fold_viewport);
+                    gutter_painter.rect_filled(gutter_rect, CornerRadius::ZERO, code_theme.bg);
+                    gutter_painter.line_segment(
+                        [
+                            egui::pos2(gutter_right, fold_viewport.top()),
+                            egui::pos2(gutter_right, fold_viewport.bottom()),
+                        ],
+                        Stroke::new(1.0_f32, code_theme.selection),
+                    );
+                    let text = view_text.as_str();
+                    for (line_index, source_line) in source_lines.iter().enumerate() {
+                        if *source_line == 0 {
+                            continue;
+                        }
+                        let line_start = crate::util::char_index_at_line(text, line_index + 1);
+                        let caret = output
+                            .galley
+                            .pos_from_cursor(egui::text::CCursor::new(line_start))
+                            .translate(output.galley_pos.to_vec2());
+                        let color = if *source_line == doc.cursor_line {
+                            code_theme.text
+                        } else {
+                            code_theme.comment
+                        };
+                        gutter_painter.text(
+                            egui::pos2(gutter_right - 8.0, caret.center().y),
+                            Align2::RIGHT_CENTER,
+                            source_line.to_string(),
+                            gutter_font.clone(),
+                            color,
+                        );
+                    }
                     if output.response.response.clicked() {
                         if let Some(pointer) = ui.ctx().input(|input| input.pointer.interact_pos())
                         {
