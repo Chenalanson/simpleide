@@ -60,6 +60,12 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 
+/* ---- LED 闪烁参数（与 hardware.dts 台账 pin_led_pc13 节点同源） ---- */
+#define LED_GPIO_PORT              GPIOC
+#define LED_GPIO_PIN               GPIO_PIN_13
+#define LED_BLINK_INTERVAL_MS      500U   /* 半周期：亮/灭各 500ms，翻转周期 1000ms */
+#define LED_ACTIVE_LOW             1      /* TODO: 按原理图核对 PC13 板载 LED 极性 */
+
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

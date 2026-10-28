@@ -1,0 +1,354 @@
+{
+  "schema": "simple-embedded.resources",
+  "schema_version": 1,
+  "generated_at": "2026-10-28 22:39:17",
+  "application": {
+    "name": "Simple embedded",
+    "version": "0.1.0",
+    "author": "smallYYY_",
+    "executable": "D:\\embeed\\dist\\simple-embedded\\simple-embedded.exe",
+    "profile": "release"
+  },
+  "project": {
+    "name": "blink",
+    "root": "D:\\embeed\\examples\\blink",
+    "settings_file": "D:\\embeed\\examples\\blink\\.simple-embedded\\settings.json",
+    "settings_exists": true,
+    "workspace_file": null,
+    "build_system": "Make",
+    "toolchain": "Make · GCC",
+    "target": "local",
+    "target_name": "build/firmware",
+    "device": null,
+    "compiler": "gcc",
+    "optimization": null,
+    "output_dir": "build",
+    "artifact": null,
+    "include_dirs": [
+      "include"
+    ],
+    "library_dirs": [],
+    "defines": [],
+    "build": {
+      "target": "Local",
+      "build_command": "mingw32-make",
+      "toolchain": "auto",
+      "clean_command": "mingw32-make clean",
+      "rebuild_command": "mingw32-make clean && mingw32-make",
+      "flash_command": "",
+      "flash_tool": "openocd",
+      "openocd": {
+        "executable": "openocd",
+        "program_file": "${ExecutableName}.hex",
+        "target_config": "",
+        "interface_config": "stlink.cfg"
+      },
+      "pyocd": {
+        "executable": "pyocd",
+        "target": "",
+        "pack": "",
+        "program_file": "${ExecutableName}.hex"
+      },
+      "serial": {
+        "port": "",
+        "baud": 115200
+      },
+      "firmware": {
+        "esptool": "esptool",
+        "file": "",
+        "chip": "esp32",
+        "address": "0x1000",
+        "erase": false,
+        "verify": true
+      },
+      "build_jobs": 0,
+      "ssh_host": "",
+      "ssh_port": 22,
+      "remote_dir": "",
+      "extra_paths": [
+        "C:\\complier\\mingw64\\bin",
+        "C:\\complier\\arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi\\bin"
+      ],
+      "meta_includes": null,
+      "meta_library_dirs": null,
+      "meta_defines": null,
+      "build_options": {
+        "c_standard": "c99",
+        "cpp_standard": "c++03",
+        "optimization": "-O2",
+        "warning": "-Wall -Wextra",
+        "lto": false,
+        "function_sections": true,
+        "split_load_store": false,
+        "plain_char_signed": false,
+        "short_enums": false,
+        "rtti": false,
+        "use_microlib": false,
+        "printf_float": false,
+        "scanf_float": false,
+        "big_endian": false,
+        "debug_info": "enable",
+        "assembler_defines": [],
+        "assembler_type": "arm-auto (auto detect)",
+        "assembler_options": "",
+        "linker_output_format": "AXF",
+        "linker_no_binary": false,
+        "linker_binary_excludes": [],
+        "linker_xo_base": "",
+        "linker_ro_base": "",
+        "linker_rw_base": "",
+        "linker_options": ""
+      },
+      "memory": {
+        "flash_start": "",
+        "flash_size": "",
+        "ram_start": "",
+        "ram_size": "",
+        "download_address": "",
+        "regions": []
+      }
+    },
+    "debug": {
+      "program": "D:\\embeed\\examples\\blink\\build\\firmware.exe",
+      "gdb_path": "C:\\complier\\arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi\\bin\\arm-none-eabi-gdb.exe",
+      "auto_refresh": true,
+      "watches": []
+    }
+  },
+  "hardware": {
+    "device": null,
+    "cpu": null,
+    "fpu": "无",
+    "memory_layout": null,
+    "linker_script": null,
+    "memory": {
+      "flash": null,
+      "ram": null,
+      "source": null,
+      "usage": null,
+      "regions": [
+        {
+          "name": "IRAM1",
+          "kind": "ram",
+          "on_chip": true,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "IRAM2",
+          "kind": "ram",
+          "on_chip": true,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "RAM1",
+          "kind": "ram",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "RAM2",
+          "kind": "ram",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "RAM3",
+          "kind": "ram",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "IROM1",
+          "kind": "rom",
+          "on_chip": true,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": true
+        },
+        {
+          "name": "IROM2",
+          "kind": "rom",
+          "on_chip": true,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "ROM1",
+          "kind": "rom",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "ROM2",
+          "kind": "rom",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "ROM3",
+          "kind": "rom",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        }
+      ]
+    },
+    "firmware": {
+      "path": "D:\\embeed\\examples\\blink\\build\\firmware.exe",
+      "format": "EXE",
+      "file_size": 53657,
+      "modified_unix": 1792869603,
+      "data_size": 0,
+      "bss_size": 0,
+      "stack_top": null,
+      "stack_size": 0,
+      "heap_size": 0,
+      "heap_kind": null,
+      "has_symbols": false,
+      "globals": [],
+      "analysis_error": "ELF 符号解析失败"
+    },
+    "peripherals": [],
+    "peripheral_count": 0,
+    "register_count": 0,
+    "register_source": "头文件寄存器宏",
+    "registers_truncated": false,
+    "used_components": [],
+    "ioc": null
+  },
+  "software": {
+    "languages": [
+      "C",
+      "C/C++"
+    ],
+    "source_files": [
+      "src/board.c",
+      "src/main.c"
+    ],
+    "header_files": [
+      "include/board.h"
+    ],
+    "python_files": [],
+    "linker_scripts": [],
+    "startup_files": [],
+    "libraries": [],
+    "components": [
+      {
+        "name": "Make",
+        "category": "Build",
+        "evidence": [
+          "Makefile"
+        ]
+      }
+    ],
+    "counts": {
+      "source_files": 2,
+      "header_files": 1,
+      "total_files": 5,
+      "total_bytes": 1964,
+      "source_lines": 34,
+      "header_lines": 10,
+      "truncated": false
+    },
+    "symbols": {
+      "functions": 4,
+      "structs": 0,
+      "macros": 1,
+      "labels": 0,
+      "total": 5,
+      "truncated": false
+    },
+    "call_graph": {
+      "functions": 4,
+      "call_edges": 3,
+      "caller_links": 3,
+      "reference_symbols": 10,
+      "top_functions": [
+        {
+          "name": "main",
+          "callers": 0,
+          "callees": 3
+        },
+        {
+          "name": "board_init",
+          "callers": 1,
+          "callees": 0
+        },
+        {
+          "name": "delay_ms",
+          "callers": 1,
+          "callees": 0
+        },
+        {
+          "name": "led_set",
+          "callers": 1,
+          "callees": 0
+        }
+      ]
+    },
+    "support_packs": []
+  },
+  "system": {
+    "os": "windows",
+    "arch": "x86_64",
+    "profile": "release",
+    "executable": "D:\\embeed\\dist\\simple-embedded\\simple-embedded.exe",
+    "report_file": "blink.resources.json",
+    "scan": {
+      "files": 5,
+      "total_bytes": 1964,
+      "truncated": false,
+      "source_lines": 34,
+      "header_lines": 10
+    }
+  },
+  "notes": [
+    "本报告由工程文件、Makefile / Keil 元数据、SVD、.ioc 和可选固件静态分析生成。",
+    "引脚和组件信息代表工程配置，不等同于实际电路连接或物料清单。",
+    "报告读取已保存文件和当前索引；未保存的编辑不会进入源码清单或符号统计。",
+    "扫描跳过 build / Debug / Release / out / target / Objects / Listings / tools / dist 等生成或工具目录。"
+  ],
+  "warnings": [
+    "未找到 .ioc 文件，未分析 CubeMX 引脚分配",
+    "无法解析固件 D:\\embeed\\examples\\blink\\build\\firmware.exe 的 ELF 符号",
+    "未识别芯片型号，硬件信息可能不完整",
+    "未解析 Flash / RAM 布局",
+    "未找到可用于报告的 SVD 外设 / 寄存器信息"
+  ]
+}

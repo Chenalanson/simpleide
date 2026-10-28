@@ -1,0 +1,6197 @@
+{
+  "schema": "simple-embedded.resources",
+  "schema_version": 1,
+  "generated_at": "2026-10-28 22:39:49",
+  "application": {
+    "name": "Simple embedded",
+    "version": "0.1.0",
+    "author": "smallYYY_",
+    "executable": "D:\\embeed\\dist\\simple-embedded\\simple-embedded.exe",
+    "profile": "release"
+  },
+  "project": {
+    "name": "test32",
+    "root": "D:\\embeed\\examples\\test32",
+    "settings_file": "D:\\embeed\\examples\\test32\\.simple-embedded\\settings.json",
+    "settings_exists": true,
+    "workspace_file": "D:\\embeed\\examples\\test32\\test32.se-workspace",
+    "build_system": "Make",
+    "toolchain": "Make · GCC",
+    "target": "local",
+    "target_name": "test32",
+    "device": "STM32F103xB",
+    "compiler": "GCC_PATH/arm-none-eabi-gcc",
+    "optimization": "-Og",
+    "output_dir": "build",
+    "artifact": null,
+    "include_dirs": [
+      "Core/Inc",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/Legacy",
+      "Drivers/STM32F1xx_HAL_Driver/Inc",
+      "Drivers/CMSIS/Device/ST/STM32F1xx/Include",
+      "Drivers/CMSIS/Include"
+    ],
+    "library_dirs": [],
+    "defines": [
+      "USE_HAL_DRIVER",
+      "STM32F103xB"
+    ],
+    "build": {
+      "target": "Local",
+      "build_command": "mingw32-make",
+      "toolchain": "auto",
+      "clean_command": "mingw32-make clean",
+      "rebuild_command": "mingw32-make clean && mingw32-make",
+      "flash_command": "",
+      "flash_tool": "openocd",
+      "openocd": {
+        "executable": "C:\\openocd-20260302\\OpenOCD-20260302-0.12.0\\bin\\openocd.exe",
+        "program_file": "${ExecutableName}.hex",
+        "target_config": "stm32f1x.cfg",
+        "interface_config": "stlink.cfg"
+      },
+      "pyocd": {
+        "executable": "pyocd",
+        "target": "stm32f103xb",
+        "pack": "",
+        "program_file": "${ExecutableName}.hex"
+      },
+      "serial": {
+        "port": "",
+        "baud": 115200
+      },
+      "firmware": {
+        "esptool": "esptool",
+        "file": "",
+        "chip": "esp32",
+        "address": "0x1000",
+        "erase": false,
+        "verify": true
+      },
+      "build_jobs": 0,
+      "ssh_host": "",
+      "ssh_port": 22,
+      "remote_dir": "",
+      "extra_paths": [
+        "C:\\complier\\mingw64\\bin",
+        "C:\\complier\\arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi\\bin"
+      ],
+      "meta_includes": null,
+      "meta_library_dirs": null,
+      "meta_defines": null,
+      "build_options": {
+        "c_standard": "c99",
+        "cpp_standard": "c++03",
+        "optimization": "-Og",
+        "warning": "-Wall",
+        "lto": false,
+        "function_sections": true,
+        "split_load_store": false,
+        "plain_char_signed": false,
+        "short_enums": false,
+        "rtti": false,
+        "use_microlib": true,
+        "printf_float": false,
+        "scanf_float": false,
+        "big_endian": false,
+        "debug_info": "enable",
+        "assembler_defines": [],
+        "assembler_type": "arm-auto (auto detect)",
+        "assembler_options": "",
+        "linker_output_format": "AXF",
+        "linker_no_binary": false,
+        "linker_binary_excludes": [],
+        "linker_xo_base": "",
+        "linker_ro_base": "",
+        "linker_rw_base": "",
+        "linker_options": ""
+      },
+      "memory": {
+        "flash_start": "0x08000000",
+        "flash_size": "64K",
+        "ram_start": "0x20000000",
+        "ram_size": "20K",
+        "download_address": "0x08000000",
+        "regions": [
+          {
+            "name": "IRAM1",
+            "kind": "ram",
+            "on_chip": true,
+            "enabled": true,
+            "start": "0x20000000",
+            "size": "20K",
+            "no_init": false,
+            "startup": false
+          },
+          {
+            "name": "IRAM2",
+            "kind": "ram",
+            "on_chip": true,
+            "enabled": false,
+            "start": "0x0",
+            "size": "0x0",
+            "no_init": false,
+            "startup": false
+          },
+          {
+            "name": "RAM1",
+            "kind": "ram",
+            "on_chip": false,
+            "enabled": false,
+            "start": "0x0",
+            "size": "0x0",
+            "no_init": false,
+            "startup": false
+          },
+          {
+            "name": "RAM2",
+            "kind": "ram",
+            "on_chip": false,
+            "enabled": false,
+            "start": "0x0",
+            "size": "0x0",
+            "no_init": false,
+            "startup": false
+          },
+          {
+            "name": "RAM3",
+            "kind": "ram",
+            "on_chip": false,
+            "enabled": false,
+            "start": "0x0",
+            "size": "0x0",
+            "no_init": false,
+            "startup": false
+          },
+          {
+            "name": "IROM1",
+            "kind": "rom",
+            "on_chip": true,
+            "enabled": true,
+            "start": "0x08000000",
+            "size": "64K",
+            "no_init": false,
+            "startup": true
+          },
+          {
+            "name": "IROM2",
+            "kind": "rom",
+            "on_chip": true,
+            "enabled": false,
+            "start": "0x0",
+            "size": "0x0",
+            "no_init": false,
+            "startup": false
+          },
+          {
+            "name": "ROM1",
+            "kind": "rom",
+            "on_chip": false,
+            "enabled": false,
+            "start": "0x0",
+            "size": "0x0",
+            "no_init": false,
+            "startup": false
+          },
+          {
+            "name": "ROM2",
+            "kind": "rom",
+            "on_chip": false,
+            "enabled": false,
+            "start": "0x0",
+            "size": "0x0",
+            "no_init": false,
+            "startup": false
+          },
+          {
+            "name": "ROM3",
+            "kind": "rom",
+            "on_chip": false,
+            "enabled": false,
+            "start": "0x0",
+            "size": "0x0",
+            "no_init": false,
+            "startup": false
+          }
+        ]
+      }
+    },
+    "debug": {
+      "program": "D:\\embeed\\examples\\test32\\build\\test32.axf",
+      "gdb_path": "C:\\complier\\arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi\\bin\\arm-none-eabi-gdb.exe",
+      "auto_refresh": true,
+      "watches": [
+        "i"
+      ]
+    }
+  },
+  "hardware": {
+    "device": "STM32F103xB",
+    "cpu": "Cortex-M3",
+    "fpu": "无",
+    "memory_layout": null,
+    "linker_script": "STM32F103XX_FLASH.ld",
+    "memory": {
+      "flash": {
+        "name": "Flash",
+        "start": "0x08000000",
+        "size": "64K",
+        "bytes": 65536
+      },
+      "ram": {
+        "name": "RAM",
+        "start": "0x20000000",
+        "size": "20K",
+        "bytes": 20480
+      },
+      "source": "手动设置",
+      "usage": {
+        "flash_used": 2880,
+        "flash_total": 65536,
+        "flash_percent": 4.3945312,
+        "ram_used": 1584,
+        "ram_total": 20480,
+        "ram_percent": 7.734375
+      },
+      "regions": [
+        {
+          "name": "IRAM1",
+          "kind": "ram",
+          "on_chip": true,
+          "enabled": true,
+          "start": "0x20000000",
+          "size": "20K",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "IRAM2",
+          "kind": "ram",
+          "on_chip": true,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "RAM1",
+          "kind": "ram",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "RAM2",
+          "kind": "ram",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "RAM3",
+          "kind": "ram",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "IROM1",
+          "kind": "rom",
+          "on_chip": true,
+          "enabled": true,
+          "start": "0x08000000",
+          "size": "64K",
+          "no_init": false,
+          "startup": true
+        },
+        {
+          "name": "IROM2",
+          "kind": "rom",
+          "on_chip": true,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "ROM1",
+          "kind": "rom",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "ROM2",
+          "kind": "rom",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        },
+        {
+          "name": "ROM3",
+          "kind": "rom",
+          "on_chip": false,
+          "enabled": false,
+          "start": "0x0",
+          "size": "0x0",
+          "no_init": false,
+          "startup": false
+        }
+      ]
+    },
+    "firmware": {
+      "path": "D:\\embeed\\examples\\test32\\build\\test32.axf",
+      "format": "AXF",
+      "file_size": 52044,
+      "modified_unix": 1793085037,
+      "data_size": 12,
+      "bss_size": 32,
+      "stack_top": "0x20005000",
+      "stack_size": 1024,
+      "heap_size": 0,
+      "heap_kind": null,
+      "has_symbols": true,
+      "globals": [
+        {
+          "name": "SystemCoreClock",
+          "address": "0x20000008",
+          "size": 4,
+          "section": ".data"
+        },
+        {
+          "name": "uwTick",
+          "address": "0x20000028",
+          "size": 4,
+          "section": ".bss"
+        },
+        {
+          "name": "uwTickPrio",
+          "address": "0x20000004",
+          "size": 4,
+          "section": ".data"
+        },
+        {
+          "name": "uwTickFreq",
+          "address": "0x20000000",
+          "size": 1,
+          "section": ".data"
+        }
+      ],
+      "analysis_error": null
+    },
+    "peripherals": [
+      {
+        "name": "ADC1",
+        "base": "0x40012400",
+        "description": "Analog to digital converter",
+        "register_count": 20,
+        "registers": [
+          {
+            "name": "SR",
+            "address": "0x40012400",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 5
+          },
+          {
+            "name": "CR1",
+            "address": "0x40012404",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 12
+          },
+          {
+            "name": "CR2",
+            "address": "0x40012408",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 13
+          },
+          {
+            "name": "SMPR1",
+            "address": "0x4001240C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "sample time register 1",
+            "field_count": 8
+          },
+          {
+            "name": "SMPR2",
+            "address": "0x40012410",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "sample time register 2",
+            "field_count": 10
+          },
+          {
+            "name": "JOFR1",
+            "address": "0x40012414",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "injected channel data offset register x",
+            "field_count": 1
+          },
+          {
+            "name": "JOFR2",
+            "address": "0x40012418",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "injected channel data offset register x",
+            "field_count": 1
+          },
+          {
+            "name": "JOFR3",
+            "address": "0x4001241C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "injected channel data offset register x",
+            "field_count": 1
+          },
+          {
+            "name": "JOFR4",
+            "address": "0x40012420",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "injected channel data offset register x",
+            "field_count": 1
+          },
+          {
+            "name": "HTR",
+            "address": "0x40012424",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "watchdog higher threshold register",
+            "field_count": 1
+          },
+          {
+            "name": "LTR",
+            "address": "0x40012428",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "watchdog lower threshold register",
+            "field_count": 1
+          },
+          {
+            "name": "SQR1",
+            "address": "0x4001242C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "regular sequence register 1",
+            "field_count": 5
+          },
+          {
+            "name": "SQR2",
+            "address": "0x40012430",
+            "offset": "0x30",
+            "size": 32,
+            "access": "read-write",
+            "description": "regular sequence register 2",
+            "field_count": 6
+          },
+          {
+            "name": "SQR3",
+            "address": "0x40012434",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "regular sequence register 3",
+            "field_count": 6
+          },
+          {
+            "name": "JSQR",
+            "address": "0x40012438",
+            "offset": "0x38",
+            "size": 32,
+            "access": "read-write",
+            "description": "injected sequence register",
+            "field_count": 5
+          },
+          {
+            "name": "JDR1",
+            "address": "0x4001243C",
+            "offset": "0x3C",
+            "size": 32,
+            "access": "read-only",
+            "description": "injected data register x",
+            "field_count": 1
+          },
+          {
+            "name": "JDR2",
+            "address": "0x40012440",
+            "offset": "0x40",
+            "size": 32,
+            "access": "read-only",
+            "description": "injected data register x",
+            "field_count": 1
+          },
+          {
+            "name": "JDR3",
+            "address": "0x40012444",
+            "offset": "0x44",
+            "size": 32,
+            "access": "read-only",
+            "description": "injected data register x",
+            "field_count": 1
+          },
+          {
+            "name": "JDR4",
+            "address": "0x40012448",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-only",
+            "description": "injected data register x",
+            "field_count": 1
+          },
+          {
+            "name": "DR",
+            "address": "0x4001244C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-only",
+            "description": "regular data register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "AFIO",
+        "base": "0x40010000",
+        "description": "Alternate function I/O",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "EVCR",
+            "address": "0x40010000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Event Control Register (AFIO_EVCR)",
+            "field_count": 3
+          },
+          {
+            "name": "MAPR",
+            "address": "0x40010004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "AF remap and debug I/O configuration register (AFIO_MAPR)",
+            "field_count": 12
+          },
+          {
+            "name": "EXTICR1",
+            "address": "0x40010008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "External interrupt configuration register 1 (AFIO_EXTICR1)",
+            "field_count": 4
+          },
+          {
+            "name": "EXTICR2",
+            "address": "0x4001000C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "External interrupt configuration register 2 (AFIO_EXTICR2)",
+            "field_count": 4
+          },
+          {
+            "name": "EXTICR3",
+            "address": "0x40010010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "External interrupt configuration register 3 (AFIO_EXTICR3)",
+            "field_count": 4
+          },
+          {
+            "name": "EXTICR4",
+            "address": "0x40010014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "External interrupt configuration register 4 (AFIO_EXTICR4)",
+            "field_count": 4
+          },
+          {
+            "name": "MAPR2",
+            "address": "0x4001001C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "AF remap and debug I/O configuration register",
+            "field_count": 11
+          }
+        ]
+      },
+      {
+        "name": "BKP",
+        "base": "0x40006C04",
+        "description": "Backup registers",
+        "register_count": 45,
+        "registers": [
+          {
+            "name": "DR1",
+            "address": "0x40006C04",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR2",
+            "address": "0x40006C08",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR3",
+            "address": "0x40006C0C",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR4",
+            "address": "0x40006C10",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR5",
+            "address": "0x40006C14",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR6",
+            "address": "0x40006C18",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR7",
+            "address": "0x40006C1C",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR8",
+            "address": "0x40006C20",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR9",
+            "address": "0x40006C24",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR10",
+            "address": "0x40006C28",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "RTCCR",
+            "address": "0x40006C2C",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "RTC clock calibration register (BKP_RTCCR)",
+            "field_count": 4
+          },
+          {
+            "name": "CR",
+            "address": "0x40006C30",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup control register (BKP_CR)",
+            "field_count": 2
+          },
+          {
+            "name": "CSR",
+            "address": "0x40006C34",
+            "offset": "0x30",
+            "size": 32,
+            "access": "write-only",
+            "description": "BKP_CSR control/status register (BKP_CSR)",
+            "field_count": 5
+          },
+          {
+            "name": "DR11",
+            "address": "0x40006C40",
+            "offset": "0x3C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR12",
+            "address": "0x40006C44",
+            "offset": "0x40",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR13",
+            "address": "0x40006C48",
+            "offset": "0x44",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR14",
+            "address": "0x40006C4C",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR15",
+            "address": "0x40006C50",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR16",
+            "address": "0x40006C54",
+            "offset": "0x50",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR17",
+            "address": "0x40006C58",
+            "offset": "0x54",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR18",
+            "address": "0x40006C5C",
+            "offset": "0x58",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR19",
+            "address": "0x40006C60",
+            "offset": "0x5C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR20",
+            "address": "0x40006C64",
+            "offset": "0x60",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR21",
+            "address": "0x40006C68",
+            "offset": "0x64",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR22",
+            "address": "0x40006C6C",
+            "offset": "0x68",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR23",
+            "address": "0x40006C70",
+            "offset": "0x6C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR24",
+            "address": "0x40006C74",
+            "offset": "0x70",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR25",
+            "address": "0x40006C78",
+            "offset": "0x74",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR26",
+            "address": "0x40006C7C",
+            "offset": "0x78",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR27",
+            "address": "0x40006C80",
+            "offset": "0x7C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR28",
+            "address": "0x40006C84",
+            "offset": "0x80",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR29",
+            "address": "0x40006C88",
+            "offset": "0x84",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR30",
+            "address": "0x40006C8C",
+            "offset": "0x88",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR31",
+            "address": "0x40006C90",
+            "offset": "0x8C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR32",
+            "address": "0x40006C94",
+            "offset": "0x90",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR33",
+            "address": "0x40006C98",
+            "offset": "0x94",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR34",
+            "address": "0x40006C9C",
+            "offset": "0x98",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR35",
+            "address": "0x40006CA0",
+            "offset": "0x9C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR36",
+            "address": "0x40006CA4",
+            "offset": "0xA0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR37",
+            "address": "0x40006CA8",
+            "offset": "0xA4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR38",
+            "address": "0x40006CAC",
+            "offset": "0xA8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR39",
+            "address": "0x40006CB0",
+            "offset": "0xAC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR40",
+            "address": "0x40006CB4",
+            "offset": "0xB0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR41",
+            "address": "0x40006CB8",
+            "offset": "0xB4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          },
+          {
+            "name": "DR42",
+            "address": "0x40006CBC",
+            "offset": "0xB8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup data register (BKP_DR)",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "CEC",
+        "base": "0x40007800",
+        "description": "HDMI-CEC controller",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CFGR",
+            "address": "0x40007800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "configuration register",
+            "field_count": 4
+          },
+          {
+            "name": "OAR",
+            "address": "0x40007804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "CEC own address register",
+            "field_count": 1
+          },
+          {
+            "name": "PRES",
+            "address": "0x40007808",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Rx Data Register",
+            "field_count": 1
+          },
+          {
+            "name": "ESR",
+            "address": "0x4000780C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-only",
+            "description": "CEC error status register",
+            "field_count": 7
+          },
+          {
+            "name": "CSR",
+            "address": "0x40007810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "CEC control and status register",
+            "field_count": 8
+          },
+          {
+            "name": "TXD",
+            "address": "0x40007814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "CEC Tx data register",
+            "field_count": 1
+          },
+          {
+            "name": "RXD",
+            "address": "0x40007818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-only",
+            "description": "CEC Rx data register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "CRC",
+        "base": "0x40023000",
+        "description": "CRC calculation unit",
+        "register_count": 3,
+        "registers": [
+          {
+            "name": "DR",
+            "address": "0x40023000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Data register",
+            "field_count": 1
+          },
+          {
+            "name": "IDR",
+            "address": "0x40023004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Independent Data register",
+            "field_count": 1
+          },
+          {
+            "name": "CR",
+            "address": "0x40023008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "write-only",
+            "description": "Control register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "DAC",
+        "base": "0x40007400",
+        "description": "Digital to analog converter",
+        "register_count": 14,
+        "registers": [
+          {
+            "name": "CR",
+            "address": "0x40007400",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register (DAC_CR)",
+            "field_count": 16
+          },
+          {
+            "name": "SWTRIGR",
+            "address": "0x40007404",
+            "offset": "0x4",
+            "size": 32,
+            "access": "write-only",
+            "description": "DAC software trigger register (DAC_SWTRIGR)",
+            "field_count": 2
+          },
+          {
+            "name": "DHR12R1",
+            "address": "0x40007408",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "DAC channel1 12-bit right-aligned data holding register(DAC_DHR12R1)",
+            "field_count": 1
+          },
+          {
+            "name": "DHR12L1",
+            "address": "0x4000740C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DAC channel1 12-bit left aligned data holding register (DAC_DHR12L1)",
+            "field_count": 1
+          },
+          {
+            "name": "DHR8R1",
+            "address": "0x40007410",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "DAC channel1 8-bit right aligned data holding register (DAC_DHR8R1)",
+            "field_count": 1
+          },
+          {
+            "name": "DHR12R2",
+            "address": "0x40007414",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "DAC channel2 12-bit right aligned data holding register (DAC_DHR12R2)",
+            "field_count": 1
+          },
+          {
+            "name": "DHR12L2",
+            "address": "0x40007418",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "DAC channel2 12-bit left aligned data holding register (DAC_DHR12L2)",
+            "field_count": 1
+          },
+          {
+            "name": "DHR8R2",
+            "address": "0x4000741C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DAC channel2 8-bit right-aligned data holding register (DAC_DHR8R2)",
+            "field_count": 1
+          },
+          {
+            "name": "DHR12RD",
+            "address": "0x40007420",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "Dual DAC 12-bit right-aligned data holding register (DAC_DHR12RD), Bits 31:28 Reserved, Bits 15:12 Reserved",
+            "field_count": 2
+          },
+          {
+            "name": "DHR12LD",
+            "address": "0x40007424",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "DUAL DAC 12-bit left aligned data holding register (DAC_DHR12LD), Bits 19:16 Reserved, Bits 3:0 Reserved",
+            "field_count": 2
+          },
+          {
+            "name": "DHR8RD",
+            "address": "0x40007428",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "DUAL DAC 8-bit right aligned data holding register (DAC_DHR8RD), Bits 31:16 Reserved",
+            "field_count": 2
+          },
+          {
+            "name": "DOR1",
+            "address": "0x4000742C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-only",
+            "description": "DAC channel1 data output register (DAC_DOR1)",
+            "field_count": 1
+          },
+          {
+            "name": "DOR2",
+            "address": "0x40007430",
+            "offset": "0x30",
+            "size": 32,
+            "access": "read-only",
+            "description": "DAC channel2 data output register (DAC_DOR2)",
+            "field_count": 1
+          },
+          {
+            "name": "SR",
+            "address": "0x40007434",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "DAC status register",
+            "field_count": 2
+          }
+        ]
+      },
+      {
+        "name": "DBG",
+        "base": "0xE0042000",
+        "description": "Debug support",
+        "register_count": 2,
+        "registers": [
+          {
+            "name": "IDCODE",
+            "address": "0xE0042000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-only",
+            "description": "DBGMCU_IDCODE",
+            "field_count": 2
+          },
+          {
+            "name": "CR",
+            "address": "0xE0042004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "DBGMCU_CR",
+            "field_count": 22
+          }
+        ]
+      },
+      {
+        "name": "DMA1",
+        "base": "0x40020000",
+        "description": "DMA controller",
+        "register_count": 30,
+        "registers": [
+          {
+            "name": "ISR",
+            "address": "0x40020000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-only",
+            "description": "DMA interrupt status register (DMA_ISR)",
+            "field_count": 28
+          },
+          {
+            "name": "IFCR",
+            "address": "0x40020004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "write-only",
+            "description": "DMA interrupt flag clear register (DMA_IFCR)",
+            "field_count": 28
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40020008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR1",
+            "address": "0x4002000C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 1 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR1",
+            "address": "0x40020010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 1 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR1",
+            "address": "0x40020014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 1 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR2",
+            "address": "0x4002001C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR2",
+            "address": "0x40020020",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 2 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR2",
+            "address": "0x40020024",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 2 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR2",
+            "address": "0x40020028",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 2 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR3",
+            "address": "0x40020030",
+            "offset": "0x30",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR3",
+            "address": "0x40020034",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 3 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR3",
+            "address": "0x40020038",
+            "offset": "0x38",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 3 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR3",
+            "address": "0x4002003C",
+            "offset": "0x3C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 3 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR4",
+            "address": "0x40020044",
+            "offset": "0x44",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR4",
+            "address": "0x40020048",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 4 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR4",
+            "address": "0x4002004C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 4 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR4",
+            "address": "0x40020050",
+            "offset": "0x50",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 4 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR5",
+            "address": "0x40020058",
+            "offset": "0x58",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR5",
+            "address": "0x4002005C",
+            "offset": "0x5C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 5 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR5",
+            "address": "0x40020060",
+            "offset": "0x60",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 5 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR5",
+            "address": "0x40020064",
+            "offset": "0x64",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 5 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR6",
+            "address": "0x4002006C",
+            "offset": "0x6C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR6",
+            "address": "0x40020070",
+            "offset": "0x70",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 6 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR6",
+            "address": "0x40020074",
+            "offset": "0x74",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 6 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR6",
+            "address": "0x40020078",
+            "offset": "0x78",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 6 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR7",
+            "address": "0x40020080",
+            "offset": "0x80",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR7",
+            "address": "0x40020084",
+            "offset": "0x84",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 7 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR7",
+            "address": "0x40020088",
+            "offset": "0x88",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 7 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR7",
+            "address": "0x4002008C",
+            "offset": "0x8C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 7 memory address register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "DMA2",
+        "base": "0x40020400",
+        "description": "DMA2 Channel1 global interrupt",
+        "register_count": 30,
+        "registers": [
+          {
+            "name": "ISR",
+            "address": "0x40020400",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-only",
+            "description": "DMA interrupt status register (DMA_ISR)",
+            "field_count": 28
+          },
+          {
+            "name": "IFCR",
+            "address": "0x40020404",
+            "offset": "0x4",
+            "size": 32,
+            "access": "write-only",
+            "description": "DMA interrupt flag clear register (DMA_IFCR)",
+            "field_count": 28
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40020408",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR1",
+            "address": "0x4002040C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 1 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR1",
+            "address": "0x40020410",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 1 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR1",
+            "address": "0x40020414",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 1 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR2",
+            "address": "0x4002041C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR2",
+            "address": "0x40020420",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 2 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR2",
+            "address": "0x40020424",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 2 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR2",
+            "address": "0x40020428",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 2 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR3",
+            "address": "0x40020430",
+            "offset": "0x30",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR3",
+            "address": "0x40020434",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 3 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR3",
+            "address": "0x40020438",
+            "offset": "0x38",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 3 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR3",
+            "address": "0x4002043C",
+            "offset": "0x3C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 3 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR4",
+            "address": "0x40020444",
+            "offset": "0x44",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR4",
+            "address": "0x40020448",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 4 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR4",
+            "address": "0x4002044C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 4 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR4",
+            "address": "0x40020450",
+            "offset": "0x50",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 4 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR5",
+            "address": "0x40020458",
+            "offset": "0x58",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR5",
+            "address": "0x4002045C",
+            "offset": "0x5C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 5 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR5",
+            "address": "0x40020460",
+            "offset": "0x60",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 5 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR5",
+            "address": "0x40020464",
+            "offset": "0x64",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 5 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR6",
+            "address": "0x4002046C",
+            "offset": "0x6C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR6",
+            "address": "0x40020470",
+            "offset": "0x70",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 6 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR6",
+            "address": "0x40020474",
+            "offset": "0x74",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 6 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR6",
+            "address": "0x40020478",
+            "offset": "0x78",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 6 memory address register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR7",
+            "address": "0x40020480",
+            "offset": "0x80",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel configuration register (DMA_CCR)",
+            "field_count": 12
+          },
+          {
+            "name": "CNDTR7",
+            "address": "0x40020484",
+            "offset": "0x84",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 7 number of data register",
+            "field_count": 1
+          },
+          {
+            "name": "CPAR7",
+            "address": "0x40020488",
+            "offset": "0x88",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 7 peripheral address register",
+            "field_count": 1
+          },
+          {
+            "name": "CMAR7",
+            "address": "0x4002048C",
+            "offset": "0x8C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA channel 7 memory address register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "EXTI",
+        "base": "0x40010400",
+        "description": "EXTI",
+        "register_count": 6,
+        "registers": [
+          {
+            "name": "IMR",
+            "address": "0x40010400",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt mask register (EXTI_IMR)",
+            "field_count": 18
+          },
+          {
+            "name": "EMR",
+            "address": "0x40010404",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Event mask register (EXTI_EMR)",
+            "field_count": 18
+          },
+          {
+            "name": "RTSR",
+            "address": "0x40010408",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Rising Trigger selection register (EXTI_RTSR)",
+            "field_count": 18
+          },
+          {
+            "name": "FTSR",
+            "address": "0x4001040C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Falling Trigger selection register (EXTI_FTSR)",
+            "field_count": 18
+          },
+          {
+            "name": "SWIER",
+            "address": "0x40010410",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "Software interrupt event register (EXTI_SWIER)",
+            "field_count": 18
+          },
+          {
+            "name": "PR",
+            "address": "0x40010414",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "Pending register (EXTI_PR)",
+            "field_count": 18
+          }
+        ]
+      },
+      {
+        "name": "FLASH",
+        "base": "0x40022000",
+        "description": "FLASH",
+        "register_count": 8,
+        "registers": [
+          {
+            "name": "ACR",
+            "address": "0x40022000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Flash access control register",
+            "field_count": 1
+          },
+          {
+            "name": "KEYR",
+            "address": "0x40022004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "write-only",
+            "description": "Flash key register",
+            "field_count": 1
+          },
+          {
+            "name": "OPTKEYR",
+            "address": "0x40022008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "write-only",
+            "description": "Flash option key register",
+            "field_count": 1
+          },
+          {
+            "name": "SR",
+            "address": "0x4002200C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Status register",
+            "field_count": 4
+          },
+          {
+            "name": "CR",
+            "address": "0x40022010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register",
+            "field_count": 10
+          },
+          {
+            "name": "AR",
+            "address": "0x40022014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "Flash address register",
+            "field_count": 1
+          },
+          {
+            "name": "OBR",
+            "address": "0x4002201C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-only",
+            "description": "Option byte register",
+            "field_count": 7
+          },
+          {
+            "name": "WRPR",
+            "address": "0x40022020",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-only",
+            "description": "Write protection register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "FSMC",
+        "base": "0xA0000000",
+        "description": "Flexible static memory controller",
+        "register_count": 12,
+        "registers": [
+          {
+            "name": "BCR1",
+            "address": "0xA0000000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash chip-select control register 1",
+            "field_count": 13
+          },
+          {
+            "name": "BTR1",
+            "address": "0xA0000004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash chip-select timing register 1",
+            "field_count": 7
+          },
+          {
+            "name": "BCR2",
+            "address": "0xA0000008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash chip-select control register 2",
+            "field_count": 14
+          },
+          {
+            "name": "BTR2",
+            "address": "0xA000000C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash chip-select timing register 2",
+            "field_count": 7
+          },
+          {
+            "name": "BCR3",
+            "address": "0xA0000010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash chip-select control register 3",
+            "field_count": 14
+          },
+          {
+            "name": "BTR3",
+            "address": "0xA0000014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash chip-select timing register 3",
+            "field_count": 7
+          },
+          {
+            "name": "BCR4",
+            "address": "0xA0000018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash chip-select control register 4",
+            "field_count": 14
+          },
+          {
+            "name": "BTR4",
+            "address": "0xA000001C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash chip-select timing register 4",
+            "field_count": 7
+          },
+          {
+            "name": "BWTR1",
+            "address": "0xA0000104",
+            "offset": "0x104",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash write timing registers 1",
+            "field_count": 6
+          },
+          {
+            "name": "BWTR2",
+            "address": "0xA000010C",
+            "offset": "0x10C",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash write timing registers 2",
+            "field_count": 6
+          },
+          {
+            "name": "BWTR3",
+            "address": "0xA0000114",
+            "offset": "0x114",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash write timing registers 3",
+            "field_count": 6
+          },
+          {
+            "name": "BWTR4",
+            "address": "0xA000011C",
+            "offset": "0x11C",
+            "size": 32,
+            "access": "read-write",
+            "description": "SRAM/NOR-Flash write timing registers 4",
+            "field_count": 6
+          }
+        ]
+      },
+      {
+        "name": "GPIOA",
+        "base": "0x40010800",
+        "description": "General purpose I/O",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CRL",
+            "address": "0x40010800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register low (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "CRH",
+            "address": "0x40010804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register high (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "IDR",
+            "address": "0x40010808",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "Port input data register (GPIOn_IDR)",
+            "field_count": 16
+          },
+          {
+            "name": "ODR",
+            "address": "0x4001080C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port output data register (GPIOn_ODR)",
+            "field_count": 16
+          },
+          {
+            "name": "BSRR",
+            "address": "0x40010810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit set/reset register (GPIOn_BSRR)",
+            "field_count": 32
+          },
+          {
+            "name": "BRR",
+            "address": "0x40010814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit reset register (GPIOn_BRR)",
+            "field_count": 16
+          },
+          {
+            "name": "LCKR",
+            "address": "0x40010818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration lock register",
+            "field_count": 17
+          }
+        ]
+      },
+      {
+        "name": "GPIOB",
+        "base": "0x40010C00",
+        "description": "General purpose I/O",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CRL",
+            "address": "0x40010C00",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register low (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "CRH",
+            "address": "0x40010C04",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register high (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "IDR",
+            "address": "0x40010C08",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "Port input data register (GPIOn_IDR)",
+            "field_count": 16
+          },
+          {
+            "name": "ODR",
+            "address": "0x40010C0C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port output data register (GPIOn_ODR)",
+            "field_count": 16
+          },
+          {
+            "name": "BSRR",
+            "address": "0x40010C10",
+            "offset": "0x10",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit set/reset register (GPIOn_BSRR)",
+            "field_count": 32
+          },
+          {
+            "name": "BRR",
+            "address": "0x40010C14",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit reset register (GPIOn_BRR)",
+            "field_count": 16
+          },
+          {
+            "name": "LCKR",
+            "address": "0x40010C18",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration lock register",
+            "field_count": 17
+          }
+        ]
+      },
+      {
+        "name": "GPIOC",
+        "base": "0x40011000",
+        "description": "General purpose I/O",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CRL",
+            "address": "0x40011000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register low (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "CRH",
+            "address": "0x40011004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register high (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "IDR",
+            "address": "0x40011008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "Port input data register (GPIOn_IDR)",
+            "field_count": 16
+          },
+          {
+            "name": "ODR",
+            "address": "0x4001100C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port output data register (GPIOn_ODR)",
+            "field_count": 16
+          },
+          {
+            "name": "BSRR",
+            "address": "0x40011010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit set/reset register (GPIOn_BSRR)",
+            "field_count": 32
+          },
+          {
+            "name": "BRR",
+            "address": "0x40011014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit reset register (GPIOn_BRR)",
+            "field_count": 16
+          },
+          {
+            "name": "LCKR",
+            "address": "0x40011018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration lock register",
+            "field_count": 17
+          }
+        ]
+      },
+      {
+        "name": "GPIOD",
+        "base": "0x40011400",
+        "description": "General purpose I/O",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CRL",
+            "address": "0x40011400",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register low (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "CRH",
+            "address": "0x40011404",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register high (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "IDR",
+            "address": "0x40011408",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "Port input data register (GPIOn_IDR)",
+            "field_count": 16
+          },
+          {
+            "name": "ODR",
+            "address": "0x4001140C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port output data register (GPIOn_ODR)",
+            "field_count": 16
+          },
+          {
+            "name": "BSRR",
+            "address": "0x40011410",
+            "offset": "0x10",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit set/reset register (GPIOn_BSRR)",
+            "field_count": 32
+          },
+          {
+            "name": "BRR",
+            "address": "0x40011414",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit reset register (GPIOn_BRR)",
+            "field_count": 16
+          },
+          {
+            "name": "LCKR",
+            "address": "0x40011418",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration lock register",
+            "field_count": 17
+          }
+        ]
+      },
+      {
+        "name": "GPIOE",
+        "base": "0x40011800",
+        "description": "General purpose I/O",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CRL",
+            "address": "0x40011800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register low (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "CRH",
+            "address": "0x40011804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register high (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "IDR",
+            "address": "0x40011808",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "Port input data register (GPIOn_IDR)",
+            "field_count": 16
+          },
+          {
+            "name": "ODR",
+            "address": "0x4001180C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port output data register (GPIOn_ODR)",
+            "field_count": 16
+          },
+          {
+            "name": "BSRR",
+            "address": "0x40011810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit set/reset register (GPIOn_BSRR)",
+            "field_count": 32
+          },
+          {
+            "name": "BRR",
+            "address": "0x40011814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit reset register (GPIOn_BRR)",
+            "field_count": 16
+          },
+          {
+            "name": "LCKR",
+            "address": "0x40011818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration lock register",
+            "field_count": 17
+          }
+        ]
+      },
+      {
+        "name": "GPIOF",
+        "base": "0x40011C00",
+        "description": "General purpose I/O",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CRL",
+            "address": "0x40011C00",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register low (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "CRH",
+            "address": "0x40011C04",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register high (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "IDR",
+            "address": "0x40011C08",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "Port input data register (GPIOn_IDR)",
+            "field_count": 16
+          },
+          {
+            "name": "ODR",
+            "address": "0x40011C0C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port output data register (GPIOn_ODR)",
+            "field_count": 16
+          },
+          {
+            "name": "BSRR",
+            "address": "0x40011C10",
+            "offset": "0x10",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit set/reset register (GPIOn_BSRR)",
+            "field_count": 32
+          },
+          {
+            "name": "BRR",
+            "address": "0x40011C14",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit reset register (GPIOn_BRR)",
+            "field_count": 16
+          },
+          {
+            "name": "LCKR",
+            "address": "0x40011C18",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration lock register",
+            "field_count": 17
+          }
+        ]
+      },
+      {
+        "name": "GPIOG",
+        "base": "0x40012000",
+        "description": "General purpose I/O",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CRL",
+            "address": "0x40012000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register low (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "CRH",
+            "address": "0x40012004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration register high (GPIOn_CRL)",
+            "field_count": 16
+          },
+          {
+            "name": "IDR",
+            "address": "0x40012008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "Port input data register (GPIOn_IDR)",
+            "field_count": 16
+          },
+          {
+            "name": "ODR",
+            "address": "0x4001200C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port output data register (GPIOn_ODR)",
+            "field_count": 16
+          },
+          {
+            "name": "BSRR",
+            "address": "0x40012010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit set/reset register (GPIOn_BSRR)",
+            "field_count": 32
+          },
+          {
+            "name": "BRR",
+            "address": "0x40012014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "Port bit reset register (GPIOn_BRR)",
+            "field_count": 16
+          },
+          {
+            "name": "LCKR",
+            "address": "0x40012018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Port configuration lock register",
+            "field_count": 17
+          }
+        ]
+      },
+      {
+        "name": "I2C1",
+        "base": "0x40005400",
+        "description": "Inter integrated circuit",
+        "register_count": 9,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40005400",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 1",
+            "field_count": 14
+          },
+          {
+            "name": "CR2",
+            "address": "0x40005404",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 2",
+            "field_count": 6
+          },
+          {
+            "name": "OAR1",
+            "address": "0x40005408",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Own address register 1",
+            "field_count": 4
+          },
+          {
+            "name": "OAR2",
+            "address": "0x4000540C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Own address register 2",
+            "field_count": 2
+          },
+          {
+            "name": "DR",
+            "address": "0x40005410",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "Data register",
+            "field_count": 1
+          },
+          {
+            "name": "SR1",
+            "address": "0x40005414",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "Status register 1",
+            "field_count": 14
+          },
+          {
+            "name": "SR2",
+            "address": "0x40005418",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-only",
+            "description": "Status register 2",
+            "field_count": 8
+          },
+          {
+            "name": "CCR",
+            "address": "0x4000541C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Clock control register",
+            "field_count": 3
+          },
+          {
+            "name": "TRISE",
+            "address": "0x40005420",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "TRISE register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "I2C2",
+        "base": "0x40005800",
+        "description": "I2C2 event interrupt",
+        "register_count": 9,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40005800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 1",
+            "field_count": 14
+          },
+          {
+            "name": "CR2",
+            "address": "0x40005804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 2",
+            "field_count": 6
+          },
+          {
+            "name": "OAR1",
+            "address": "0x40005808",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Own address register 1",
+            "field_count": 4
+          },
+          {
+            "name": "OAR2",
+            "address": "0x4000580C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Own address register 2",
+            "field_count": 2
+          },
+          {
+            "name": "DR",
+            "address": "0x40005810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "Data register",
+            "field_count": 1
+          },
+          {
+            "name": "SR1",
+            "address": "0x40005814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "Status register 1",
+            "field_count": 14
+          },
+          {
+            "name": "SR2",
+            "address": "0x40005818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-only",
+            "description": "Status register 2",
+            "field_count": 8
+          },
+          {
+            "name": "CCR",
+            "address": "0x4000581C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Clock control register",
+            "field_count": 3
+          },
+          {
+            "name": "TRISE",
+            "address": "0x40005820",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "TRISE register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "IWDG",
+        "base": "0x40003000",
+        "description": "Independent watchdog",
+        "register_count": 4,
+        "registers": [
+          {
+            "name": "KR",
+            "address": "0x40003000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "write-only",
+            "description": "Key register (IWDG_KR)",
+            "field_count": 1
+          },
+          {
+            "name": "PR",
+            "address": "0x40003004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Prescaler register (IWDG_PR)",
+            "field_count": 1
+          },
+          {
+            "name": "RLR",
+            "address": "0x40003008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Reload register (IWDG_RLR)",
+            "field_count": 1
+          },
+          {
+            "name": "SR",
+            "address": "0x4000300C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-only",
+            "description": "Status register (IWDG_SR)",
+            "field_count": 2
+          }
+        ]
+      },
+      {
+        "name": "NVIC",
+        "base": "0xE000E000",
+        "description": "Nested Vectored Interrupt Controller",
+        "register_count": 27,
+        "registers": [
+          {
+            "name": "ICTR",
+            "address": "0xE000E004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-only",
+            "description": "Interrupt Controller Type Register",
+            "field_count": 1
+          },
+          {
+            "name": "ISER0",
+            "address": "0xE000E100",
+            "offset": "0x100",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Set-Enable Register",
+            "field_count": 1
+          },
+          {
+            "name": "ISER1",
+            "address": "0xE000E104",
+            "offset": "0x104",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Set-Enable Register",
+            "field_count": 1
+          },
+          {
+            "name": "ICER0",
+            "address": "0xE000E180",
+            "offset": "0x180",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Clear-Enable Register",
+            "field_count": 1
+          },
+          {
+            "name": "ICER1",
+            "address": "0xE000E184",
+            "offset": "0x184",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Clear-Enable Register",
+            "field_count": 1
+          },
+          {
+            "name": "ISPR0",
+            "address": "0xE000E200",
+            "offset": "0x200",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Set-Pending Register",
+            "field_count": 1
+          },
+          {
+            "name": "ISPR1",
+            "address": "0xE000E204",
+            "offset": "0x204",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Set-Pending Register",
+            "field_count": 1
+          },
+          {
+            "name": "ICPR0",
+            "address": "0xE000E280",
+            "offset": "0x280",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Clear-Pending Register",
+            "field_count": 1
+          },
+          {
+            "name": "ICPR1",
+            "address": "0xE000E284",
+            "offset": "0x284",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Clear-Pending Register",
+            "field_count": 1
+          },
+          {
+            "name": "IABR0",
+            "address": "0xE000E300",
+            "offset": "0x300",
+            "size": 32,
+            "access": "read-only",
+            "description": "Interrupt Active Bit Register",
+            "field_count": 1
+          },
+          {
+            "name": "IABR1",
+            "address": "0xE000E304",
+            "offset": "0x304",
+            "size": 32,
+            "access": "read-only",
+            "description": "Interrupt Active Bit Register",
+            "field_count": 1
+          },
+          {
+            "name": "IPR0",
+            "address": "0xE000E400",
+            "offset": "0x400",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR1",
+            "address": "0xE000E404",
+            "offset": "0x404",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR2",
+            "address": "0xE000E408",
+            "offset": "0x408",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR3",
+            "address": "0xE000E40C",
+            "offset": "0x40C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR4",
+            "address": "0xE000E410",
+            "offset": "0x410",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR5",
+            "address": "0xE000E414",
+            "offset": "0x414",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR6",
+            "address": "0xE000E418",
+            "offset": "0x418",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR7",
+            "address": "0xE000E41C",
+            "offset": "0x41C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR8",
+            "address": "0xE000E420",
+            "offset": "0x420",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR9",
+            "address": "0xE000E424",
+            "offset": "0x424",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR10",
+            "address": "0xE000E428",
+            "offset": "0x428",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR11",
+            "address": "0xE000E42C",
+            "offset": "0x42C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR12",
+            "address": "0xE000E430",
+            "offset": "0x430",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR13",
+            "address": "0xE000E434",
+            "offset": "0x434",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "IPR14",
+            "address": "0xE000E438",
+            "offset": "0x438",
+            "size": 32,
+            "access": "read-write",
+            "description": "Interrupt Priority Register",
+            "field_count": 4
+          },
+          {
+            "name": "STIR",
+            "address": "0xE000EF00",
+            "offset": "0xF00",
+            "size": 32,
+            "access": "write-only",
+            "description": "Software Triggered Interrupt Register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "PWR",
+        "base": "0x40007000",
+        "description": "Power control",
+        "register_count": 2,
+        "registers": [
+          {
+            "name": "CR",
+            "address": "0x40007000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Power control register (PWR_CR)",
+            "field_count": 7
+          },
+          {
+            "name": "CSR",
+            "address": "0x40007004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-only",
+            "description": "Power control register (PWR_CR)",
+            "field_count": 4
+          }
+        ]
+      },
+      {
+        "name": "RCC",
+        "base": "0x40021000",
+        "description": "Reset and clock control",
+        "register_count": 11,
+        "registers": [
+          {
+            "name": "CR",
+            "address": "0x40021000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Clock control register",
+            "field_count": 10
+          },
+          {
+            "name": "CFGR",
+            "address": "0x40021004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Clock configuration register (RCC_CFGR)",
+            "field_count": 10
+          },
+          {
+            "name": "CIR",
+            "address": "0x40021008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "Clock interrupt register (RCC_CIR)",
+            "field_count": 17
+          },
+          {
+            "name": "APB2RSTR",
+            "address": "0x4002100C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "APB2 peripheral reset register (RCC_APB2RSTR)",
+            "field_count": 15
+          },
+          {
+            "name": "APB1RSTR",
+            "address": "0x40021010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "APB1 peripheral reset register (RCC_APB1RSTR)",
+            "field_count": 22
+          },
+          {
+            "name": "AHBENR",
+            "address": "0x40021014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "AHB Peripheral Clock enable register (RCC_AHBENR)",
+            "field_count": 6
+          },
+          {
+            "name": "APB2ENR",
+            "address": "0x40021018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "APB2 peripheral clock enable register (RCC_APB2ENR)",
+            "field_count": 15
+          },
+          {
+            "name": "APB1ENR",
+            "address": "0x4002101C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "APB1 peripheral clock enable register (RCC_APB1ENR)",
+            "field_count": 22
+          },
+          {
+            "name": "BDCR",
+            "address": "0x40021020",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "Backup domain control register (RCC_BDCR)",
+            "field_count": 6
+          },
+          {
+            "name": "CSR",
+            "address": "0x40021024",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control/status register (RCC_CSR)",
+            "field_count": 9
+          },
+          {
+            "name": "CFGR2",
+            "address": "0x4002102C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "Clock configuration register 2",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "RTC",
+        "base": "0x40002800",
+        "description": "Real time clock",
+        "register_count": 10,
+        "registers": [
+          {
+            "name": "CRH",
+            "address": "0x40002800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "RTC Control Register High",
+            "field_count": 3
+          },
+          {
+            "name": "CRL",
+            "address": "0x40002804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "RTC Control Register Low",
+            "field_count": 6
+          },
+          {
+            "name": "PRLH",
+            "address": "0x40002808",
+            "offset": "0x8",
+            "size": 32,
+            "access": "write-only",
+            "description": "RTC Prescaler Load Register High",
+            "field_count": 1
+          },
+          {
+            "name": "PRLL",
+            "address": "0x4000280C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "write-only",
+            "description": "RTC Prescaler Load Register Low",
+            "field_count": 1
+          },
+          {
+            "name": "DIVH",
+            "address": "0x40002810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-only",
+            "description": "RTC Prescaler Divider Register High",
+            "field_count": 1
+          },
+          {
+            "name": "DIVL",
+            "address": "0x40002814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-only",
+            "description": "RTC Prescaler Divider Register Low",
+            "field_count": 1
+          },
+          {
+            "name": "CNTH",
+            "address": "0x40002818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "RTC Counter Register High",
+            "field_count": 1
+          },
+          {
+            "name": "CNTL",
+            "address": "0x4000281C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "RTC Counter Register Low",
+            "field_count": 1
+          },
+          {
+            "name": "ALRH",
+            "address": "0x40002820",
+            "offset": "0x20",
+            "size": 32,
+            "access": "write-only",
+            "description": "RTC Alarm Register High",
+            "field_count": 1
+          },
+          {
+            "name": "ALRL",
+            "address": "0x40002824",
+            "offset": "0x24",
+            "size": 32,
+            "access": "write-only",
+            "description": "RTC Alarm Register Low",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "SPI1",
+        "base": "0x40013000",
+        "description": "Serial peripheral interface",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40013000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 14
+          },
+          {
+            "name": "CR2",
+            "address": "0x40013004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 6
+          },
+          {
+            "name": "SR",
+            "address": "0x40013008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "status register",
+            "field_count": 6
+          },
+          {
+            "name": "DR",
+            "address": "0x4001300C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "data register",
+            "field_count": 1
+          },
+          {
+            "name": "CRCPR",
+            "address": "0x40013010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "CRC polynomial register",
+            "field_count": 1
+          },
+          {
+            "name": "RXCRCR",
+            "address": "0x40013014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-only",
+            "description": "RX CRC register",
+            "field_count": 1
+          },
+          {
+            "name": "TXCRCR",
+            "address": "0x40013018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-only",
+            "description": "TX CRC register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "SPI2",
+        "base": "0x40003800",
+        "description": "SPI2 global interrupt",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40003800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 14
+          },
+          {
+            "name": "CR2",
+            "address": "0x40003804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 6
+          },
+          {
+            "name": "SR",
+            "address": "0x40003808",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "status register",
+            "field_count": 6
+          },
+          {
+            "name": "DR",
+            "address": "0x4000380C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "data register",
+            "field_count": 1
+          },
+          {
+            "name": "CRCPR",
+            "address": "0x40003810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "CRC polynomial register",
+            "field_count": 1
+          },
+          {
+            "name": "RXCRCR",
+            "address": "0x40003814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-only",
+            "description": "RX CRC register",
+            "field_count": 1
+          },
+          {
+            "name": "TXCRCR",
+            "address": "0x40003818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-only",
+            "description": "TX CRC register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "SPI3",
+        "base": "0x40003C00",
+        "description": "SPI3 global interrupt",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40003C00",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 14
+          },
+          {
+            "name": "CR2",
+            "address": "0x40003C04",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 6
+          },
+          {
+            "name": "SR",
+            "address": "0x40003C08",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-only",
+            "description": "status register",
+            "field_count": 6
+          },
+          {
+            "name": "DR",
+            "address": "0x40003C0C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "data register",
+            "field_count": 1
+          },
+          {
+            "name": "CRCPR",
+            "address": "0x40003C10",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "CRC polynomial register",
+            "field_count": 1
+          },
+          {
+            "name": "RXCRCR",
+            "address": "0x40003C14",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-only",
+            "description": "RX CRC register",
+            "field_count": 1
+          },
+          {
+            "name": "TXCRCR",
+            "address": "0x40003C18",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-only",
+            "description": "TX CRC register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM1",
+        "base": "0x40012C00",
+        "description": "Advanced timer",
+        "register_count": 22,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40012C00",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 8
+          },
+          {
+            "name": "CR2",
+            "address": "0x40012C04",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 12
+          },
+          {
+            "name": "SMCR",
+            "address": "0x40012C08",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "slave mode control register",
+            "field_count": 7
+          },
+          {
+            "name": "DIER",
+            "address": "0x40012C0C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 15
+          },
+          {
+            "name": "SR",
+            "address": "0x40012C10",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 12
+          },
+          {
+            "name": "EGR",
+            "address": "0x40012C14",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 8
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40012C18",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40012C18",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register (output mode)",
+            "field_count": 10
+          },
+          {
+            "name": "CCMR2_Input",
+            "address": "0x40012C1C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 2 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR2_Output",
+            "address": "0x40012C1C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register (output mode)",
+            "field_count": 10
+          },
+          {
+            "name": "CCER",
+            "address": "0x40012C20",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 14
+          },
+          {
+            "name": "CNT",
+            "address": "0x40012C24",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40012C28",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x40012C2C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "RCR",
+            "address": "0x40012C30",
+            "offset": "0x30",
+            "size": 32,
+            "access": "read-write",
+            "description": "repetition counter register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40012C34",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          },
+          {
+            "name": "CCR2",
+            "address": "0x40012C38",
+            "offset": "0x38",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 2",
+            "field_count": 1
+          },
+          {
+            "name": "CCR3",
+            "address": "0x40012C3C",
+            "offset": "0x3C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 3",
+            "field_count": 1
+          },
+          {
+            "name": "CCR4",
+            "address": "0x40012C40",
+            "offset": "0x40",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 4",
+            "field_count": 1
+          },
+          {
+            "name": "BDTR",
+            "address": "0x40012C44",
+            "offset": "0x44",
+            "size": 32,
+            "access": "read-write",
+            "description": "break and dead-time register",
+            "field_count": 8
+          },
+          {
+            "name": "DCR",
+            "address": "0x40012C48",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA control register",
+            "field_count": 2
+          },
+          {
+            "name": "DMAR",
+            "address": "0x40012C4C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA address for full transfer",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM12",
+        "base": "0x40001800",
+        "description": "General purpose timer",
+        "register_count": 14,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40001800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 6
+          },
+          {
+            "name": "CR2",
+            "address": "0x40001804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 1
+          },
+          {
+            "name": "SMCR",
+            "address": "0x40001808",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "slave mode control register",
+            "field_count": 3
+          },
+          {
+            "name": "DIER",
+            "address": "0x4000180C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 4
+          },
+          {
+            "name": "SR",
+            "address": "0x40001810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 6
+          },
+          {
+            "name": "EGR",
+            "address": "0x40001814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 4
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40001818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40001818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (output mode)",
+            "field_count": 8
+          },
+          {
+            "name": "CCER",
+            "address": "0x40001820",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 6
+          },
+          {
+            "name": "CNT",
+            "address": "0x40001824",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40001828",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x4000182C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40001834",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          },
+          {
+            "name": "CCR2",
+            "address": "0x40001838",
+            "offset": "0x38",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 2",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM13",
+        "base": "0x40001C00",
+        "description": "General purpose timer",
+        "register_count": 11,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40001C00",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 5
+          },
+          {
+            "name": "DIER",
+            "address": "0x40001C0C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 2
+          },
+          {
+            "name": "SR",
+            "address": "0x40001C10",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 3
+          },
+          {
+            "name": "EGR",
+            "address": "0x40001C14",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 2
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40001C18",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register (input mode)",
+            "field_count": 3
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40001C18",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register (output mode)",
+            "field_count": 4
+          },
+          {
+            "name": "CCER",
+            "address": "0x40001C20",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 3
+          },
+          {
+            "name": "CNT",
+            "address": "0x40001C24",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40001C28",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x40001C2C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40001C34",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM14",
+        "base": "0x40002000",
+        "description": "TIM13 global interrupt",
+        "register_count": 11,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40002000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 5
+          },
+          {
+            "name": "DIER",
+            "address": "0x4000200C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 2
+          },
+          {
+            "name": "SR",
+            "address": "0x40002010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 3
+          },
+          {
+            "name": "EGR",
+            "address": "0x40002014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 2
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40002018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register (input mode)",
+            "field_count": 3
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40002018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register (output mode)",
+            "field_count": 4
+          },
+          {
+            "name": "CCER",
+            "address": "0x40002020",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 3
+          },
+          {
+            "name": "CNT",
+            "address": "0x40002024",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40002028",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x4000202C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40002034",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM15",
+        "base": "0x40014000",
+        "description": "General purpose timers",
+        "register_count": 18,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40014000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 6
+          },
+          {
+            "name": "CR2",
+            "address": "0x40014004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 7
+          },
+          {
+            "name": "SMCR",
+            "address": "0x40014008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "slave mode control register",
+            "field_count": 3
+          },
+          {
+            "name": "DIER",
+            "address": "0x4001400C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 10
+          },
+          {
+            "name": "SR",
+            "address": "0x40014010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 8
+          },
+          {
+            "name": "EGR",
+            "address": "0x40014014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40014018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40014018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register (output mode)",
+            "field_count": 8
+          },
+          {
+            "name": "CCER",
+            "address": "0x40014020",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 7
+          },
+          {
+            "name": "CNT",
+            "address": "0x40014024",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40014028",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x4001402C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "RCR",
+            "address": "0x40014030",
+            "offset": "0x30",
+            "size": 32,
+            "access": "read-write",
+            "description": "repetition counter register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40014034",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          },
+          {
+            "name": "CCR2",
+            "address": "0x40014038",
+            "offset": "0x38",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 2",
+            "field_count": 1
+          },
+          {
+            "name": "BDTR",
+            "address": "0x40014044",
+            "offset": "0x44",
+            "size": 32,
+            "access": "read-write",
+            "description": "break and dead-time register",
+            "field_count": 8
+          },
+          {
+            "name": "DCR",
+            "address": "0x40014048",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA control register",
+            "field_count": 2
+          },
+          {
+            "name": "DMAR",
+            "address": "0x4001404C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA address for full transfer",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM16",
+        "base": "0x40014400",
+        "description": "General-purpose-timers",
+        "register_count": 16,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40014400",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 6
+          },
+          {
+            "name": "CR2",
+            "address": "0x40014404",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 5
+          },
+          {
+            "name": "DIER",
+            "address": "0x4001440C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 8
+          },
+          {
+            "name": "SR",
+            "address": "0x40014410",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 6
+          },
+          {
+            "name": "EGR",
+            "address": "0x40014414",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 5
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40014418",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (input mode)",
+            "field_count": 3
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40014418",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register (output mode)",
+            "field_count": 4
+          },
+          {
+            "name": "CCER",
+            "address": "0x40014420",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 4
+          },
+          {
+            "name": "CNT",
+            "address": "0x40014424",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40014428",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x4001442C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "RCR",
+            "address": "0x40014430",
+            "offset": "0x30",
+            "size": 32,
+            "access": "read-write",
+            "description": "repetition counter register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40014434",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          },
+          {
+            "name": "BDTR",
+            "address": "0x40014444",
+            "offset": "0x44",
+            "size": 32,
+            "access": "read-write",
+            "description": "break and dead-time register",
+            "field_count": 8
+          },
+          {
+            "name": "DCR",
+            "address": "0x40014448",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA control register",
+            "field_count": 2
+          },
+          {
+            "name": "DMAR",
+            "address": "0x4001444C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA address for full transfer",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM17",
+        "base": "0x40014800",
+        "description": "TIM1 Trigger and Commutation interrupts and TIM17 global interrupt",
+        "register_count": 16,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40014800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 6
+          },
+          {
+            "name": "CR2",
+            "address": "0x40014804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 5
+          },
+          {
+            "name": "DIER",
+            "address": "0x4001480C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 8
+          },
+          {
+            "name": "SR",
+            "address": "0x40014810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 6
+          },
+          {
+            "name": "EGR",
+            "address": "0x40014814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 5
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40014818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (input mode)",
+            "field_count": 3
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40014818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register (output mode)",
+            "field_count": 4
+          },
+          {
+            "name": "CCER",
+            "address": "0x40014820",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 4
+          },
+          {
+            "name": "CNT",
+            "address": "0x40014824",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40014828",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x4001482C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "RCR",
+            "address": "0x40014830",
+            "offset": "0x30",
+            "size": 32,
+            "access": "read-write",
+            "description": "repetition counter register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40014834",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          },
+          {
+            "name": "BDTR",
+            "address": "0x40014844",
+            "offset": "0x44",
+            "size": 32,
+            "access": "read-write",
+            "description": "break and dead-time register",
+            "field_count": 8
+          },
+          {
+            "name": "DCR",
+            "address": "0x40014848",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA control register",
+            "field_count": 2
+          },
+          {
+            "name": "DMAR",
+            "address": "0x4001484C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA address for full transfer",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM2",
+        "base": "0x40000000",
+        "description": "General purpose timer",
+        "register_count": 20,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40000000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 8
+          },
+          {
+            "name": "CR2",
+            "address": "0x40000004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 3
+          },
+          {
+            "name": "SMCR",
+            "address": "0x40000008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "slave mode control register",
+            "field_count": 8
+          },
+          {
+            "name": "DIER",
+            "address": "0x4000000C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 12
+          },
+          {
+            "name": "SR",
+            "address": "0x40000010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 10
+          },
+          {
+            "name": "EGR",
+            "address": "0x40000014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40000018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40000018",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (output mode)",
+            "field_count": 10
+          },
+          {
+            "name": "CCMR2_Input",
+            "address": "0x4000001C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 2 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR2_Output",
+            "address": "0x4000001C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 2 (output mode)",
+            "field_count": 10
+          },
+          {
+            "name": "CCER",
+            "address": "0x40000020",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 8
+          },
+          {
+            "name": "CNT",
+            "address": "0x40000024",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40000028",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x4000002C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40000034",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          },
+          {
+            "name": "CCR2",
+            "address": "0x40000038",
+            "offset": "0x38",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 2",
+            "field_count": 1
+          },
+          {
+            "name": "CCR3",
+            "address": "0x4000003C",
+            "offset": "0x3C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 3",
+            "field_count": 1
+          },
+          {
+            "name": "CCR4",
+            "address": "0x40000040",
+            "offset": "0x40",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 4",
+            "field_count": 1
+          },
+          {
+            "name": "DCR",
+            "address": "0x40000048",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA control register",
+            "field_count": 2
+          },
+          {
+            "name": "DMAR",
+            "address": "0x4000004C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA address for full transfer",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM3",
+        "base": "0x40000400",
+        "description": "TIM3 global interrupt",
+        "register_count": 20,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40000400",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 8
+          },
+          {
+            "name": "CR2",
+            "address": "0x40000404",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 3
+          },
+          {
+            "name": "SMCR",
+            "address": "0x40000408",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "slave mode control register",
+            "field_count": 8
+          },
+          {
+            "name": "DIER",
+            "address": "0x4000040C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 12
+          },
+          {
+            "name": "SR",
+            "address": "0x40000410",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 10
+          },
+          {
+            "name": "EGR",
+            "address": "0x40000414",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40000418",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40000418",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (output mode)",
+            "field_count": 10
+          },
+          {
+            "name": "CCMR2_Input",
+            "address": "0x4000041C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 2 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR2_Output",
+            "address": "0x4000041C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 2 (output mode)",
+            "field_count": 10
+          },
+          {
+            "name": "CCER",
+            "address": "0x40000420",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 8
+          },
+          {
+            "name": "CNT",
+            "address": "0x40000424",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40000428",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x4000042C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40000434",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          },
+          {
+            "name": "CCR2",
+            "address": "0x40000438",
+            "offset": "0x38",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 2",
+            "field_count": 1
+          },
+          {
+            "name": "CCR3",
+            "address": "0x4000043C",
+            "offset": "0x3C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 3",
+            "field_count": 1
+          },
+          {
+            "name": "CCR4",
+            "address": "0x40000440",
+            "offset": "0x40",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 4",
+            "field_count": 1
+          },
+          {
+            "name": "DCR",
+            "address": "0x40000448",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA control register",
+            "field_count": 2
+          },
+          {
+            "name": "DMAR",
+            "address": "0x4000044C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA address for full transfer",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM4",
+        "base": "0x40000800",
+        "description": "TIM4 global interrupt",
+        "register_count": 20,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40000800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 8
+          },
+          {
+            "name": "CR2",
+            "address": "0x40000804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 3
+          },
+          {
+            "name": "SMCR",
+            "address": "0x40000808",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "slave mode control register",
+            "field_count": 8
+          },
+          {
+            "name": "DIER",
+            "address": "0x4000080C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 12
+          },
+          {
+            "name": "SR",
+            "address": "0x40000810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 10
+          },
+          {
+            "name": "EGR",
+            "address": "0x40000814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40000818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40000818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (output mode)",
+            "field_count": 10
+          },
+          {
+            "name": "CCMR2_Input",
+            "address": "0x4000081C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 2 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR2_Output",
+            "address": "0x4000081C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 2 (output mode)",
+            "field_count": 10
+          },
+          {
+            "name": "CCER",
+            "address": "0x40000820",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 8
+          },
+          {
+            "name": "CNT",
+            "address": "0x40000824",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40000828",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x4000082C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40000834",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          },
+          {
+            "name": "CCR2",
+            "address": "0x40000838",
+            "offset": "0x38",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 2",
+            "field_count": 1
+          },
+          {
+            "name": "CCR3",
+            "address": "0x4000083C",
+            "offset": "0x3C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 3",
+            "field_count": 1
+          },
+          {
+            "name": "CCR4",
+            "address": "0x40000840",
+            "offset": "0x40",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 4",
+            "field_count": 1
+          },
+          {
+            "name": "DCR",
+            "address": "0x40000848",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA control register",
+            "field_count": 2
+          },
+          {
+            "name": "DMAR",
+            "address": "0x4000084C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA address for full transfer",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM5",
+        "base": "0x40000C00",
+        "description": "TIM5 global interrupt",
+        "register_count": 20,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40000C00",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 8
+          },
+          {
+            "name": "CR2",
+            "address": "0x40000C04",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 3
+          },
+          {
+            "name": "SMCR",
+            "address": "0x40000C08",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "slave mode control register",
+            "field_count": 8
+          },
+          {
+            "name": "DIER",
+            "address": "0x40000C0C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 12
+          },
+          {
+            "name": "SR",
+            "address": "0x40000C10",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 10
+          },
+          {
+            "name": "EGR",
+            "address": "0x40000C14",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Input",
+            "address": "0x40000C18",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR1_Output",
+            "address": "0x40000C18",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 1 (output mode)",
+            "field_count": 10
+          },
+          {
+            "name": "CCMR2_Input",
+            "address": "0x40000C1C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 2 (input mode)",
+            "field_count": 6
+          },
+          {
+            "name": "CCMR2_Output",
+            "address": "0x40000C1C",
+            "offset": "0x1C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare mode register 2 (output mode)",
+            "field_count": 10
+          },
+          {
+            "name": "CCER",
+            "address": "0x40000C20",
+            "offset": "0x20",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare enable register",
+            "field_count": 8
+          },
+          {
+            "name": "CNT",
+            "address": "0x40000C24",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40000C28",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x40000C2C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          },
+          {
+            "name": "CCR1",
+            "address": "0x40000C34",
+            "offset": "0x34",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 1",
+            "field_count": 1
+          },
+          {
+            "name": "CCR2",
+            "address": "0x40000C38",
+            "offset": "0x38",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 2",
+            "field_count": 1
+          },
+          {
+            "name": "CCR3",
+            "address": "0x40000C3C",
+            "offset": "0x3C",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 3",
+            "field_count": 1
+          },
+          {
+            "name": "CCR4",
+            "address": "0x40000C40",
+            "offset": "0x40",
+            "size": 32,
+            "access": "read-write",
+            "description": "capture/compare register 4",
+            "field_count": 1
+          },
+          {
+            "name": "DCR",
+            "address": "0x40000C48",
+            "offset": "0x48",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA control register",
+            "field_count": 2
+          },
+          {
+            "name": "DMAR",
+            "address": "0x40000C4C",
+            "offset": "0x4C",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA address for full transfer",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM6",
+        "base": "0x40001000",
+        "description": "Basic timer",
+        "register_count": 8,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40001000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 5
+          },
+          {
+            "name": "CR2",
+            "address": "0x40001004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 1
+          },
+          {
+            "name": "DIER",
+            "address": "0x4000100C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 2
+          },
+          {
+            "name": "SR",
+            "address": "0x40001010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 1
+          },
+          {
+            "name": "EGR",
+            "address": "0x40001014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 1
+          },
+          {
+            "name": "CNT",
+            "address": "0x40001024",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40001028",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x4000102C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "TIM7",
+        "base": "0x40001400",
+        "description": "TIM7 global interrupt",
+        "register_count": 8,
+        "registers": [
+          {
+            "name": "CR1",
+            "address": "0x40001400",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 1",
+            "field_count": 5
+          },
+          {
+            "name": "CR2",
+            "address": "0x40001404",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "control register 2",
+            "field_count": 1
+          },
+          {
+            "name": "DIER",
+            "address": "0x4000140C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "DMA/Interrupt enable register",
+            "field_count": 2
+          },
+          {
+            "name": "SR",
+            "address": "0x40001410",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "status register",
+            "field_count": 1
+          },
+          {
+            "name": "EGR",
+            "address": "0x40001414",
+            "offset": "0x14",
+            "size": 32,
+            "access": "write-only",
+            "description": "event generation register",
+            "field_count": 1
+          },
+          {
+            "name": "CNT",
+            "address": "0x40001424",
+            "offset": "0x24",
+            "size": 32,
+            "access": "read-write",
+            "description": "counter",
+            "field_count": 1
+          },
+          {
+            "name": "PSC",
+            "address": "0x40001428",
+            "offset": "0x28",
+            "size": 32,
+            "access": "read-write",
+            "description": "prescaler",
+            "field_count": 1
+          },
+          {
+            "name": "ARR",
+            "address": "0x4000142C",
+            "offset": "0x2C",
+            "size": 32,
+            "access": "read-write",
+            "description": "auto-reload register",
+            "field_count": 1
+          }
+        ]
+      },
+      {
+        "name": "UART4",
+        "base": "0x40004C00",
+        "description": "Universal asynchronous receiver transmitter",
+        "register_count": 6,
+        "registers": [
+          {
+            "name": "SR",
+            "address": "0x40004C00",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-only",
+            "description": "Status register",
+            "field_count": 9
+          },
+          {
+            "name": "DR",
+            "address": "0x40004C04",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Data register",
+            "field_count": 1
+          },
+          {
+            "name": "BRR",
+            "address": "0x40004C08",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Baud rate register",
+            "field_count": 2
+          },
+          {
+            "name": "CR1",
+            "address": "0x40004C0C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 1",
+            "field_count": 14
+          },
+          {
+            "name": "CR2",
+            "address": "0x40004C10",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 2",
+            "field_count": 5
+          },
+          {
+            "name": "CR3",
+            "address": "0x40004C14",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 3",
+            "field_count": 6
+          }
+        ]
+      },
+      {
+        "name": "UART5",
+        "base": "0x40005000",
+        "description": "Universal asynchronous receiver transmitter",
+        "register_count": 6,
+        "registers": [
+          {
+            "name": "SR",
+            "address": "0x40005000",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-only",
+            "description": "Status register",
+            "field_count": 9
+          },
+          {
+            "name": "DR",
+            "address": "0x40005004",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Data register",
+            "field_count": 1
+          },
+          {
+            "name": "BRR",
+            "address": "0x40005008",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Baud rate register",
+            "field_count": 2
+          },
+          {
+            "name": "CR1",
+            "address": "0x4000500C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 1",
+            "field_count": 14
+          },
+          {
+            "name": "CR2",
+            "address": "0x40005010",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 2",
+            "field_count": 5
+          },
+          {
+            "name": "CR3",
+            "address": "0x40005014",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 3",
+            "field_count": 5
+          }
+        ]
+      },
+      {
+        "name": "USART1",
+        "base": "0x40013800",
+        "description": "Universal synchronous asynchronous receiver transmitter",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "SR",
+            "address": "0x40013800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Status register",
+            "field_count": 10
+          },
+          {
+            "name": "DR",
+            "address": "0x40013804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Data register",
+            "field_count": 1
+          },
+          {
+            "name": "BRR",
+            "address": "0x40013808",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Baud rate register",
+            "field_count": 2
+          },
+          {
+            "name": "CR1",
+            "address": "0x4001380C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 1",
+            "field_count": 14
+          },
+          {
+            "name": "CR2",
+            "address": "0x40013810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 2",
+            "field_count": 9
+          },
+          {
+            "name": "CR3",
+            "address": "0x40013814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 3",
+            "field_count": 11
+          },
+          {
+            "name": "GTPR",
+            "address": "0x40013818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Guard time and prescaler register",
+            "field_count": 2
+          }
+        ]
+      },
+      {
+        "name": "USART2",
+        "base": "0x40004400",
+        "description": "USART2 global interrupt",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "SR",
+            "address": "0x40004400",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Status register",
+            "field_count": 10
+          },
+          {
+            "name": "DR",
+            "address": "0x40004404",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Data register",
+            "field_count": 1
+          },
+          {
+            "name": "BRR",
+            "address": "0x40004408",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Baud rate register",
+            "field_count": 2
+          },
+          {
+            "name": "CR1",
+            "address": "0x4000440C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 1",
+            "field_count": 14
+          },
+          {
+            "name": "CR2",
+            "address": "0x40004410",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 2",
+            "field_count": 9
+          },
+          {
+            "name": "CR3",
+            "address": "0x40004414",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 3",
+            "field_count": 11
+          },
+          {
+            "name": "GTPR",
+            "address": "0x40004418",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Guard time and prescaler register",
+            "field_count": 2
+          }
+        ]
+      },
+      {
+        "name": "USART3",
+        "base": "0x40004800",
+        "description": "USART3 global interrupt",
+        "register_count": 7,
+        "registers": [
+          {
+            "name": "SR",
+            "address": "0x40004800",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Status register",
+            "field_count": 10
+          },
+          {
+            "name": "DR",
+            "address": "0x40004804",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Data register",
+            "field_count": 1
+          },
+          {
+            "name": "BRR",
+            "address": "0x40004808",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Baud rate register",
+            "field_count": 2
+          },
+          {
+            "name": "CR1",
+            "address": "0x4000480C",
+            "offset": "0xC",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 1",
+            "field_count": 14
+          },
+          {
+            "name": "CR2",
+            "address": "0x40004810",
+            "offset": "0x10",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 2",
+            "field_count": 9
+          },
+          {
+            "name": "CR3",
+            "address": "0x40004814",
+            "offset": "0x14",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register 3",
+            "field_count": 11
+          },
+          {
+            "name": "GTPR",
+            "address": "0x40004818",
+            "offset": "0x18",
+            "size": 32,
+            "access": "read-write",
+            "description": "Guard time and prescaler register",
+            "field_count": 2
+          }
+        ]
+      },
+      {
+        "name": "WWDG",
+        "base": "0x40002C00",
+        "description": "Window watchdog",
+        "register_count": 3,
+        "registers": [
+          {
+            "name": "CR",
+            "address": "0x40002C00",
+            "offset": "0x0",
+            "size": 32,
+            "access": "read-write",
+            "description": "Control register (WWDG_CR)",
+            "field_count": 2
+          },
+          {
+            "name": "CFR",
+            "address": "0x40002C04",
+            "offset": "0x4",
+            "size": 32,
+            "access": "read-write",
+            "description": "Configuration register (WWDG_CFR)",
+            "field_count": 3
+          },
+          {
+            "name": "SR",
+            "address": "0x40002C08",
+            "offset": "0x8",
+            "size": 32,
+            "access": "read-write",
+            "description": "Status register (WWDG_SR)",
+            "field_count": 1
+          }
+        ]
+      }
+    ],
+    "peripheral_count": 48,
+    "register_count": 566,
+    "register_source": "Keil SVD · STM32F100xx.svd",
+    "registers_truncated": false,
+    "used_components": [
+      "3",
+      "NVIC",
+      "RCC",
+      "SYS"
+    ],
+    "ioc": {
+      "files": [
+        "test32.ioc"
+      ],
+      "device": "STM32F103C8Tx",
+      "components": [
+        "3",
+        "NVIC",
+        "RCC",
+        "SYS"
+      ],
+      "clock": {
+        "RCC.ADCFreqValue": "36000000",
+        "RCC.AHBFreq_Value": "72000000",
+        "RCC.APB1CLKDivider": "RCC_HCLK_DIV2",
+        "RCC.APB1Freq_Value": "36000000",
+        "RCC.APB1TimFreq_Value": "72000000",
+        "RCC.APB2Freq_Value": "72000000",
+        "RCC.APB2TimFreq_Value": "72000000",
+        "RCC.FCLKCortexFreq_Value": "72000000",
+        "RCC.FamilyName": "M",
+        "RCC.HCLKFreq_Value": "72000000",
+        "RCC.IPParameters": "ADCFreqValue,AHBFreq_Value,APB1CLKDivider,APB1Freq_Value,APB1TimFreq_Value,APB2Freq_Value,APB2TimFreq_Value,FCLKCortexFreq_Value,FamilyName,HCLKFreq_Value,MCOFreq_Value,PLLCLKFreq_Value,PLLMCOFreq_Value,PLLMUL,PLLSourceVirtual,SYSCLKFreq_VALUE,SYSCLKSource,TimSysFreq_Value,USBFreq_Value,VCOOutput2Freq_Value",
+        "RCC.MCOFreq_Value": "72000000",
+        "RCC.PLLCLKFreq_Value": "72000000",
+        "RCC.PLLMCOFreq_Value": "36000000",
+        "RCC.PLLMUL": "RCC_PLL_MUL9",
+        "RCC.PLLSourceVirtual": "RCC_PLLSOURCE_HSE",
+        "RCC.SYSCLKFreq_VALUE": "72000000",
+        "RCC.SYSCLKSource": "RCC_SYSCLKSOURCE_PLLCLK",
+        "RCC.TimSysFreq_Value": "72000000",
+        "RCC.USBFreq_Value": "72000000",
+        "RCC.VCOOutput2Freq_Value": "8000000"
+      },
+      "pins": [
+        {
+          "pin": "PA13",
+          "signal": "SYS_JTMS-SWDIO",
+          "label": null,
+          "source": "test32.ioc"
+        },
+        {
+          "pin": "PA14",
+          "signal": "SYS_JTCK-SWCLK",
+          "label": null,
+          "source": "test32.ioc"
+        },
+        {
+          "pin": "PD0-OSC_IN",
+          "signal": "RCC_OSC_IN",
+          "label": null,
+          "source": "test32.ioc"
+        },
+        {
+          "pin": "PD1-OSC_OUT",
+          "signal": "RCC_OSC_OUT",
+          "label": null,
+          "source": "test32.ioc"
+        },
+        {
+          "pin": "VP_SYS_VS_Systick",
+          "signal": "SYS_VS_Systick",
+          "label": null,
+          "source": "test32.ioc"
+        }
+      ]
+    }
+  },
+  "software": {
+    "languages": [
+      "Assembly",
+      "C",
+      "C/C++"
+    ],
+    "source_files": [
+      "Core/Src/gpio.c",
+      "Core/Src/main.c",
+      "Core/Src/stm32f1xx_hal_msp.c",
+      "Core/Src/stm32f1xx_it.c",
+      "Core/Src/syscalls.c",
+      "Core/Src/sysmem.c",
+      "Core/Src/system_stm32f1xx.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_cortex.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_dma.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_exti.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_flash.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_flash_ex.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_gpio.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_gpio_ex.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_pwr.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_rcc.c",
+      "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_rcc_ex.c",
+      "startup_stm32f103xb.s"
+    ],
+    "header_files": [
+      "Core/Inc/gpio.h",
+      "Core/Inc/main.h",
+      "Core/Inc/stm32f1xx_hal_conf.h",
+      "Core/Inc/stm32f1xx_it.h",
+      "Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xb.h",
+      "Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f1xx.h",
+      "Drivers/CMSIS/Device/ST/STM32F1xx/Include/system_stm32f1xx.h",
+      "Drivers/CMSIS/Include/cmsis_armcc.h",
+      "Drivers/CMSIS/Include/cmsis_armclang.h",
+      "Drivers/CMSIS/Include/cmsis_compiler.h",
+      "Drivers/CMSIS/Include/cmsis_gcc.h",
+      "Drivers/CMSIS/Include/cmsis_iccarm.h",
+      "Drivers/CMSIS/Include/cmsis_version.h",
+      "Drivers/CMSIS/Include/core_armv8mbl.h",
+      "Drivers/CMSIS/Include/core_armv8mml.h",
+      "Drivers/CMSIS/Include/core_cm0.h",
+      "Drivers/CMSIS/Include/core_cm0plus.h",
+      "Drivers/CMSIS/Include/core_cm1.h",
+      "Drivers/CMSIS/Include/core_cm23.h",
+      "Drivers/CMSIS/Include/core_cm3.h",
+      "Drivers/CMSIS/Include/core_cm33.h",
+      "Drivers/CMSIS/Include/core_cm4.h",
+      "Drivers/CMSIS/Include/core_cm7.h",
+      "Drivers/CMSIS/Include/core_sc000.h",
+      "Drivers/CMSIS/Include/core_sc300.h",
+      "Drivers/CMSIS/Include/mpu_armv7.h",
+      "Drivers/CMSIS/Include/mpu_armv8.h",
+      "Drivers/CMSIS/Include/tz_context.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/Legacy/stm32_hal_legacy.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_cortex.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_def.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_dma.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_dma_ex.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_exti.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_flash.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_flash_ex.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_gpio.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_gpio_ex.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_pwr.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_rcc.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_rcc_ex.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_ll_bus.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_ll_cortex.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_ll_dma.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_ll_exti.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_ll_gpio.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_ll_pwr.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_ll_rcc.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_ll_system.h",
+      "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_ll_utils.h"
+    ],
+    "python_files": [],
+    "linker_scripts": [
+      "STM32F103XX_FLASH.ld"
+    ],
+    "startup_files": [
+      "Core/Src/system_stm32f1xx.c",
+      "startup_stm32f103xb.s"
+    ],
+    "libraries": [],
+    "components": [
+      {
+        "name": "CMSIS",
+        "category": "Framework",
+        "evidence": [
+          "Drivers/CMSIS/LICENSE.txt",
+          "Drivers/CMSIS/Include/cmsis_armcc.h",
+          "Drivers/CMSIS/Include/cmsis_armclang.h",
+          "Drivers/CMSIS/Include/cmsis_compiler.h",
+          "Drivers/CMSIS/Include/cmsis_gcc.h"
+        ]
+      },
+      {
+        "name": "Make",
+        "category": "Build",
+        "evidence": [
+          "Makefile"
+        ]
+      },
+      {
+        "name": "STM32 HAL",
+        "category": "HAL",
+        "evidence": [
+          "Drivers/STM32F1xx_HAL_Driver/LICENSE.txt",
+          "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal.c",
+          "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_cortex.c",
+          "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_dma.c",
+          "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_exti.c"
+        ]
+      },
+      {
+        "name": "STM32CubeMX",
+        "category": "Tooling",
+        "evidence": [
+          "test32.ioc"
+        ]
+      }
+    ],
+    "counts": {
+      "source_files": 19,
+      "header_files": 51,
+      "total_files": 80,
+      "total_bytes": 3830914,
+      "source_lines": 9894,
+      "header_lines": 63242,
+      "truncated": false
+    },
+    "symbols": {
+      "functions": 282,
+      "structs": 1,
+      "macros": 1709,
+      "labels": 8,
+      "total": 2000,
+      "truncated": true
+    },
+    "call_graph": {
+      "functions": 829,
+      "call_edges": 132,
+      "caller_links": 57,
+      "reference_symbols": 19242,
+      "top_functions": [
+        {
+          "name": "__DSB",
+          "callers": 19,
+          "callees": 0
+        },
+        {
+          "name": "__ISB",
+          "callers": 18,
+          "callees": 0
+        },
+        {
+          "name": "HAL_GetTick",
+          "callers": 12,
+          "callees": 0
+        },
+        {
+          "name": "FLASH_WaitForLastOperation",
+          "callers": 8,
+          "callees": 2
+        },
+        {
+          "name": "HAL_InitTick",
+          "callers": 4,
+          "callees": 2
+        },
+        {
+          "name": "HAL_FLASHEx_OBErase",
+          "callers": 2,
+          "callees": 3
+        },
+        {
+          "name": "HAL_FLASHEx_OBProgram",
+          "callers": 0,
+          "callees": 5
+        },
+        {
+          "name": "FLASH_OB_DisableWRP",
+          "callers": 1,
+          "callees": 3
+        },
+        {
+          "name": "FLASH_OB_EnableWRP",
+          "callers": 1,
+          "callees": 3
+        },
+        {
+          "name": "FLASH_WaitForLastOperationBank2",
+          "callers": 2,
+          "callees": 2
+        }
+      ]
+    },
+    "support_packs": [
+      {
+        "name": "Keil.STM32F1xx_DFP",
+        "vendor": "Keil",
+        "version": null,
+        "file": "D:\\embeed\\examples\\test32\\Keil.STM32F1xx_DFP.pdsc",
+        "device_count": 3,
+        "devices": [
+          "STM32F103C8",
+          "STM32F103RC",
+          "STM32F103VE"
+        ],
+        "svd_count": 1,
+        "error": null
+      }
+    ]
+  },
+  "system": {
+    "os": "windows",
+    "arch": "x86_64",
+    "profile": "release",
+    "executable": "D:\\embeed\\dist\\simple-embedded\\simple-embedded.exe",
+    "report_file": "test32.resources.json",
+    "scan": {
+      "files": 80,
+      "total_bytes": 3830914,
+      "truncated": false,
+      "source_lines": 9894,
+      "header_lines": 63242
+    }
+  },
+  "notes": [
+    "本报告由工程文件、Makefile / Keil 元数据、SVD、.ioc 和可选固件静态分析生成。",
+    "引脚和组件信息代表工程配置，不等同于实际电路连接或物料清单。",
+    "报告读取已保存文件和当前索引；未保存的编辑不会进入源码清单或符号统计。",
+    "扫描跳过 build / Debug / Release / out / target / Objects / Listings / tools / dist 等生成或工具目录。"
+  ],
+  "warnings": []
+}

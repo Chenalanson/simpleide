@@ -1,0 +1,222 @@
+/* ============================================================================
+ * 项目硬件资源台账（DTS 风格记录，仅供人工开发对照，不参与编译）
+ * 项目名称 : test32
+ * 芯片型号 : STM32F103C8T6（CubeMX 名 STM32F103C(8-B)Tx，工程宏 STM32F103xB）
+ * 封装/板型: LQFP48 / 自定义最小系统板（test32.ioc 中 board=custom）
+ * 板版本号 : V0.1 草稿
+ * 生成日期 : <填写实际日期 YYYY-MM-DD>
+ * 维护说明 : 方案变更先改本台账；带 TODO/待核对 的条目须对照 RM/DS 销项后删除标注
+ *
+ * 图例：
+ *   status = "okay"      已规划使用，代码已实现或已复用现有初始化
+ *   status = "disabled"  盘点存在但本版暂不使用（预留，后续启用时先销项再写代码）
+ *   TODO 标注            待核对/待填写项，禁止凭猜测填数值
+ *
+ * 系列差异提示（STM32F1 与 F4/G4 的关键不同，填写本台账前必须了解）：
+ *   1) F1 没有数字复用功能号（无 AF0~AF15）。引脚复用由 GPIOx_CRL/GPIOx_CRH 的
+ *      CNF/MODE 位（复用模式）决定，重映射由 AFIO_MAPR 决定。
+ *      故本文件引脚组使用 mode + f1-remap 字段，不使用 af = <n>。
+ *   2) APB2 预分频 = 1 时 APB2 定时器时钟不倍频；APB1 预分频 != 1 时
+ *      APB1 定时器时钟 = 2 x PCLK1。PWM/定时参数复算时必须区分两种情形。
+ *   3) HSE 外接晶振模式下 OSC_IN/OSC_OUT 是 PD0/PD1 的默认物理功能，
+ *      由 RCC_CR.HSEON 使能，不需要 AFIO PD01_REMAP（该重映射仅在把
+ *      PD0/PD1 当普通 GPIO 使用时才需要）。
+ * ============================================================================ */
+
+/ {
+    /* ------------------------------------------------------------------
+     * 系统时钟规划
+     * 数值来源：Core/Src/main.c 的 SystemClock_Config() 与 test32.ioc 实际配置
+     * ------------------------------------------------------------------ */
+    system-clock {
+        usage = "系统时钟规划（与现有 SystemClock_Config() 一致，勿在代码中另设一套）";
+        source = "hse";
+        hse-frequency-hz = <8000000>;        /* TODO: 对照原理图晶振位号核对实物值 */
+        pll-source = "hse";
+        pll-mul = <9>;
+        sysclk-hz = <72000000>;
+        ahb-hz = <72000000>;
+        hclk-divider = <1>;
+        apb1-hz = <36000000>;
+        apb1-divider = <2>;
+        apb2-hz = <72000000>;
+        apb2-divider = <1>;
+        flash-latency-ws = <2>;              /* FLASH_LATENCY_2，72MHz@2.7~3.6V 要求，待对照 DS 核对 */
+        timer-clock {
+            usage = "定时器时钟（PWM/定时参数复算依据）";
+            apb1-tim-hz = <72000000>;        /* APB1 预分频=2 != 1，故 2 x PCLK1 = 72MHz */
+            apb2-tim-hz = <72000000>;        /* APB2 预分频=1，故 = PCLK2 = 72MHz，不倍频 */
+        };
+        note = "串口/CAN 类应用依赖 HSE 精度；HSE 起振失败时 HAL 进入 Error_Handler，不静默回退 HSI";
+    };
+
+    /* ------------------------------------------------------------------
+     * 存储器与堆栈规划（仅供预算参考，实际由链接脚本决定）
+     * ------------------------------------------------------------------ */
+    memory-map {
+        usage = "Flash / RAM / 堆栈预算参考";
+        flash-kb = <64>;                     /* 链接脚本 STM32F103XX_FLASH.ld */
+        ram-kb = <20>;
+        heap-size = <0x200>;                 /* test32.ioc 设置 */
+        stack-size = <0x400>;                /* test32.ioc 设置（MSP） */
+        note = "新增缓冲/协议栈前先核算 RAM 余量；20KB 属偏紧配置";
+    };
+
+    /* ------------------------------------------------------------------
+     * 业务用途绑定视图：用途 -> 资源引用
+     * 要求：每个引用都能在本文件内找到对应节点（引用闭合）
+     * ------------------------------------------------------------------ */
+    app-bindings {
+        usage = "业务用途到硬件资源的绑定视图";
+        run_led      = <&led_status>;                          /* 运行状态指示 */
+        debug_port   = <&pin_swd_io_pa13 &pin_swd_clk_pa14>;   /* 在线调试/下载 */
+        clock_source = <&pin_hse_in_pd0 &pin_hse_out_pd1>;     /* 系统时钟源 */
+        /* console   = <&uart1>;        预留：启用调试串口时取消注释并同步改 status */
+        /* wdg       = <&iwdg_guard>;   预留：启用独立看门狗时取消注释 */
+    };
+
+    /* ------------------------------------------------------------------
+     * 容器占位节点
+     * 以下节点本体在文件后部用 &label 语法追加内容，此处占位以保证引用闭合
+     * ------------------------------------------------------------------ */
+    pinctrl {
+        usage = "引脚组容器（各引脚组的 pin/mode 定义见下方 &pinctrl 区）";
+    };
+
+    general-gpios {
+        usage = "普通 GPIO 业务节点容器（见下方 &general-gpios 区）";
+    };
+
+    uart1 { /* 占位：预留调试串口，定义见 &uart1 区 */ };
+
+    safety {
+        usage = "安全资源规划容器（见下方 &safety 区；本板无功率级，不设刹车/使能节点）";
+    };
+};
+
+/* ============================================================================
+ * 引脚组定义区
+ * 字段说明：pin=物理引脚；mode=GPIO 模式；speed=输出速度；pull=上下拉
+ *           f1-remap=F1 专有，记录是否依赖 AFIO 重映射
+ * ============================================================================ */
+&pinctrl {
+    /* ---- 运行状态 LED ---- */
+    pin_led_pc13: pin_led_pc13 {
+        pin = "PC13";
+        mode = "output-push-pull";
+        speed = "low";
+        pull = "none";
+        polarity = "active-low";             /* TODO: 依原理图 PC13 网络核对板载 LED 极性 */
+        usage = "运行状态指示（板载 LED）";
+        note = "PC13 属低驱动能力引脚组，DS 对其输出能力有额外限制，只驱动 LED 不得作电流源或高速信号";
+    };
+
+    /* ---- 调试接口 SWD ---- */
+    pin_swd_io_pa13: pin_swd_io_pa13 {
+        pin = "PA13";
+        mode = "alternate";
+        f1-remap = "SWJ_NOJTAG";             /* HAL_MspInit(): __HAL_AFIO_REMAP_SWJ_NOJTAG() */
+        usage = "SWD 调试数据线 SWDIO（禁用 JTAG，保留 SWD）";
+        note = "禁止改作普通 GPIO：一旦实测失去 SWD 连接需用 BOOT0 方式救砖";
+    };
+
+    pin_swd_clk_pa14: pin_swd_clk_pa14 {
+        pin = "PA14";
+        mode = "alternate";
+        f1-remap = "SWJ_NOJTAG";
+        usage = "SWD 调试时钟线 SWCLK";
+    };
+
+    /* ---- HSE 外部晶振 ---- */
+    pin_hse_in_pd0: pin_hse_in_pd0 {
+        pin = "PD0";
+        mode = "oscillator-input";           /* 复位默认输入浮空，HSE 模式下无需 GPIO 配置 */
+        usage = "HSE 晶振输入（LQFP48 上 OSC_IN 与 PD0 为同一物理引脚）";
+        note = "无需 AFIO PD01_REMAP；负载电容与晶振参数依原理图核对";
+    };
+
+    pin_hse_out_pd1: pin_hse_out_pd1 {
+        pin = "PD1";
+        mode = "oscillator-output";
+        usage = "HSE 晶振输出（OSC_OUT 与 PD1 为同一物理引脚）";
+    };
+
+    /* ---- 预留：调试串口引脚（对应 status=disabled 的 uart1） ---- */
+    uart1_tx_pa9: uart1_tx_pa9 {
+        pin = "PA9";
+        mode = "alternate-push-pull";
+        speed = "medium";                    /* TODO: 依波特率与线长核对是否需高速档 */
+        f1-remap = "none";                   /* USART1 默认映射，无需 AFIO 重映射 */
+        usage = "预留调试串口 TX（当前未启用）";
+    };
+
+    uart1_rx_pa10: uart1_rx_pa10 {
+        pin = "PA10";
+        mode = "input-floating";
+        pull = "up";                         /* 接收线建议上拉避免悬空误触发，依实际接线核对 */
+        f1-remap = "none";
+        usage = "预留调试串口 RX（当前未启用）";
+    };
+};
+
+/* ============================================================================
+ * 普通 GPIO 业务节点
+ * ============================================================================ */
+&general-gpios {
+    led_status: led_status {
+        compatible = "stm32,gpio";
+        status = "okay";
+        usage = "运行状态指示：亮/灭各 500ms 无限循环";
+        pinctrl-0 = <&pin_led_pc13>;
+        pinctrl-names = "default";
+        io-direction = "out";
+        polarity = "active-low";             /* TODO: 与 pin_led_pc13 同步销项 */
+        safe-state = "high";                 /* 上电/复位默认熄灭（低有效则写高电平） */
+        toggle-interval-ms = <500>;          /* 半周期，翻转周期 1000ms */
+        note = "代码位置：Core/Src/main.c USER CODE 2/3；参数宏位置：Core/Inc/main.h LED_*";
+    };
+};
+
+/* ============================================================================
+ * 预留外设节点（本版不启用，hal_conf.h 中对应 HAL_xxx_MODULE_ENABLED 仍为注释）
+ * ============================================================================ */
+&uart1 {
+    compatible = "stm32,usart";
+    status = "disabled";
+    usage = "预留调试串口 / 上位机命令通道";
+    current-speed = <115200>;
+    data-bits = <8>;
+    parity = "none";
+    stop-bits = <1>;
+    pinctrl-0 = <&uart1_tx_pa9 &uart1_rx_pa10>;
+    pinctrl-names = "default";
+    interrupts = <37 3>;                     /* TODO: IRQn 对照 RM 中断向量表核对；优先级待分组规划 */
+    note = "启用步骤：①hal_conf.h 打开 HAL_UART_MODULE_ENABLED ②Makefile 加入 hal_uart 源文件 ③本节点改 okay ④补 bsp_uart 代码";
+};
+
+/* ============================================================================
+ * 安全资源
+ * 本板为最小系统板，无电机/逆变/功率级，故不设刹车(BKIN)与功率使能节点；
+ * 若后续扩展功率级，必须在此新增 brake_bkin / en_power 节点并填写 safe-state。
+ * ============================================================================ */
+&safety {
+    iwdg_guard: iwdg_guard {
+        compatible = "stm32,watchdog";
+        status = "disabled";
+        usage = "独立看门狗（防止主循环卡死）";
+        clock-source = "lsi";
+        timeout-ms = <1000>;                 /* TODO: 按 LSI 最坏值复算后填写 */
+        note = "LSI 典型 40kHz 且温漂大，超时按最差情况核算；喂狗点放主循环，禁止在中断中喂狗掩盖任务卡死";
+    };
+};
+
+/* ============================================================================
+ * 待核对汇总（销项后删除对应行）
+ * [ ] PC13 板载 LED 极性 / 限流电阻阻值          —— 依据：原理图 PC13 网络 + BOM
+ * [ ] PC13 输出能力限制（低驱动能力引脚组）       —— 依据：DS「Pin definitions」PC13~PC15 注释
+ * [ ] HSE 晶振实物是否 8MHz                      —— 依据：原理图 Y1 位号
+ * [ ] Flash 等待周期 2WS @72MHz 是否满足电压区间   —— 依据：DS Flash 时序表
+ * [ ] USART1 IRQn 编号与中断优先级分组            —— 依据：RM 中断向量表 + NVIC 配置
+ * [ ] USART1 TX 引脚输出速度档位                  —— 依据：波特率与线长评估
+ * [ ] IWDG 超时与喂狗窗口                         —— 依据：RM IWDG 章节 + LSI 频率范围
+ * ============================================================================ */
