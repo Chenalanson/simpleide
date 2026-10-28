@@ -242,17 +242,6 @@ impl App {
                             ui.add_space(8.0);
                         }
                     }
-                    if self.ai.sending {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label(
-                                RichText::new("正在结合工程上下文生成，请稍候…")
-                                    .size(10.5)
-                                    .color(theme::text_dim()),
-                            );
-                        });
-                        ui.add_space(6.0);
-                    }
                     ui.add_space(4.0);
                 });
         });
@@ -950,6 +939,9 @@ fn ai_message(
                     ("AI", theme::success())
                 };
                 ui.label(RichText::new(role).size(10.0).strong().color(color));
+                if message.streaming {
+                    ui.label(RichText::new("生成中").size(9.0).color(theme::accent()));
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ai_ghost_button(ui, "复制") {
                         ui.ctx().copy_text(message.content.clone());
@@ -957,10 +949,110 @@ fn ai_message(
                 });
             });
             ui.add_space(3.0);
-            render_markdown(ui, &message.content, index, message.error);
-            if !message.edits.is_empty() {
-                ui.add_space(7.0);
-                ai_edits_card(ui, message, index, apply_request, cancel_request);
+            if !message.reasoning.is_empty() || (message.streaming && message.content.is_empty()) {
+                ai_reasoning_block(ui, message, index);
+                ui.add_space(6.0);
+            }
+            if message.streaming {
+                if !message.content.is_empty() {
+                    let live_tail = tail_preview(&message.content, 12_000);
+                    let live_text = live_tail.as_deref().unwrap_or(&message.content);
+                    Frame::new()
+                        .fill(theme::with_alpha(theme::editor_bg(), 120))
+                        .corner_radius(6)
+                        .inner_margin(Margin::symmetric(7, 5))
+                        .show(ui, |ui| {
+                            ui.add(
+                                Label::new(
+                                    RichText::new(live_text).size(11.0).color(theme::text()),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    ui.add_space(5.0);
+                }
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(
+                        RichText::new(if message.reasoning.trim().is_empty() {
+                            "正在等待模型输出…"
+                        } else if message.content.trim().is_empty() {
+                            "正在思考…"
+                        } else {
+                            "正在生成回答…"
+                        })
+                        .size(10.0)
+                        .color(theme::text_dim()),
+                    );
+                });
+            } else {
+                render_markdown(ui, &message.content, index, message.error);
+                if !message.edits.is_empty() {
+                    ui.add_space(7.0);
+                    ai_edits_card(ui, message, index, apply_request, cancel_request);
+                }
+            }
+        });
+}
+
+fn ai_reasoning_block(ui: &mut Ui, message: &AiChatMessage, index: usize) {
+    let id = ui.make_persistent_id(("simple_embedded_ai_reasoning", index));
+    let mut open = ui
+        .data_mut(|data| data.get_persisted::<bool>(id))
+        .unwrap_or(true);
+    Frame::new()
+        .fill(theme::with_alpha(theme::surface(), 80))
+        .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+        .corner_radius(7)
+        .inner_margin(Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("思考过程")
+                        .size(9.5)
+                        .strong()
+                        .color(theme::text_dim()),
+                );
+                if message.streaming {
+                    ui.spinner();
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ai_ghost_button(ui, if open { "收起" } else { "展开" }) {
+                        open = !open;
+                        ui.data_mut(|data| data.insert_persisted(id, open));
+                    }
+                    if ai_ghost_button(ui, "复制") {
+                        ui.ctx().copy_text(message.reasoning.clone());
+                    }
+                });
+            });
+            if open {
+                let live_tail = if message.streaming {
+                    tail_preview(&message.reasoning, 12_000)
+                } else {
+                    None
+                };
+                let text = live_tail.as_deref().unwrap_or_else(|| {
+                    if message.reasoning.trim().is_empty() {
+                        "正在读取模型的思考过程…"
+                    } else {
+                        message.reasoning.as_str()
+                    }
+                });
+                let mut scroll = ScrollArea::vertical()
+                    .id_salt(("simple_embedded_ai_reasoning_scroll", index))
+                    .max_height(220.0)
+                    .auto_shrink([false, true]);
+                if message.streaming {
+                    scroll = scroll.stick_to_bottom(true);
+                }
+                scroll.show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.add(
+                        Label::new(RichText::new(text).size(11.0).color(theme::text_dim())).wrap(),
+                    );
+                });
             }
         });
 }
@@ -1674,6 +1766,19 @@ fn truncate_chars(text: &str, max: usize) -> String {
     let mut result = text.chars().take(max).collect::<String>();
     result.push('…');
     result
+}
+
+/// While a long stream is arriving, only lay out the newest slice. Re-laying
+/// out the entire reasoning/content on every token would make the UI stutter.
+fn tail_preview(text: &str, max_bytes: usize) -> Option<String> {
+    if text.len() <= max_bytes {
+        return None;
+    }
+    let mut start = text.len() - max_bytes;
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    Some(format!("…\n{}", &text[start..]))
 }
 
 struct Lcg(u32);

@@ -2,7 +2,9 @@
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -37,6 +39,16 @@ impl AiConfig {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+}
+
+/// Incremental updates from an SSE chat completion. The UI appends these to
+/// the live assistant message so the user sees reasoning/content as it arrives.
+#[derive(Clone, Debug)]
+pub enum AiStreamEvent {
+    Reasoning(String),
+    Content(String),
+    Done,
+    Error(String),
 }
 
 #[derive(Clone, Debug)]
@@ -796,19 +808,196 @@ pub fn chat(
         }
         Err(ureq::Error::Status(code, response)) => {
             let body = response.into_string().unwrap_or_default();
-            let message = serde_json::from_str::<Value>(&body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/error/message")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned)
-                })
-                .unwrap_or_else(|| truncate_chars(body.trim(), 800));
+            let message = api_error_message(&body);
             Err(format!("API 请求失败（HTTP {code}）：{message}"))
         }
         Err(err) => Err(format!("AI 网络请求失败：{err}")),
     }
+}
+
+/// Stream an OpenAI-compatible chat completion over SSE. Reasoning deltas
+/// (`reasoning_content` / `reasoning`) and normal content deltas are forwarded
+/// to the UI as they arrive. If a provider explicitly rejects `stream:true`,
+/// fall back to the existing non-streaming request.
+pub fn chat_stream(
+    config: &AiConfig,
+    system_prompt: &str,
+    messages: &[ChatMessage],
+    sender: mpsc::Sender<AiStreamEvent>,
+) {
+    if !config.is_ready() {
+        let _ = sender.send(AiStreamEvent::Error(
+            "请先在 AI 设置中填写 API Key、API 地址和模型名称".to_owned(),
+        ));
+        return;
+    }
+    let base = config.base_url.trim().trim_end_matches('/');
+    let url = if base.ends_with("/chat/completions") {
+        base.to_owned()
+    } else {
+        format!("{base}/chat/completions")
+    };
+    let mut api_messages = Vec::with_capacity(messages.len() + 1);
+    api_messages.push(json!({ "role": "system", "content": system_prompt }));
+    for message in messages {
+        if message.content.trim().is_empty() {
+            continue;
+        }
+        api_messages.push(json!({
+            "role": message.role,
+            "content": message.content,
+        }));
+    }
+    let body = json!({
+        "model": config.model.trim(),
+        "messages": api_messages,
+        "temperature": 0.2,
+        "stream": true,
+    });
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(600))
+        .build();
+    let response = agent
+        .post(&url)
+        .set("Accept", "text/event-stream")
+        .set("Content-Type", "application/json")
+        .set(
+            "Authorization",
+            &format!("Bearer {}", config.api_key.trim()),
+        )
+        .send_json(body);
+    match response {
+        Ok(response) => {
+            let content_type = response
+                .header("Content-Type")
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if content_type.contains("text/event-stream") {
+                let reader = BufReader::new(response.into_reader());
+                for line in reader.lines() {
+                    let line = match line {
+                        Ok(line) => line,
+                        Err(err) => {
+                            let _ =
+                                sender.send(AiStreamEvent::Error(format!("读取 AI 流失败：{err}")));
+                            return;
+                        }
+                    };
+                    let Some(data) = line.trim_start().strip_prefix("data:") else {
+                        continue;
+                    };
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        let _ = sender.send(AiStreamEvent::Done);
+                        return;
+                    }
+                    if data.is_empty() {
+                        continue;
+                    }
+                    let value: Value = match serde_json::from_str(data) {
+                        Ok(value) => value,
+                        Err(_) => continue,
+                    };
+                    if let Some(error) = value.get("error") {
+                        let message = error
+                            .pointer("/message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("AI 流返回错误");
+                        let _ = sender.send(AiStreamEvent::Error(message.to_owned()));
+                        return;
+                    }
+                    let (reasoning, content) = stream_parts(&value);
+                    if let Some(reasoning) = reasoning {
+                        if sender.send(AiStreamEvent::Reasoning(reasoning)).is_err() {
+                            return;
+                        }
+                    }
+                    if let Some(content) = content {
+                        if sender.send(AiStreamEvent::Content(content)).is_err() {
+                            return;
+                        }
+                    }
+                }
+                let _ = sender.send(AiStreamEvent::Done);
+            } else {
+                match response.into_json::<Value>() {
+                    Ok(value) => {
+                        let (reasoning, content) = stream_parts(&value);
+                        if let Some(reasoning) = reasoning {
+                            let _ = sender.send(AiStreamEvent::Reasoning(reasoning));
+                        }
+                        if let Some(content) = content {
+                            let _ = sender.send(AiStreamEvent::Content(content));
+                        }
+                        let _ = sender.send(AiStreamEvent::Done);
+                    }
+                    Err(err) => {
+                        let _ = sender
+                            .send(AiStreamEvent::Error(format!("API 返回内容无法解析：{err}")));
+                    }
+                }
+            }
+        }
+        Err(ureq::Error::Status(code, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            let message = api_error_message(&body);
+            if (code == 400 || code == 422) && message.to_ascii_lowercase().contains("stream") {
+                match chat(config, system_prompt, messages) {
+                    Ok(content) => {
+                        let _ = sender.send(AiStreamEvent::Content(content));
+                        let _ = sender.send(AiStreamEvent::Done);
+                    }
+                    Err(err) => {
+                        let _ = sender.send(AiStreamEvent::Error(err));
+                    }
+                }
+            } else {
+                let _ = sender.send(AiStreamEvent::Error(format!(
+                    "API 请求失败（HTTP {code}）：{message}"
+                )));
+            }
+        }
+        Err(err) => {
+            let _ = sender.send(AiStreamEvent::Error(format!("AI 网络请求失败：{err}")));
+        }
+    }
+}
+
+fn stream_parts(value: &Value) -> (Option<String>, Option<String>) {
+    let choice = value.pointer("/choices/0");
+    let delta = choice.and_then(|choice| choice.get("delta").or_else(|| choice.get("message")));
+    let reasoning = delta
+        .and_then(|delta| {
+            delta
+                .get("reasoning_content")
+                .or_else(|| delta.get("reasoning"))
+        })
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned);
+    let content = delta
+        .and_then(|delta| delta.get("content"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            choice
+                .and_then(|choice| choice.get("text"))
+                .and_then(Value::as_str)
+        })
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned);
+    (reasoning, content)
+}
+
+fn api_error_message(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| truncate_chars(body.trim(), 800))
 }
 
 pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
@@ -864,6 +1053,77 @@ mod tests {
         assert!(bundle.text.contains("hardware.dts"));
         assert!(bundle.text.contains("references/checklist.md"));
         assert!(bundle.files.len() >= 6);
+    }
+
+    #[test]
+    fn streams_sse_reasoning_and_content() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request);
+            let response = concat!(
+                "HTTP/1.1 200 OK\r\n",
+                "Content-Type: text/event-stream\r\n",
+                "Connection: close\r\n",
+                "\r\n",
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think \"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
+                "data: [DONE]\n\n"
+            );
+            socket.write_all(response.as_bytes()).unwrap();
+            socket.flush().unwrap();
+        });
+        let config = AiConfig {
+            api_key: "test".to_owned(),
+            base_url: format!("http://{address}/v1"),
+            model: "test".to_owned(),
+        };
+        let (sender, receiver) = mpsc::channel();
+        chat_stream(&config, "system", &[], sender);
+        server.join().unwrap();
+        let events = receiver.try_iter().collect::<Vec<_>>();
+        assert!(events.iter().any(|event| {
+            matches!(event, AiStreamEvent::Reasoning(text) if text.as_str() == "think ")
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(event, AiStreamEvent::Content(text) if text.as_str() == "answer")
+        }));
+        assert!(matches!(events.last(), Some(AiStreamEvent::Done)));
+    }
+
+    #[test]
+    fn parses_stream_reasoning_and_content_delta() {
+        let value = json!({
+            "choices": [{
+                "delta": {
+                    "reasoning_content": "think",
+                    "content": "answer"
+                }
+            }]
+        });
+        let (reasoning, content) = stream_parts(&value);
+        assert_eq!(reasoning.as_deref(), Some("think"));
+        assert_eq!(content.as_deref(), Some("answer"));
+    }
+
+    #[test]
+    fn parses_non_stream_message_reasoning() {
+        let value = json!({
+            "choices": [{
+                "message": {
+                    "reasoning_content": "think",
+                    "content": "answer"
+                }
+            }]
+        });
+        let (reasoning, content) = stream_parts(&value);
+        assert_eq!(reasoning.as_deref(), Some("think"));
+        assert_eq!(content.as_deref(), Some("answer"));
     }
 
     #[test]

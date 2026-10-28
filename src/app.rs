@@ -734,6 +734,8 @@ enum AiEditStatus {
 struct AiChatMessage {
     role: String,
     content: String,
+    reasoning: String,
+    streaming: bool,
     error: bool,
     edits: Vec<crate::ai_edit::AiEdit>,
     edit_status: AiEditStatus,
@@ -746,6 +748,8 @@ impl AiChatMessage {
         Self {
             role: role.to_owned(),
             content,
+            reasoning: String::new(),
+            streaming: false,
             error,
             edits: Vec::new(),
             edit_status: AiEditStatus::Pending,
@@ -766,7 +770,7 @@ struct AiState {
     messages: Vec<AiChatMessage>,
     input: String,
     sending: bool,
-    receiver: Option<Receiver<Result<String, String>>>,
+    receiver: Option<Receiver<crate::ai::AiStreamEvent>>,
     transition: Option<AiTransition>,
     focus_input: bool,
     context_file: Option<PathBuf>,
@@ -4471,19 +4475,30 @@ impl App {
         self.ai.sending = true;
         self.ai.input.clear();
         self.ai.focus_input = true;
+        self.ai.messages.push(AiChatMessage {
+            role: "assistant".to_owned(),
+            content: String::new(),
+            reasoning: String::new(),
+            streaming: true,
+            error: false,
+            edits: Vec::new(),
+            edit_status: AiEditStatus::Pending,
+            apply_error: None,
+            backup_dir: None,
+        });
         let spawned = std::thread::Builder::new()
             .name("simple-embedded-ai".to_owned())
             .spawn(move || {
-                let _ = sender.send(crate::ai::chat(&config, &system_prompt, &history));
+                crate::ai::chat_stream(&config, &system_prompt, &history, sender);
             });
         if let Err(err) = spawned {
             self.ai.sending = false;
             self.ai.receiver = None;
-            self.ai.messages.push(AiChatMessage::text(
-                "assistant",
-                format!("无法启动 AI 请求：{err}"),
-                true,
-            ));
+            if let Some(message) = self.ai.messages.iter_mut().rev().find(|m| m.streaming) {
+                message.streaming = false;
+                message.error = true;
+                message.content = format!("无法启动 AI 请求：{err}");
+            }
         }
     }
 
@@ -4495,66 +4510,166 @@ impl App {
         }
     }
 
-    fn poll_ai(&mut self, ctx: &egui::Context) {
-        let received = self
+    fn append_ai_reasoning(message: &mut AiChatMessage, delta: &str) {
+        const MAX_REASONING_BYTES: usize = 120_000;
+        if message.reasoning.len() >= MAX_REASONING_BYTES {
+            return;
+        }
+        message.reasoning.push_str(delta);
+        if message.reasoning.len() > MAX_REASONING_BYTES {
+            let mut end = MAX_REASONING_BYTES;
+            while end > 0 && !message.reasoning.is_char_boundary(end) {
+                end -= 1;
+            }
+            message.reasoning.truncate(end);
+            message.reasoning.push_str("\n\n[思考过程过长，已截断]");
+        }
+    }
+
+    fn finish_ai_stream(&mut self, interrupted: bool) {
+        let Some(index) = self
             .ai
-            .receiver
-            .as_ref()
-            .map(|receiver| receiver.try_recv());
-        match received {
-            Some(Ok(Ok(reply))) => {
-                self.ai.receiver = None;
-                self.ai.sending = false;
-                let parsed = crate::ai_edit::parse_edits(&reply);
-                let text = parsed.text.trim().to_owned();
-                let mut edits = crate::ai_edit::merge_edits(parsed.edits);
-                if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
-                    for edit in &mut edits {
-                        edit.prepare(&root);
+            .messages
+            .iter()
+            .rposition(|message| message.streaming)
+        else {
+            return;
+        };
+        let raw = self.ai.messages[index].content.clone();
+        let reasoning = self.ai.messages[index].reasoning.clone();
+        if interrupted {
+            let message = &mut self.ai.messages[index];
+            message.streaming = false;
+            message.error = true;
+            message.content = if raw.trim().is_empty() {
+                "AI 输出中断，未收到内容".to_owned()
+            } else {
+                format!("{raw}\n\n[AI 输出中断]")
+            };
+            return;
+        }
+
+        let parsed = crate::ai_edit::parse_edits(&raw);
+        let text = parsed.text.trim().to_owned();
+        let mut edits = crate::ai_edit::merge_edits(parsed.edits);
+        if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
+            for edit in &mut edits {
+                edit.prepare(&root);
+            }
+        }
+        let content = if text.is_empty() && !edits.is_empty() {
+            format!(
+                "已准备 {} 个文件修改，请查看下方差异并点击“应用全部”。",
+                edits.len()
+            )
+        } else if text.is_empty() && !reasoning.trim().is_empty() {
+            "（模型只返回了思考过程，没有正文）".to_owned()
+        } else {
+            text
+        };
+        let message = &mut self.ai.messages[index];
+        message.content = content;
+        message.edits = edits;
+        message.edit_status = AiEditStatus::Pending;
+        message.apply_error = None;
+        message.backup_dir = None;
+        message.streaming = false;
+        if message.content.trim().is_empty() {
+            message.error = true;
+            message.content = "模型返回了空内容".to_owned();
+        }
+    }
+
+    fn poll_ai(&mut self, ctx: &egui::Context) {
+        let mut events = Vec::new();
+        let mut disconnected = false;
+        if let Some(receiver) = &self.ai.receiver {
+            for _ in 0..256 {
+                match receiver.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
                     }
                 }
-                let content = if text.is_empty() && !edits.is_empty() {
-                    format!(
-                        "已准备 {} 个文件修改，请查看下方差异并点击“应用全部”。",
-                        edits.len()
-                    )
-                } else {
-                    text
-                };
-                self.ai.messages.push(AiChatMessage {
-                    role: "assistant".to_owned(),
-                    content,
-                    error: false,
-                    edits,
-                    edit_status: AiEditStatus::Pending,
-                    apply_error: None,
-                    backup_dir: None,
-                });
-                ctx.request_repaint();
             }
-            Some(Ok(Err(err))) => {
-                self.ai.receiver = None;
-                self.ai.sending = false;
-                self.ai
-                    .messages
-                    .push(AiChatMessage::text("assistant", err, true));
-                ctx.request_repaint();
-            }
-            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
-                self.ai.receiver = None;
-                self.ai.sending = false;
-                self.ai.messages.push(AiChatMessage::text(
-                    "assistant",
-                    "AI 请求线程已结束".to_owned(),
-                    true,
-                ));
-                ctx.request_repaint();
-            }
-            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
-                ctx.request_repaint_after(Duration::from_millis(150));
-            }
-            None => {}
         }
+        if events.is_empty() && !disconnected {
+            if self.ai.receiver.is_some() {
+                ctx.request_repaint_after(Duration::from_millis(30));
+            }
+            return;
+        }
+
+        let mut done = false;
+        let mut errored = false;
+        for event in events {
+            match event {
+                crate::ai::AiStreamEvent::Reasoning(delta) => {
+                    if let Some(message) = self
+                        .ai
+                        .messages
+                        .iter_mut()
+                        .rev()
+                        .find(|message| message.streaming)
+                    {
+                        Self::append_ai_reasoning(message, &delta);
+                    }
+                }
+                crate::ai::AiStreamEvent::Content(delta) => {
+                    if let Some(message) = self
+                        .ai
+                        .messages
+                        .iter_mut()
+                        .rev()
+                        .find(|message| message.streaming)
+                    {
+                        message.content.push_str(&delta);
+                    }
+                }
+                crate::ai::AiStreamEvent::Done => {
+                    done = true;
+                    break;
+                }
+                crate::ai::AiStreamEvent::Error(err) => {
+                    errored = true;
+                    if let Some(message) = self
+                        .ai
+                        .messages
+                        .iter_mut()
+                        .rev()
+                        .find(|message| message.streaming)
+                    {
+                        message.streaming = false;
+                        message.error = true;
+                        if message.content.trim().is_empty() {
+                            message.content = err;
+                        } else {
+                            message
+                                .content
+                                .push_str(&format!("\n\n[AI 输出中断：{err}]"));
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        if done {
+            self.ai.receiver = None;
+            self.ai.sending = false;
+            self.finish_ai_stream(false);
+        } else if errored {
+            self.ai.receiver = None;
+            self.ai.sending = false;
+        } else if disconnected {
+            self.ai.receiver = None;
+            self.ai.sending = false;
+            self.finish_ai_stream(true);
+        } else if self.ai.receiver.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
+        ctx.request_repaint();
     }
 
     fn cancel_ai_edits(&mut self, index: usize) {
