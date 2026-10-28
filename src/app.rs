@@ -702,6 +702,15 @@ struct SymbolState {
     scanned: bool,
 }
 
+#[derive(Default)]
+struct RelationState {
+    index: Option<Arc<crate::relations::RelationIndex>>,
+    receiver: Option<Receiver<Result<crate::relations::RelationIndex, String>>>,
+    root: Option<PathBuf>,
+    error: Option<String>,
+    dirty_at: Option<Instant>,
+}
+
 #[derive(Clone, Debug)]
 struct Diagnostic {
     path: PathBuf,
@@ -1020,6 +1029,7 @@ pub struct App {
     todo: TodoState,
     symbols: SymbolState,
     registers: RegisterState,
+    relations: RelationState,
     hex: HexState,
     array: ArrayState,
     debug: DebugState,
@@ -1121,6 +1131,7 @@ impl App {
             todo: TodoState::default(),
             symbols: SymbolState::default(),
             registers: RegisterState::default(),
+            relations: RelationState::default(),
             hex: HexState::default(),
             array: ArrayState::default(),
             debug: DebugState::default(),
@@ -1254,6 +1265,7 @@ impl App {
         self.memory_check = MemoryCheckState::default();
         self.firmware_view = FirmwareViewState::default();
         self.registers = RegisterState::default();
+        self.relations = RelationState::default();
         self.output_view = OutputView::Build;
 
         let mut config_error = None;
@@ -1378,6 +1390,7 @@ impl App {
         self.refresh_git_status();
         self.settings.remember_project(&root);
         self.settings.save();
+        self.start_relations_scan();
 
         if let Some(err) = config_error {
             self.set_toast(err, Severity::Warning);
@@ -3997,6 +4010,93 @@ impl App {
         }
     }
 
+    fn start_relations_scan(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.relations = RelationState::default();
+            return;
+        };
+        if self.relations.receiver.is_some() {
+            return;
+        }
+        let respect_gitignore = self.settings.respect_gitignore;
+        let ignore_patterns = self.settings.ignore_patterns.clone();
+        let (sender, receiver) = mpsc::channel();
+        self.relations.root = Some(root.clone());
+        self.relations.receiver = Some(receiver);
+        self.relations.error = None;
+        self.relations.dirty_at = None;
+        let spawned = std::thread::Builder::new()
+            .name("simple-embedded-relations".to_owned())
+            .spawn(move || {
+                let ignore = IgnoreRules::load(&root, respect_gitignore, &ignore_patterns);
+                let result = crate::relations::scan_project(&root, &ignore);
+                let _ = sender.send(result);
+            });
+        if let Err(err) = spawned {
+            self.relations.receiver = None;
+            self.relations.error = Some(format!("无法启动调用/引用索引：{err}"));
+        }
+    }
+
+    fn poll_relations(&mut self, ctx: &egui::Context) {
+        if self.project.is_none() {
+            return;
+        }
+        let received = self
+            .relations
+            .receiver
+            .as_ref()
+            .map(|receiver| receiver.try_recv());
+        match received {
+            Some(Ok(Ok(index))) => {
+                let same_root = self.project.as_ref().is_some_and(|project| {
+                    self.relations
+                        .root
+                        .as_ref()
+                        .is_some_and(|root| same_path(root, &project.root))
+                });
+                if same_root {
+                    self.relations.index = Some(Arc::new(index));
+                    self.relations.error = None;
+                }
+                self.relations.receiver = None;
+                ctx.request_repaint();
+            }
+            Some(Ok(Err(err))) => {
+                self.relations.error = Some(err);
+                self.relations.receiver = None;
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.relations.error = Some("调用/引用索引线程已结束".to_owned());
+                self.relations.receiver = None;
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                ctx.request_repaint_after(Duration::from_millis(200));
+            }
+            None => {
+                if self
+                    .relations
+                    .dirty_at
+                    .is_some_and(|at| at.elapsed() >= Duration::from_millis(1200))
+                {
+                    self.start_relations_scan();
+                }
+            }
+        }
+    }
+
+    fn mark_relations_dirty(&mut self) {
+        if self.project.is_some() {
+            self.relations.dirty_at = Some(Instant::now());
+        }
+    }
+
+    fn hover_relations(&self, word: &str) -> Option<crate::relations::HoverRelations> {
+        self.relations.index.as_ref()?.hover(word)
+    }
+
     fn refresh_git_status(&mut self) {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             self.git = GitStatus::default();
@@ -4052,6 +4152,7 @@ impl App {
             self.set_toast("只读文件不能保存", Severity::Warning);
             return false;
         }
+        let affects_relations = crate::formatting::is_c_family(&doc.path);
         let configured = self.settings.clang_format_path.clone();
         let format_on_save = self.settings.format_on_save;
         let Some(doc) = self.tabs.get_mut(index) else {
@@ -4085,6 +4186,9 @@ impl App {
             self.member_index = None;
             self.git_line_key = None;
             self.refresh_git_status();
+            if affects_relations {
+                self.mark_relations_dirty();
+            }
         }
         saved
     }
@@ -4120,6 +4224,9 @@ impl App {
         if let Err(err) = util::write_text_file(&path, &text, line_ending, bom, encoding) {
             self.set_toast(format!("另存为失败：{err}"), Severity::Error);
             return;
+        }
+        if crate::formatting::is_c_family(&path) {
+            self.mark_relations_dirty();
         }
         let highlighter = Arc::clone(&self.highlighter);
         let project_root = self.project.as_ref().map(|project| project.root.clone());
@@ -4169,11 +4276,15 @@ impl App {
         let configured = self.settings.clang_format_path.clone();
         let format_on_save = self.settings.format_on_save;
         let mut saved = 0usize;
+        let mut affects_relations = false;
         for doc in self
             .tabs
             .iter_mut()
             .filter(|doc| doc.is_dirty() && !doc.read_only)
         {
+            if formatting::is_c_family(&doc.path) {
+                affects_relations = true;
+            }
             if format_on_save && formatting::is_c_family(&doc.path) {
                 let _ = Self::format_document(doc, &configured);
             }
@@ -4184,6 +4295,9 @@ impl App {
         if saved > 0 {
             self.member_index = None;
             self.refresh_git_status();
+            if affects_relations {
+                self.mark_relations_dirty();
+            }
         }
         Ok(saved)
     }
@@ -7281,6 +7395,9 @@ impl App {
         if destination.is_dir() {
             self.member_index = None;
         }
+        if clipboard.cut || destination.is_dir() || crate::formatting::is_c_family(&destination) {
+            self.mark_relations_dirty();
+        }
         self.refresh_support_packs();
         self.refresh_git_status();
         self.set_toast(
@@ -7346,6 +7463,9 @@ impl App {
             tree.reveal(&destination);
         }
         self.member_index = None;
+        if destination.is_dir() || crate::formatting::is_c_family(&destination) {
+            self.mark_relations_dirty();
+        }
         self.refresh_support_packs();
         self.refresh_git_status();
         self.rename_entry = None;
@@ -7410,6 +7530,9 @@ impl App {
             tree.refresh();
         }
         self.member_index = None;
+        if is_dir || crate::formatting::is_c_family(&draft.path) {
+            self.mark_relations_dirty();
+        }
         self.refresh_support_packs();
         self.refresh_git_status();
         self.set_toast(
@@ -8339,6 +8462,7 @@ impl eframe::App for App {
             self.report_link_problem();
         }
         self.poll_lsp(&ctx);
+        self.poll_relations(&ctx);
         self.sync_lsp();
         self.poll_micropython();
         self.poll_debug_start();

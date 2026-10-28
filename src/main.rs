@@ -34,6 +34,7 @@ mod multi_cursor;
 mod navigation;
 mod project_meta;
 mod registers;
+mod relations;
 mod search;
 mod serial;
 mod support_pack;

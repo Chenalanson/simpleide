@@ -7346,7 +7346,22 @@ impl App {
                     .iter()
                     .find(|issue| issue.line == line && issue.name == word)
                     .map(|issue| (issue.description().to_owned(), issue.level));
-                if info.is_some() || note.is_some() || lsp_text.is_some() {
+                let c_family = hover_path
+                    .as_ref()
+                    .is_some_and(|path| crate::formatting::is_c_family(path));
+                let relations = if c_family {
+                    self.hover_relations(&word)
+                } else {
+                    None
+                };
+                let relations_pending = c_family && self.relations.receiver.is_some();
+                let relations_error = if c_family {
+                    self.relations.error.clone()
+                } else {
+                    None
+                };
+                let has_hover_card = info.is_some() || note.is_some() || lsp_text.is_some();
+                if has_hover_card || relations.is_some() {
                     if let Some(response) = &response {
                         let response = response.clone();
                         response.on_hover_ui_at_pointer(move |ui| {
@@ -7375,6 +7390,25 @@ impl App {
                                     RichText::new(note)
                                         .size(10.5)
                                         .color(macro_issue_color(*level)),
+                                );
+                            }
+                            if let Some(relations) = &relations {
+                                show_hover_relations(ui, relations, has_hover_card);
+                            }
+                            if relations_pending {
+                                ui.add_space(5.0);
+                                ui.label(
+                                    RichText::new("调用 / 引用索引更新中...")
+                                        .size(9.5)
+                                        .color(theme::text_faint()),
+                                );
+                            }
+                            if let Some(error) = &relations_error {
+                                ui.add_space(5.0);
+                                ui.label(
+                                    RichText::new(format!("调用 / 引用索引：{error}"))
+                                        .size(9.5)
+                                        .color(theme::warning()),
                                 );
                             }
                         });
@@ -11585,6 +11619,367 @@ fn peripheral_field_text(raw: Option<&str>, field: &crate::registers::SvdField) 
     let digits = width.div_ceil(4).max(1) as usize;
     let value = peripheral_field_number(Some(value), field);
     format!("0x{value:0digits$X}")
+}
+
+fn show_hover_relations(
+    ui: &mut egui::Ui,
+    relations: &crate::relations::HoverRelations,
+    separate: bool,
+) {
+    ui.set_max_width(520.0);
+    if separate {
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(4.0);
+    }
+    if relations.function {
+        show_hover_calls(ui, relations);
+    }
+    show_hover_references(ui, relations, separate);
+    if relations.index_truncated {
+        ui.add_space(3.0);
+        ui.label(
+            RichText::new("调用 / 引用索引已截断，仅显示部分结果")
+                .size(9.0)
+                .color(theme::text_faint()),
+        );
+    }
+}
+
+fn show_hover_calls(ui: &mut egui::Ui, relations: &crate::relations::HoverRelations) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("调用关系")
+                .size(11.5)
+                .strong()
+                .color(theme::text()),
+        );
+        ui.label(
+            RichText::new(format!(
+                "{} 个调用者 · {} 个被调用",
+                relations.caller_total, relations.callee_total
+            ))
+            .size(9.5)
+            .color(theme::text_faint()),
+        );
+    });
+    if relations.callers.is_empty() && relations.callees.is_empty() {
+        ui.label(
+            RichText::new("未找到项目内的函数调用关系")
+                .size(9.5)
+                .color(theme::text_faint()),
+        );
+        return;
+    }
+    ui.add_space(2.0);
+    ui.label(
+        RichText::new("调用图 · 左：调用者 / 右：被调用")
+            .size(9.0)
+            .color(theme::text_faint()),
+    );
+    paint_hover_call_graph(ui, relations);
+    if !relations.callers.is_empty() {
+        ui.add_space(4.0);
+        show_call_group(
+            ui,
+            "被这些函数调用",
+            &relations.callers,
+            relations.caller_total,
+        );
+    }
+    if !relations.callees.is_empty() {
+        ui.add_space(3.0);
+        show_call_group(
+            ui,
+            "调用了这些函数",
+            &relations.callees,
+            relations.callee_total,
+        );
+    }
+}
+
+fn show_call_group(
+    ui: &mut egui::Ui,
+    title: &str,
+    nodes: &[crate::relations::CallNode],
+    total: usize,
+) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).size(9.5).color(theme::accent()));
+        if total > nodes.len() {
+            ui.label(
+                RichText::new(format!("还有 {} 个", total - nodes.len()))
+                    .size(8.8)
+                    .color(theme::text_faint()),
+            );
+        }
+    });
+    show_call_nodes(ui, nodes, 0);
+}
+
+fn show_call_nodes(ui: &mut egui::Ui, nodes: &[crate::relations::CallNode], depth: usize) {
+    for node in nodes {
+        ui.horizontal(|ui| {
+            ui.add_space(8.0 + depth as f32 * 12.0);
+            ui.label(
+                RichText::new(truncate_label(&node.name, 30))
+                    .monospace()
+                    .size(10.5)
+                    .color(theme::info()),
+            );
+            if let (Some(path), Some(line)) = (&node.path, node.line) {
+                let file = truncate_label(&crate::util::file_name(path), 26);
+                ui.label(
+                    RichText::new(format!("{file}:{line}"))
+                        .size(8.8)
+                        .color(theme::text_faint()),
+                );
+            }
+        });
+        if !node.children.is_empty() {
+            show_call_nodes(ui, &node.children, depth + 1);
+        }
+    }
+}
+
+fn show_hover_references(
+    ui: &mut egui::Ui,
+    relations: &crate::relations::HoverRelations,
+    separate: bool,
+) {
+    let has_previous = separate || relations.function;
+    if relations.reference_total == 0 {
+        if has_previous {
+            ui.add_space(5.0);
+            ui.label(
+                RichText::new("未找到引用")
+                    .size(9.5)
+                    .color(theme::text_faint()),
+            );
+        }
+        return;
+    }
+    if has_previous {
+        ui.add_space(6.0);
+    }
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("引用")
+                .size(11.0)
+                .strong()
+                .color(theme::text()),
+        );
+        let plus = if relations.references_truncated {
+            "+"
+        } else {
+            ""
+        };
+        ui.label(
+            RichText::new(format!(
+                "{}{} 处 · {} 个文件",
+                relations.reference_total, plus, relations.file_total
+            ))
+            .size(9.5)
+            .color(theme::text_faint()),
+        );
+    });
+    for group in &relations.reference_groups {
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(truncate_label(&crate::util::file_name(&group.path), 30))
+                    .size(9.5)
+                    .color(theme::text_dim()),
+            );
+            ui.label(
+                RichText::new(format!("{} 处", group.total))
+                    .size(8.8)
+                    .color(theme::text_faint()),
+            );
+        });
+        for reference in &group.references {
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                if reference.is_definition {
+                    ui.label(RichText::new("定义").size(8.5).color(theme::accent()));
+                } else {
+                    ui.add_space(22.0);
+                }
+                ui.label(
+                    RichText::new(format!("{}:{}", reference.line, reference.column))
+                        .monospace()
+                        .size(9.0)
+                        .color(theme::text_faint()),
+                );
+                let preview = reference.preview.replace('\t', "    ");
+                ui.add(
+                    Label::new(
+                        RichText::new(truncate_label(&preview, 56))
+                            .monospace()
+                            .size(9.5)
+                            .color(theme::text_dim()),
+                    )
+                    .truncate(),
+                );
+            });
+        }
+        if group.total > group.references.len() {
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                ui.label(
+                    RichText::new(format!("还有 {} 处", group.total - group.references.len()))
+                        .size(8.8)
+                        .color(theme::text_faint()),
+                );
+            });
+        }
+    }
+    if relations.file_total > relations.reference_groups.len() {
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!(
+                    "还有 {} 个文件",
+                    relations.file_total - relations.reference_groups.len()
+                ))
+                .size(8.8)
+                .color(theme::text_faint()),
+            );
+        });
+    }
+    if relations.references_truncated {
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("每个符号最多索引 24 处引用")
+                    .size(8.8)
+                    .color(theme::text_faint()),
+            );
+        });
+    }
+}
+
+fn paint_hover_call_graph(ui: &mut egui::Ui, relations: &crate::relations::HoverRelations) -> bool {
+    let callers = relations.callers.iter().take(4).collect::<Vec<_>>();
+    let callees = relations.callees.iter().take(4).collect::<Vec<_>>();
+    if callers.is_empty() && callees.is_empty() {
+        return false;
+    }
+    let width = ui.available_width().clamp(380.0, 500.0);
+    let rows = callers.len().max(callees.len()).max(1);
+    let height = rows as f32 * 30.0 + 14.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let current = Rect::from_center_size(rect.center(), egui::vec2(150.0, 24.0));
+    let side_width = ((width - 150.0 - 26.0) / 2.0).max(90.0);
+    let node_height = 22.0;
+    let fill = theme::panel_raised();
+    let stroke = Stroke::new(1.0_f32, theme::border());
+    let line = Stroke::new(1.0_f32, theme::text_faint());
+
+    let start_y = rect.center().y - callers.len().saturating_sub(1) as f32 * 15.0;
+    for (index, node) in callers.iter().enumerate() {
+        let y = start_y + index as f32 * 30.0;
+        let node_rect = Rect::from_min_size(
+            egui::pos2(rect.left() + 2.0, y - node_height / 2.0),
+            egui::vec2(side_width, node_height),
+        );
+        paint_graph_node(&painter, node_rect, &node.name, fill, stroke, theme::text());
+        let bus_x = current.left() - 10.0;
+        painter.line_segment([node_rect.right_center(), egui::pos2(bus_x, y)], line);
+        painter.line_segment(
+            [egui::pos2(bus_x, y), egui::pos2(bus_x, rect.center().y)],
+            line,
+        );
+    }
+    if !callers.is_empty() {
+        paint_graph_arrow(
+            &painter,
+            egui::pos2(current.left() - 10.0, rect.center().y),
+            current.left_center(),
+            theme::accent(),
+        );
+    }
+
+    paint_graph_node(
+        &painter,
+        current,
+        &relations.word,
+        theme::with_alpha(theme::accent(), 55),
+        Stroke::new(1.2_f32, theme::accent()),
+        theme::text(),
+    );
+
+    let start_y = rect.center().y - callees.len().saturating_sub(1) as f32 * 15.0;
+    for (index, node) in callees.iter().enumerate() {
+        let y = start_y + index as f32 * 30.0;
+        let node_rect = Rect::from_min_size(
+            egui::pos2(rect.right() - side_width - 2.0, y - node_height / 2.0),
+            egui::vec2(side_width, node_height),
+        );
+        let bus_x = current.right() + 10.0;
+        painter.line_segment(
+            [egui::pos2(bus_x, rect.center().y), egui::pos2(bus_x, y)],
+            line,
+        );
+        paint_graph_arrow(
+            &painter,
+            egui::pos2(bus_x, y),
+            node_rect.left_center(),
+            theme::accent(),
+        );
+        paint_graph_node(&painter, node_rect, &node.name, fill, stroke, theme::text());
+    }
+    true
+}
+
+fn paint_graph_node(
+    painter: &egui::Painter,
+    rect: Rect,
+    name: &str,
+    fill: Color32,
+    stroke: Stroke,
+    text_color: Color32,
+) {
+    painter.rect_filled(rect, CornerRadius::same(4), fill);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(4),
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        truncate_label(name, 18),
+        FontId::monospace(9.5),
+        text_color,
+    );
+}
+
+fn paint_graph_arrow(painter: &egui::Painter, from: egui::Pos2, to: egui::Pos2, color: Color32) {
+    let delta = to - from;
+    if delta.length_sq() < 1.0 {
+        return;
+    }
+    painter.line_segment([from, to], Stroke::new(1.2_f32, color));
+    let direction = delta.normalized();
+    let perpendicular = egui::vec2(-direction.y, direction.x);
+    let base = to - direction * 6.0;
+    painter.add(Shape::convex_polygon(
+        vec![to, base + perpendicular * 3.0, base - perpendicular * 3.0],
+        color,
+        Stroke::NONE,
+    ));
+}
+
+fn truncate_label(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
+    }
+    let mut result = text.chars().take(max_chars).collect::<String>();
+    result.push_str("...");
+    result
 }
 
 fn show_hover_info(ui: &mut egui::Ui, info: &crate::hover::HoverInfo) {
