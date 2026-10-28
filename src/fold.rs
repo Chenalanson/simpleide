@@ -271,7 +271,9 @@ impl FoldBuffer {
             if let Some(range) = selected.iter().find(|range| range.start_line == line_index) {
                 self.markers
                     .push((view_line, range.start_line, range.end_line));
-                skip_until = range.end_line + 1;
+                // Keep the closing brace line visible; only hide the body
+                // between the start line and the matching brace.
+                skip_until = range.end_line;
             }
             if !ending.is_empty() {
                 let newline_start = view_pos;
@@ -396,11 +398,11 @@ mod tests {
     fn fold_buffer_hides_the_block_and_keeps_source_line_numbers() {
         let text = "void f() {\n    a();\n    b();\n}\nint x;\n";
         let buffer = FoldBuffer::new(text.to_owned(), BTreeSet::from([0usize]));
-        assert_eq!(buffer.view(), "void f() {\nint x;\n");
-        assert_eq!(buffer.view_lines(), &[1, 5]);
+        assert_eq!(buffer.view(), "void f() {\n}\nint x;\n");
+        assert_eq!(buffer.view_lines(), &[1, 4, 5]);
         assert_eq!(buffer.markers(), &[(0, 0, 3)]);
         assert!(!buffer.view().contains("a();"));
-        assert!(!buffer.view().contains('}'));
+        assert!(buffer.view().contains('}'));
     }
 
     #[test]
@@ -428,10 +430,16 @@ mod tests {
         buffer.delete_char_range(next_char - 1..next_char);
         assert!(buffer.changed());
         assert!(buffer.lines_changed());
-        assert_eq!(buffer.cursor_hint(), Some("void f() {".chars().count()));
+        assert_eq!(
+            buffer.cursor_hint(),
+            Some(
+                text[..text.find("}\n").expect("closing newline") + 1]
+                    .chars()
+                    .count()
+            )
+        );
         assert!(buffer.source().contains("    a();"));
-        assert!(buffer.source().contains("int x;"));
-        assert!(!buffer.source().contains("void f() {\n"));
+        assert!(buffer.source().contains("}int x;"));
     }
 
     #[test]

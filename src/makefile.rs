@@ -144,6 +144,52 @@ pub fn sync_sources(root: &Path, sources: &[String]) -> Result<(Option<PathBuf>,
     Ok((changed, additions.len()))
 }
 
+/// Remove a deleted file (or every file under a deleted directory) from the
+/// Makefile `C_SOURCES` list.
+pub fn remove_sources(root: &Path, path: &Path, is_dir: bool) -> Result<Option<PathBuf>, String> {
+    let Some(makefile) = find_makefile(root) else {
+        return Ok(None);
+    };
+    let loaded = read_text_file(&makefile)?;
+    let mut lines = text_lines(&loaded.text);
+    if !is_supported(&lines) {
+        return Ok(None);
+    }
+    let Some(assignment) = first_assignment(&lines, "C_SOURCES") else {
+        return Ok(None);
+    };
+    let relative = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let relative = relative.trim_start_matches("./").to_ascii_lowercase();
+    if relative.is_empty() {
+        return Ok(None);
+    }
+    let mut removed = 0usize;
+    let remaining = tokens(&assignment.value)
+        .into_iter()
+        .filter(|token| {
+            let key = source_key(token);
+            let hit = key == relative || (is_dir && key.starts_with(&format!("{relative}/")));
+            if hit {
+                removed += 1;
+            }
+            !hit
+        })
+        .collect::<Vec<_>>();
+    if removed == 0 {
+        return Ok(None);
+    }
+    replace_assignment(
+        &mut lines,
+        "C_SOURCES",
+        &list_assignment("C_SOURCES", "", &remaining),
+    )?;
+    commit(&makefile, root, &loaded, lines)
+}
+
 fn source_key(value: &str) -> String {
     value
         .trim()
@@ -1026,6 +1072,28 @@ mod tests {
         let (changed, added) = sync_sources(&root, &["BSP/bsp_usart.c".to_owned()]).unwrap();
         assert!(changed.is_none());
         assert_eq!(added, 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removes_deleted_sources_from_c_sources() {
+        let (root, path) = temp_project("remove-sources", &sample());
+        sync_sources(
+            &root,
+            &["BSP/bsp_usart.c".to_owned(), "BSP/other.c".to_owned()],
+        )
+        .unwrap();
+        let changed = remove_sources(&root, &root.join("BSP/bsp_usart.c"), false).unwrap();
+        assert!(changed.is_some());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("BSP/bsp_usart.c"));
+        assert!(text.contains("BSP/other.c"));
+
+        let changed = remove_sources(&root, &root.join("BSP"), true).unwrap();
+        assert!(changed.is_some());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("BSP/other.c"));
+        assert!(text.contains("Core/Src/main.c"));
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -158,7 +158,7 @@ docs/                  README 截图和使用教程
 - Toast 使用 12.5px 正文、10.5px 状态文字、14×10 内边距，最大宽度 460px；不要再把提示字号设为 9–11px。
 - `column.rs` 仍保留旧列编辑算法；`column_select.rs` + `ColumnSelectionState` 提供 Ctrl+Alt+鼠标左键拖动的矩形列选择，蓝色高亮，Ctrl+C 复制、Delete/Backspace 删除、直接输入替换。列编辑对话框已不在任何可见入口暴露。
 - `multi_cursor.rs` + `MultiCursorState` 提供多光标：Alt+Click 添加光标，Ctrl+Alt+Up/Down 在上下行添加光标，Ctrl+D 选择当前词并添加下一个匹配，Esc 清除；输入、Backspace/Delete、Enter、Tab、粘贴对所有主/次选择生效，Ctrl+C 复制全部选择。次级选择用半透明高亮和独立竖线绘制；普通点击或方向键移动主光标时清除多光标。多光标和矩形列选择互斥。
-- `fold.rs` 提供 C 风格大括号块折叠（跳过注释和字符串）。鼠标悬停在可折叠起始行时，行号右侧显示下箭头 chevron，点击即可折叠；折叠后隐藏起始行之后到结束行的所有行，起始行末尾显示 `...` 标记，行号右侧显示右箭头，点击 `...` 或右箭头恢复。快捷键 `Ctrl+Shift+[` 折叠当前光标所在的内层块，`Ctrl+Shift+]` 展开当前文件全部块。行号栏继续显示源文件行号；`FoldBuffer` 把可见行的编辑映射回完整源文本，所以折叠状态仍可直接输入、删除和粘贴，保存时写完整内容。
+- `fold.rs` 提供 C 风格大括号块折叠（跳过注释和字符串）。鼠标悬停在可折叠起始行时，行号右侧显示下箭头 chevron，点击即可折叠；折叠后隐藏起始行和结束行之间的块内行，结束行（右花括号）保留可见，行号右侧显示右箭头，点击右箭头恢复（鼠标经过时变为手形）；折叠和展开时通过 `pending_scroll` 保持当前滚动偏移，不会跳回文件顶部。快捷键 `Ctrl+Shift+[` 折叠当前光标所在的内层块，`Ctrl+Shift+]` 展开当前文件全部块。行号栏继续显示源文件行号；`FoldBuffer` 把可见行的编辑映射回完整源文本，所以折叠状态仍可直接输入、删除和粘贴，保存时写完整内容。
 - 撤销 / 重做是 `App.undo` 的跨文件快照栈：每帧比较各 Tab 的 `EditorBuffer` revision，记录 before/after 文本和光标；`Ctrl+Z` 撤销、`Ctrl+Shift+Z` / `Ctrl+Y` 重做，若目标文件已关闭会重新打开；普通新编辑会清空 redo。深度来自配置 → 其他 → **撤销栈深度**（默认 64，最大 64）。
 - `log.rs` 的 `parse_location` 解析 `file:line:col`；日志行带位置时可点击跳转。`LogStore` 维护最多 1000 条问题诊断，`App::refresh_diagnostics` 解析为本地路径并在行号栏右侧画红/黄竖条；输出面板的构建视图可过滤全部/错误/警告，调试视图显示 gdb 日志和命令输入。
 - 内置可选的 clangd LSP；未安装或未启用 clangd 时，补全、跳转和引用搜索回退到轻量符号索引。调试仍是基础 gdb 控制台，不是完整 IDE 调试前端。
@@ -192,7 +192,7 @@ docs/                  README 截图和使用教程
 - 工程根目录作为文件树第一行显示（默认展开），整棵树相对“资源管理器”标题再缩进一级，使根目录明确作为该分组的子级；子项相对根继续缩进。根行同样可点击展开/收起，右键提供新建文件/文件夹、粘贴、在文件资源管理器中显示、复制路径/相对路径、用 VS Code 打开。
 - 目录展开/收起使用每个目录独立的 egui `CollapsingState`（0.20s 动画）和裁剪区域，行内容随 openness 高度渐显/收起；箭头是和工程信息一致的蓝色双线 chevron，按 openness 旋转，并为每级深度绘制 `BORDER` 垂直缩进参考线，参考线位于父级 chevron 正下方，文件行也延续父级竖线。`expanded` 集合同步保存逻辑展开状态，`reveal` 展开父目录时也走同一动画。
 - 文件右键菜单：在侧边打开、剪切、复制、复制路径、复制相对路径、重命名...、删除，以及查看/十六进制/在资源管理器中显示；文件夹右键额外提供新建文件/文件夹和粘贴，也支持剪切、复制、重命名和删除。
-- 文件操作使用应用内 `FileClipboard`（复制/剪切），不读写系统剪贴板文件；粘贴到文件时使用其父目录。复制重名时生成 `名称 - 副本.ext`、`名称 - 副本 (2).ext`，剪切遇到同名目标会提示，跨卷移动失败时回退为递归复制再删除。重命名和删除使用独立确认弹窗；删除前若存在未保存 Tab 会拒绝执行。重命名/剪切会同步更新打开 Tab 的路径、分屏引用、断点、调试暂停位置和图像预览；删除会关闭相关 Tab 并清除这些引用。
+- 文件操作使用应用内 `FileClipboard`（复制/剪切），不读写系统剪贴板文件；粘贴到文件时使用其父目录。复制重名时生成 `名称 - 副本.ext`、`名称 - 副本 (2).ext`，剪切遇到同名目标会提示，跨卷移动失败时回退为递归复制再删除。重命名和删除使用独立确认弹窗；删除前若存在未保存 Tab 会拒绝执行。重命名/剪切会同步更新打开 Tab 的路径、分屏引用、断点、调试暂停位置和图像预览；删除会关闭相关 Tab 并清除这些引用。删除 `.c/.cpp` 文件或包含源文件的目录后，`makefile::remove_sources` 会从 Makefile 的 `C_SOURCES` 中移除对应条目（Makefile 有未保存修改时跳过并提示）。
 - 懒加载目录子项，目录优先、名称不区分大小写排序。
 - 默认隐藏 `.` 开头的文件/目录，可通过设置或左下按钮切换。
 - `FileTree::reveal` 会展开当前打开文件的父目录。
@@ -266,7 +266,7 @@ docs/                  README 截图和使用教程
 - 没有安装或启用 clangd 时，符号搜索、TODO、寄存器浏览器和补全/定义/引用仍是轻量索引；成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型。clangd 启用后语义级定义/引用/悬停/补全/重命名以 clangd 为准；没有 clangd 诊断面板、语义高亮、代码操作或 inlay hints。
 - 内存布局的起始地址/大小只写入工程 `.simple-embedded/settings.json`，不会自动改写链接脚本；Flash/RAM 总量优先来自链接脚本，其次来自芯片支持包。`.bin` 使用内存布局里的下载起始地址。
 - 多光标支持 Alt+Click、Ctrl+Alt+Up/Down、Ctrl+D 和统一编辑；方向键只移动主光标并清除次级光标，不实现 VS Code 的多光标同时移动、Ctrl+U 回退光标和跨文件多光标。Ctrl+Alt+左键仍提供单一矩形列选择；分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
-- 代码折叠只识别 C 风格大括号块，不识别 `#if` / 函数式语言缩进块；折叠时隐藏块内行和结束行，起始行与 `...` 标记仍可编辑，折叠状态不写入工程配置。
+- 代码折叠只识别 C 风格大括号块，不识别 `#if` / 函数式语言缩进块；折叠时隐藏起始行与结束行之间的块内行，保留结束行（右花括号），起始行仍可编辑，折叠状态不写入工程配置。
 - 调试支持主机 gdb 和 ARM GDB server：ARM ELF/AXF 会复用 OpenOCD / pyOCD 配置启动 server，连接 arm-none-eabi-gdb 并 `load` 程序；调试侧栏提供变量 Live Watch 和只读寄存器表，通过 gdb `echo` 标记解析输出，但没有调用栈、内存或外设寄存器编辑面板。“动态监测”支持 `watch` / `rwatch` / `awatch` 硬件 watchpoint，命中时暂停并记录本机时间、新旧值、源码位置和 `bt 6` 调用栈；OpenOCD 的 Cortex-M 命中常报告为 `SIGTRAP`，应用会查询创建时保存的旧值和当前表达式值补记录。数量受目标硬件限制，GDB 可能退化为软件 watchpoint（界面标记“软件”），OpenOCD/pyOCD 不支持时以 gdb 错误为准。watchpoint 表达式和历史在停止调试后保留，下次会话在 `main` 暂停后自动或手动重新启用；调试控制浮层可关闭但不会自动停止会话。
 - 工作区只使用第一个 folder，不实现 VS Code 的多根工作区、任务和扩展配置；双击关联写入 HKCU，移动程序后需要重新关联。
 - 没有内嵌 ssh-mcp 或 jlink-mcp 客户端；远程 SSH 走系统 OpenSSH，Flash 走本地自定义命令、内置 OpenOCD 或内置 pyOCD。内置烧录支持 `.hex` / `.elf` / `.axf`，以及按内存布局下载地址烧录的 `.bin`。
@@ -285,7 +285,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、大括号折叠范围/可编辑折叠缓冲/源行映射、Makefile 行级高亮、C_SOURCES 源文件同步、clangd compile_commands/URI/UTF-16 位置/悬停清洗/C/C++ 文件过滤、undefined reference 符号提取、撤销深度默认值与上限、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、图标 ICO 条目与 exe 嵌入资源一致性。当前共 230 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、大括号折叠范围/可编辑折叠缓冲/源行映射、Makefile 行级高亮、C_SOURCES 源文件同步/删除同步、clangd compile_commands/URI/UTF-16 位置/悬停清洗/C/C++ 文件过滤、undefined reference 符号提取、撤销深度默认值与上限、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、图标 ICO 条目与 exe 嵌入资源一致性。当前共 231 个测试。
 
 UI 改动后建议：
 

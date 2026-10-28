@@ -1045,6 +1045,10 @@ pub struct App {
     split_direction: SplitDirection,
     split_focus: usize,
     scroll_to_cursor: bool,
+    /// Vertical scroll offset to restore after switching between the normal
+    /// and folded editors (folding must not jump to the top).
+    pending_scroll: Option<f32>,
+    last_editor_scroll: f32,
     immersive: bool,
     chord_k_at: Option<Instant>,
     log_filter: LogFilter,
@@ -1142,6 +1146,8 @@ impl App {
             split_direction: SplitDirection::Right,
             split_focus: 0,
             scroll_to_cursor: false,
+            pending_scroll: None,
+            last_editor_scroll: 0.0,
             immersive: false,
             chord_k_at: None,
             log_filter: LogFilter::All,
@@ -4307,6 +4313,7 @@ impl App {
         if !doc.folds.remove(&start) {
             doc.folds.insert(start);
         }
+        self.pending_scroll = Some(self.last_editor_scroll);
         self.find.dirty = true;
         self.focus_editor = true;
         ctx.request_repaint();
@@ -4321,6 +4328,7 @@ impl App {
         };
         if !doc.folds.is_empty() {
             doc.folds.clear();
+            self.pending_scroll = Some(self.last_editor_scroll);
             self.find.dirty = true;
             self.focus_editor = true;
             ctx.request_repaint();
@@ -7258,12 +7266,46 @@ impl App {
             self.set_toast("请先保存或关闭该文件，再删除", Severity::Warning);
             return;
         }
+        let is_dir = draft.path.is_dir();
         if let Err(err) = remove_path(&draft.path) {
             self.set_toast(
                 format!("无法删除 {}：{err}", util::display_path(&draft.path)),
                 Severity::Error,
             );
             return;
+        }
+        let mut sync_note = String::new();
+        if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
+            let makefile_path = makefile::find_makefile(&root);
+            let makefile_dirty = makefile_path.as_ref().is_some_and(|path| {
+                self.tabs
+                    .iter()
+                    .any(|doc| same_path(&doc.path, path) && doc.is_dirty())
+            });
+            if makefile_dirty {
+                sync_note = "；Makefile 有未保存修改，未同步 C_SOURCES".to_owned();
+            } else {
+                match makefile::remove_sources(&root, &draft.path, is_dir) {
+                    Ok(Some(changed)) => {
+                        if let Some(doc) = self
+                            .tabs
+                            .iter_mut()
+                            .find(|doc| same_path(&doc.path, &changed))
+                        {
+                            if let Ok(loaded) = crate::util::read_text_file(&changed) {
+                                let cursor = doc.cursor_index.min(loaded.text.chars().count());
+                                doc.buffer.set_text(loaded.text);
+                                doc.update_cursor(cursor);
+                                doc.saved_revision = doc.buffer.revision();
+                                doc.folds.clear();
+                            }
+                        }
+                        sync_note = "；已从 Makefile C_SOURCES 移除".to_owned();
+                    }
+                    Ok(None) => {}
+                    Err(err) => sync_note = format!("；更新 C_SOURCES 失败：{err}"),
+                }
+            }
         }
         self.remove_path_references(&draft.path);
         if let Some(tree) = &mut self.tree {
@@ -7273,7 +7315,7 @@ impl App {
         self.refresh_support_packs();
         self.refresh_git_status();
         self.set_toast(
-            format!("已删除 {}", util::file_name(&draft.path)),
+            format!("已删除 {}{sync_note}", util::file_name(&draft.path)),
             Severity::Success,
         );
     }

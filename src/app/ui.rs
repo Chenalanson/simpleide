@@ -888,6 +888,11 @@ impl App {
         let active = self.active == Some(pane_index);
         let focus = active && std::mem::take(&mut self.focus_editor);
         let scroll_to_cursor = active && std::mem::take(&mut self.scroll_to_cursor);
+        let pending_scroll = if active {
+            self.pending_scroll.take()
+        } else {
+            None
+        };
         let code_theme = *self.code_theme();
         let font_size = self.settings.font_size;
         let word_wrap = self.settings.word_wrap;
@@ -965,84 +970,81 @@ impl App {
                     egui::vec2(viewport_width, full_height),
                     Layout::top_down(Align::Min),
                     |ui| {
-                        scroll_output = Some(
-                            ScrollArea::both()
-                                .id_salt(scroll_id)
-                                .auto_shrink([false, false])
-                                .max_height(full_height)
-                                .show(ui, |ui| {
-                                    ui.set_min_width(viewport_width.max(80.0));
-                                    let old_selection = ui.visuals().selection;
-                                    ui.visuals_mut().selection.bg_fill = code_theme.selection;
-                                    ui.visuals_mut().selection.stroke =
-                                        Stroke::new(1.0_f32, code_theme.text);
-                                    if ui.memory(|memory| memory.has_focus(editor_id))
-                                        && ui.ctx().input(|input| {
-                                            !input.modifiers.shift && !input.modifiers.alt
-                                        })
-                                        && ui.ctx().input_mut(|input| {
-                                            input
-                                                .consume_key(egui::Modifiers::COMMAND, egui::Key::A)
-                                        })
-                                    {
-                                        let end = fold_buffer.view().chars().count();
-                                        let mut state = egui::text_edit::TextEditState::load(
-                                            ui.ctx(),
-                                            editor_id,
-                                        )
+                        let mut scroll_area = ScrollArea::both()
+                            .id_salt(scroll_id)
+                            .auto_shrink([false, false])
+                            .max_height(full_height);
+                        if let Some(offset) = pending_scroll {
+                            scroll_area = scroll_area.vertical_scroll_offset(offset);
+                        }
+                        scroll_output = Some(scroll_area.show(ui, |ui| {
+                            ui.set_min_width(viewport_width.max(80.0));
+                            let old_selection = ui.visuals().selection;
+                            ui.visuals_mut().selection.bg_fill = code_theme.selection;
+                            ui.visuals_mut().selection.stroke =
+                                Stroke::new(1.0_f32, code_theme.text);
+                            if ui.memory(|memory| memory.has_focus(editor_id))
+                                && ui
+                                    .ctx()
+                                    .input(|input| !input.modifiers.shift && !input.modifiers.alt)
+                                && ui.ctx().input_mut(|input| {
+                                    input.consume_key(egui::Modifiers::COMMAND, egui::Key::A)
+                                })
+                            {
+                                let end = fold_buffer.view().chars().count();
+                                let mut state =
+                                    egui::text_edit::TextEditState::load(ui.ctx(), editor_id)
                                         .unwrap_or_default();
-                                        state.cursor.set_char_range(Some(
-                                            egui::text::CCursorRange::two(
-                                                egui::text::CCursor::new(0),
-                                                egui::text::CCursor::new(end),
-                                            ),
-                                        ));
-                                        state.store(ui.ctx(), editor_id);
-                                    }
-                                    let output = TextEdit::multiline(&mut fold_buffer)
-                                        .id(editor_id)
-                                        .code_editor()
-                                        .interactive(!read_only)
-                                        .font(FontId::monospace(font_size))
-                                        .desired_width(if word_wrap {
-                                            viewport_width.max(80.0)
-                                        } else {
-                                            f32::INFINITY
-                                        })
-                                        .background_color(code_theme.bg)
-                                        .frame(Frame::new().inner_margin(Margin {
-                                            left: text_margin_left,
-                                            right: 8,
-                                            top: 8,
-                                            bottom: 8,
-                                        }))
-                                        .layouter(&mut layouter)
-                                        .show(ui);
-                                    ui.visuals_mut().selection = old_selection;
-                                    if focus {
-                                        output.response.response.request_focus();
-                                        let mut state = output.state.clone();
-                                        state.cursor.set_char_range(Some(
-                                            egui::text::CCursorRange::one(
-                                                egui::text::CCursor::new(view_cursor),
-                                            ),
-                                        ));
-                                        state.store(ui.ctx(), output.response.response.id);
-                                    } else if let Some(cursor_range) = output.cursor_range {
-                                        source_cursor = Some(
-                                            fold_buffer.view_to_source(cursor_range.primary.index),
-                                        );
-                                    }
-                                    if scroll_to_cursor {
-                                        let caret = output
-                                            .galley
-                                            .pos_from_cursor(egui::text::CCursor::new(view_cursor))
-                                            .translate(output.galley_pos.to_vec2());
-                                        ui.scroll_to_rect(caret, None);
-                                    }
-                                    editor_output = Some(output);
-                                }),
-                        );
+                                state
+                                    .cursor
+                                    .set_char_range(Some(egui::text::CCursorRange::two(
+                                        egui::text::CCursor::new(0),
+                                        egui::text::CCursor::new(end),
+                                    )));
+                                state.store(ui.ctx(), editor_id);
+                            }
+                            let output = TextEdit::multiline(&mut fold_buffer)
+                                .id(editor_id)
+                                .code_editor()
+                                .interactive(!read_only)
+                                .font(FontId::monospace(font_size))
+                                .desired_width(if word_wrap {
+                                    viewport_width.max(80.0)
+                                } else {
+                                    f32::INFINITY
+                                })
+                                .background_color(code_theme.bg)
+                                .frame(Frame::new().inner_margin(Margin {
+                                    left: text_margin_left,
+                                    right: 8,
+                                    top: 8,
+                                    bottom: 8,
+                                }))
+                                .layouter(&mut layouter)
+                                .show(ui);
+                            ui.visuals_mut().selection = old_selection;
+                            if focus {
+                                output.response.response.request_focus();
+                                let mut state = output.state.clone();
+                                state
+                                    .cursor
+                                    .set_char_range(Some(egui::text::CCursorRange::one(
+                                        egui::text::CCursor::new(view_cursor),
+                                    )));
+                                state.store(ui.ctx(), output.response.response.id);
+                            } else if let Some(cursor_range) = output.cursor_range {
+                                source_cursor =
+                                    Some(fold_buffer.view_to_source(cursor_range.primary.index));
+                            }
+                            if scroll_to_cursor {
+                                let caret = output
+                                    .galley
+                                    .pos_from_cursor(egui::text::CCursor::new(view_cursor))
+                                    .translate(output.galley_pos.to_vec2());
+                                ui.scroll_to_rect(caret, None);
+                            }
+                            editor_output = Some(output);
+                        }));
                     },
                 );
                 if show_minimap {
@@ -1075,6 +1077,9 @@ impl App {
             });
         });
         let scroll_output = scroll_output.expect("scroll area is always created");
+        if active {
+            self.last_editor_scroll = scroll_output.state.offset.y;
+        }
         let output = editor_output.expect("editor is always created");
         let viewport = scroll_output.inner_rect;
         let gutter_right = (viewport.left() + gutter_width).min(viewport.right());
@@ -1110,7 +1115,6 @@ impl App {
             .zip(view.split_inclusive('\n'))
         {
             let line_chars = line.chars().count();
-            let body_chars = line.trim_end_matches('\n').chars().count();
             let caret = output
                 .galley
                 .pos_from_cursor(egui::text::CCursor::new(line_start))
@@ -1130,18 +1134,11 @@ impl App {
                     ),
                 );
             }
-            rows.push((
-                *source_line,
-                caret.center().y,
-                caret.top(),
-                caret.bottom(),
-                line_start,
-                line_start + body_chars,
-            ));
+            rows.push((*source_line, caret.center().y, caret.top(), caret.bottom()));
             line_start += line_chars;
         }
         painter.rect_filled(gutter_rect, CornerRadius::ZERO, code_theme.bg);
-        if let Some((_, _, top, bottom, _, _)) = rows.iter().find(|row| row.0 == cursor_line) {
+        if let Some((_, _, top, bottom)) = rows.iter().find(|row| row.0 == cursor_line) {
             painter.rect_filled(
                 egui::Rect::from_min_max(
                     egui::pos2(gutter_rect.left(), *top),
@@ -1158,7 +1155,7 @@ impl App {
             ],
             Stroke::new(1.0_f32, code_theme.selection),
         );
-        for (source_line, center_y, _, _, _, _) in &rows {
+        for (source_line, center_y, _, _) in &rows {
             let text_color = if *source_line == cursor_line {
                 code_theme.text
             } else {
@@ -1179,51 +1176,9 @@ impl App {
         }
         let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
         for (marker_line, start, end_line) in &markers {
-            let Some((_, center_y, top, bottom, _, line_end)) = rows.get(*marker_line) else {
+            let Some((_, center_y, top, bottom)) = rows.get(*marker_line) else {
                 continue;
             };
-            let end = output
-                .galley
-                .pos_from_cursor(egui::text::CCursor::new(*line_end))
-                .translate(output.galley_pos.to_vec2());
-            let marker_pos = end.left_center() + egui::vec2(8.0, 0.0);
-            painter.rect_filled(
-                egui::Rect::from_min_size(
-                    marker_pos - egui::vec2(2.0, 8.0),
-                    egui::vec2(24.0, 16.0),
-                ),
-                CornerRadius::same(3),
-                theme::with_alpha(code_theme.comment, 26),
-            );
-            painter.text(
-                marker_pos,
-                Align2::LEFT_CENTER,
-                "...",
-                FontId::monospace(font_size),
-                code_theme.comment,
-            );
-            let marker_rect = egui::Rect::from_min_size(
-                marker_pos - egui::vec2(2.0, 9.0),
-                egui::vec2(26.0, 18.0),
-            );
-            let response = ui.interact(
-                marker_rect,
-                Id::new(("simple_embedded_fold_marker", &path, start)),
-                Sense::click(),
-            );
-            let response =
-                response.on_hover_text(format!("已折叠 {} 行，点击展开", *end_line - *start));
-            let marker_clicked = response.clicked()
-                || ui.ctx().input(|input| {
-                    input.pointer.primary_clicked()
-                        && input
-                            .pointer
-                            .interact_pos()
-                            .is_some_and(|pointer| marker_rect.contains(pointer))
-                });
-            if marker_clicked {
-                unfold_start = Some(*start);
-            }
             let center = egui::pos2(gutter_right + 8.0, *center_y);
             let chevron = egui::Rect::from_center_size(center, egui::vec2(14.0, 18.0));
             let response = ui.interact(
@@ -1231,7 +1186,12 @@ impl App {
                 Id::new(("simple_embedded_fold_open", &path, start)),
                 Sense::click(),
             );
-            let response = response.on_hover_text("点击展开折叠块");
+            let response = response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(format!(
+                    "已折叠 {} 行，点击展开",
+                    (*end_line).saturating_sub(*start).saturating_sub(1)
+                ));
             let chevron_clicked = response.clicked()
                 || ui.ctx().input(|input| {
                     input.pointer.primary_clicked()
@@ -1270,6 +1230,7 @@ impl App {
             doc.update_cursor(cursor);
         }
         if let Some(start) = unfold_start {
+            self.pending_scroll = Some(scroll_output.state.offset.y);
             doc.folds.remove(&start);
             self.find.dirty = true;
             self.focus_editor = true;
@@ -6086,6 +6047,11 @@ impl App {
         } else {
             false
         };
+        let pending_scroll = if is_active_pane {
+            self.pending_scroll.take()
+        } else {
+            None
+        };
         let font_id = FontId::monospace(font_size);
         let available_width = ui.available_width();
         let full_height = ui.available_height();
@@ -6147,93 +6113,95 @@ impl App {
                 egui::vec2(viewport_width, full_height),
                 Layout::top_down(Align::Min),
                 |ui| {
-                    scroll_output = Some(
-                        ScrollArea::both()
-                            .id_salt(scroll_id)
-                            .auto_shrink([false, false])
-                            .max_height(ui.available_height())
-                            .show(ui, |ui| {
-                                ui.set_min_width(viewport_width.max(80.0));
-                                let old_selection = ui.visuals().selection;
-                                ui.visuals_mut().selection.bg_fill = code_theme.selection;
-                                ui.visuals_mut().selection.stroke =
-                                    Stroke::new(1.0_f32, code_theme.text);
-                                // egui scrolls to the primary cursor whenever the
-                                // selection changes, so Ctrl+A would jump to the
-                                // end of the file. Select all ourselves and let the
-                                // TextEdit see an unchanged selection.
-                                if editor_focused
-                                    && ui.ctx().input(|input| {
-                                        !input.modifiers.shift && !input.modifiers.alt
-                                    })
-                                    && ui.ctx().input_mut(|input| {
-                                        input.consume_key(egui::Modifiers::COMMAND, egui::Key::A)
-                                    })
-                                {
-                                    let end = doc.buffer.as_string().chars().count();
-                                    let mut state =
-                                        egui::text_edit::TextEditState::load(ui.ctx(), editor_id)
-                                            .unwrap_or_default();
-                                    state.cursor.set_char_range(Some(
-                                        egui::text::CCursorRange::two(
-                                            egui::text::CCursor::new(0),
-                                            egui::text::CCursor::new(end),
-                                        ),
-                                    ));
-                                    state.store(ui.ctx(), editor_id);
-                                }
-                                let output = TextEdit::multiline(&mut doc.buffer)
-                                    .id(editor_id)
-                                    .code_editor()
-                                    .interactive(!read_only)
-                                    .font(FontId::monospace(font_size))
-                                    .desired_width(if word_wrap {
-                                        viewport_width.max(80.0)
-                                    } else {
-                                        f32::INFINITY
-                                    })
-                                    .desired_rows(rows)
-                                    .background_color(code_theme.bg)
-                                    .frame(Frame::new().inner_margin(Margin {
-                                        left: text_margin_left,
-                                        right: 14,
-                                        top: 8,
-                                        bottom: 8,
-                                    }))
-                                    .layouter(&mut layouter)
-                                    .hint_text("开始输入代码…")
-                                    .show(ui);
-                                ui.visuals_mut().selection = old_selection;
+                    let mut scroll_area = ScrollArea::both()
+                        .id_salt(scroll_id)
+                        .auto_shrink([false, false])
+                        .max_height(ui.available_height());
+                    if let Some(offset) = pending_scroll {
+                        scroll_area = scroll_area.vertical_scroll_offset(offset);
+                    }
+                    scroll_output = Some(scroll_area.show(ui, |ui| {
+                        ui.set_min_width(viewport_width.max(80.0));
+                        let old_selection = ui.visuals().selection;
+                        ui.visuals_mut().selection.bg_fill = code_theme.selection;
+                        ui.visuals_mut().selection.stroke = Stroke::new(1.0_f32, code_theme.text);
+                        // egui scrolls to the primary cursor whenever the
+                        // selection changes, so Ctrl+A would jump to the
+                        // end of the file. Select all ourselves and let the
+                        // TextEdit see an unchanged selection.
+                        if editor_focused
+                            && ui
+                                .ctx()
+                                .input(|input| !input.modifiers.shift && !input.modifiers.alt)
+                            && ui.ctx().input_mut(|input| {
+                                input.consume_key(egui::Modifiers::COMMAND, egui::Key::A)
+                            })
+                        {
+                            let end = doc.buffer.as_string().chars().count();
+                            let mut state =
+                                egui::text_edit::TextEditState::load(ui.ctx(), editor_id)
+                                    .unwrap_or_default();
+                            state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::two(
+                                    egui::text::CCursor::new(0),
+                                    egui::text::CCursor::new(end),
+                                )));
+                            state.store(ui.ctx(), editor_id);
+                        }
+                        let output = TextEdit::multiline(&mut doc.buffer)
+                            .id(editor_id)
+                            .code_editor()
+                            .interactive(!read_only)
+                            .font(FontId::monospace(font_size))
+                            .desired_width(if word_wrap {
+                                viewport_width.max(80.0)
+                            } else {
+                                f32::INFINITY
+                            })
+                            .desired_rows(rows)
+                            .background_color(code_theme.bg)
+                            .frame(Frame::new().inner_margin(Margin {
+                                left: text_margin_left,
+                                right: 14,
+                                top: 8,
+                                bottom: 8,
+                            }))
+                            .layouter(&mut layouter)
+                            .hint_text("开始输入代码…")
+                            .show(ui);
+                        ui.visuals_mut().selection = old_selection;
 
-                                if let Some(cursor_range) = output.cursor_range {
-                                    doc.update_cursor(cursor_range.primary.index);
-                                    if focus_editor {
-                                        // Clicking a tab or file should place the caret, not
-                                        // preserve a stale cross-tab selection.
-                                        let mut state = output.state;
-                                        state.cursor.set_char_range(Some(
-                                            egui::text::CCursorRange::one(cursor_range.primary),
-                                        ));
-                                        state.store(ui.ctx(), output.response.response.id);
-                                    }
-                                    let caret = output
-                                        .galley
-                                        .pos_from_cursor(egui::text::CCursor::new(doc.cursor_index))
-                                        .translate(output.galley_pos.to_vec2());
-                                    completion_anchor = Some(caret.left_bottom());
-                                }
-                                editor_clicked = output.response.response.clicked();
-                                if scroll_cursor {
-                                    let caret = output
-                                        .galley
-                                        .pos_from_cursor(egui::text::CCursor::new(doc.cursor_index))
-                                        .translate(output.galley_pos.to_vec2());
-                                    ui.scroll_to_rect(caret, None);
-                                }
-                                gutter = Some((Arc::clone(&output.galley), output.galley_pos));
-                                response = Some(output.response.response);
-                            }),
-                    );
+                        if let Some(cursor_range) = output.cursor_range {
+                            doc.update_cursor(cursor_range.primary.index);
+                            if focus_editor {
+                                // Clicking a tab or file should place the caret, not
+                                // preserve a stale cross-tab selection.
+                                let mut state = output.state;
+                                state
+                                    .cursor
+                                    .set_char_range(Some(egui::text::CCursorRange::one(
+                                        cursor_range.primary,
+                                    )));
+                                state.store(ui.ctx(), output.response.response.id);
+                            }
+                            let caret = output
+                                .galley
+                                .pos_from_cursor(egui::text::CCursor::new(doc.cursor_index))
+                                .translate(output.galley_pos.to_vec2());
+                            completion_anchor = Some(caret.left_bottom());
+                        }
+                        editor_clicked = output.response.response.clicked();
+                        if scroll_cursor {
+                            let caret = output
+                                .galley
+                                .pos_from_cursor(egui::text::CCursor::new(doc.cursor_index))
+                                .translate(output.galley_pos.to_vec2());
+                            ui.scroll_to_rect(caret, None);
+                        }
+                        gutter = Some((Arc::clone(&output.galley), output.galley_pos));
+                        response = Some(output.response.response);
+                    }));
                 },
             );
             if show_minimap {
@@ -6266,6 +6234,7 @@ impl App {
         });
         let scroll_output = scroll_output.expect("scroll area is always created");
         if is_active_pane {
+            self.last_editor_scroll = scroll_output.state.offset.y;
             if let Some(anchor) = completion_anchor {
                 self.completion.anchor = Some(anchor);
             }
@@ -6712,10 +6681,19 @@ impl App {
                             .is_some_and(|pointer| rect.contains(pointer))
                 });
                 if clicked {
+                    self.pending_scroll = Some(scroll_output.state.offset.y);
                     doc.folds.insert(range.start_line);
                     self.find.dirty = true;
                     self.focus_editor = true;
                     ui.ctx().request_repaint();
+                }
+                if ui.ctx().input(|input| {
+                    input
+                        .pointer
+                        .hover_pos()
+                        .is_some_and(|pointer| rect.contains(pointer))
+                }) {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 if center.y >= viewport.top() && center.y <= viewport.bottom() {
                     paint_fold_chevron(&painter, center, true);
