@@ -1354,6 +1354,8 @@ pub struct Settings {
     pub undo_limit: usize,
     pub format_on_save: bool,
     pub clang_format_path: String,
+    pub clangd_enabled: bool,
+    pub clangd_path: String,
     pub compiler_path: String,
     pub make_path: String,
     pub use_bundled_toolchain: bool,
@@ -1396,6 +1398,8 @@ impl Default for Settings {
             undo_limit: 64,
             format_on_save: false,
             clang_format_path: String::new(),
+            clangd_enabled: true,
+            clangd_path: String::new(),
             compiler_path: String::new(),
             make_path: String::new(),
             use_bundled_toolchain: true,
@@ -1481,6 +1485,7 @@ impl Settings {
         self.indent_width = self.indent_width.clamp(1, 8);
         self.autosave_delay_ms = self.autosave_delay_ms.clamp(500, 10_000);
         self.undo_limit = self.undo_limit.clamp(1, 64);
+        self.clangd_path = self.clangd_path.trim().to_owned();
         if !self.output_height.is_finite() || self.output_height <= 0.0 {
             self.output_height = 214.0;
         }

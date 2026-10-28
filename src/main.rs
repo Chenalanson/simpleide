@@ -23,6 +23,7 @@ mod icon_codec;
 mod ignore;
 mod indent;
 mod log;
+mod lsp;
 mod macro_check;
 mod makefile;
 mod memory;

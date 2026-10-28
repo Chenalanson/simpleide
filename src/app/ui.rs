@@ -76,6 +76,13 @@ impl App {
                                     actions.push(Action::OpenSymbols);
                                 }
                                 if ui
+                                    .add(small_flat_button("重命名", theme::text_dim()))
+                                    .on_hover_text("clangd 重命名符号 (Ctrl+Shift+F2)")
+                                    .clicked()
+                                {
+                                    actions.push(Action::LspRename);
+                                }
+                                if ui
                                     .add(small_flat_button("数组", theme::text_dim()))
                                     .on_hover_text("生成 C 数组 (Ctrl+Shift+A)")
                                     .clicked()
@@ -1762,7 +1769,7 @@ impl App {
             if ui
                 .add(theme::secondary_button("自动检测包含目录"))
                 .on_hover_text(
-                    "扫描工程中的 .h / .hpp 文件，把所在父目录加入包含目录；Make 工程会同步到 Makefile",
+                    "扫描工程中的 .h / .c / .cpp 等源文件，把所在父目录加入包含目录；Make 工程会同步到 Makefile",
                 )
                 .clicked()
             {
@@ -3034,6 +3041,171 @@ impl App {
                 item.line,
                 1,
             ));
+        }
+    }
+
+    pub(super) fn show_lsp_references(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let Some(view) = self.lsp_refs.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut clicked = None;
+        egui::Window::new(&view.title)
+            .id(Id::new("simple_embedded_lsp_references"))
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([720.0, 420.0])
+            .min_height(240.0)
+            .frame(
+                Frame::new()
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(16, 12)),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(680.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(&view.title)
+                            .size(16.0)
+                            .strong()
+                            .color(theme::text()),
+                    );
+                    ui.label(
+                        RichText::new(format!("{} 处", view.items.len()))
+                            .size(11.0)
+                            .color(theme::text_faint()),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if window_close_button(ui) {
+                            open = false;
+                        }
+                    });
+                });
+                if !view.query.is_empty() {
+                    ui.label(
+                        RichText::new(&view.query)
+                            .monospace()
+                            .size(11.0)
+                            .color(theme::accent()),
+                    );
+                }
+                ui.add_space(4.0);
+                ScrollArea::vertical()
+                    .id_salt("simple_embedded_lsp_reference_list")
+                    .max_height(360.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if view.items.is_empty() {
+                            ui.label(
+                                RichText::new("clangd 没有返回结果")
+                                    .size(11.5)
+                                    .color(theme::text_faint()),
+                            );
+                        }
+                        for item in &view.items {
+                            let label = format!(
+                                "{}:{}:{}",
+                                util::display_path(&item.path),
+                                item.line,
+                                item.column
+                            );
+                            let response = ui.add(
+                                egui::Label::new(
+                                    RichText::new(label)
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(theme::text_dim()),
+                                )
+                                .sense(Sense::click()),
+                            );
+                            if response.clicked() {
+                                clicked = Some((item.path.clone(), item.line, item.column));
+                            }
+                        }
+                    });
+            });
+        if let Some((path, line, column)) = clicked {
+            actions.push(Action::OpenAt(
+                path.to_string_lossy().to_string(),
+                line,
+                column,
+            ));
+            open = false;
+        }
+        if !open {
+            self.lsp_refs = None;
+        }
+    }
+
+    pub(super) fn show_lsp_rename(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.lsp_rename.take() else {
+            return;
+        };
+        let mut confirm = false;
+        let mut cancel = false;
+        let modal = egui::Modal::new(Id::new("simple_embedded_lsp_rename_modal")).frame(
+            Frame::new()
+                .fill(theme::panel())
+                .stroke(Stroke::new(1.0_f32, theme::border()))
+                .corner_radius(10)
+                .inner_margin(Margin::symmetric(20, 16)),
+        );
+        modal.show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("重命名符号")
+                        .size(17.0)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if window_close_button(ui) {
+                        cancel = true;
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!("将 {} 重命名为：", dialog.original))
+                    .size(11.0)
+                    .color(theme::text_dim()),
+            );
+            let response = ui.add(
+                TextEdit::singleline(&mut dialog.name)
+                    .desired_width(f32::INFINITY)
+                    .font(FontId::monospace(13.0)),
+            );
+            response.request_focus();
+            if let Some(error) = &dialog.error {
+                ui.label(RichText::new(error).size(10.5).color(theme::error()));
+            }
+            ui.add_space(10.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.add(theme::primary_button("重命名")).clicked() {
+                    confirm = true;
+                }
+                if ui.add(theme::secondary_button("取消")).clicked() {
+                    cancel = true;
+                }
+            });
+            if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                confirm = true;
+            }
+            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            }
+        });
+        if cancel {
+            self.lsp_rename = None;
+            return;
+        }
+        self.lsp_rename = Some(dialog);
+        if confirm {
+            self.confirm_lsp_rename(ctx);
         }
     }
 
@@ -5932,7 +6104,7 @@ impl App {
         };
 
         let mut response: Option<egui::Response> = None;
-        let mut hover_word: Option<(String, usize)> = None;
+        let mut hover_word: Option<(String, usize, usize)> = None;
         let mut gutter: Option<(Arc<egui::Galley>, egui::Pos2)> = None;
         let mut scroll_output = None;
         let mut completion_anchor = None;
@@ -6191,8 +6363,9 @@ impl App {
                         let cursor = galley.cursor_from_pos(pointer - galley_pos);
                         let text = doc.buffer.as_string();
                         if let Some((word, _, _)) = crate::navigation::word_at(text, cursor.index) {
-                            let line = crate::util::line_column_at_char(text, cursor.index).0;
-                            hover_word = Some((word, line));
+                            let (line, column) =
+                                crate::util::line_column_at_char(text, cursor.index);
+                            hover_word = Some((word, line, column));
                         }
                     }
                 }
@@ -6549,21 +6722,40 @@ impl App {
         }
 
         if hover_enabled {
-            if let Some((word, line)) = hover_word {
+            if let Some((word, line, column)) = hover_word {
+                let hover_path = self.tabs.get(pane_index).map(|doc| doc.path.clone());
+                self.request_lsp_hover(pane_index, line, column);
                 let info = self.hover_info(pane_index, &word, line);
+                let lsp_text = hover_path
+                    .as_ref()
+                    .and_then(|path| self.lsp_hover_text(path, line, &word));
                 let note = macro_issues
                     .iter()
                     .find(|issue| issue.line == line && issue.name == word)
                     .map(|issue| (issue.description().to_owned(), issue.level));
-                if info.is_some() || note.is_some() {
+                if info.is_some() || note.is_some() || lsp_text.is_some() {
                     if let Some(response) = &response {
                         let response = response.clone();
                         response.on_hover_ui_at_pointer(move |ui| {
                             if let Some(info) = &info {
                                 show_hover_info(ui, info);
                             }
-                            if let Some((note, level)) = &note {
+                            if let Some(text) = &lsp_text {
                                 if info.is_some() {
+                                    ui.add_space(6.0);
+                                }
+                                ui.label(
+                                    RichText::new("clangd").size(9.5).color(theme::text_faint()),
+                                );
+                                ui.label(
+                                    RichText::new(text)
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(theme::text()),
+                                );
+                            }
+                            if let Some((note, level)) = &note {
+                                if info.is_some() || lsp_text.is_some() {
                                     ui.add_space(6.0);
                                 }
                                 ui.label(
@@ -8058,6 +8250,63 @@ impl App {
                         .response
                         .on_hover_text("跨文件撤销 / 重做保留的最大编辑次数");
                         ui.add_space(8.0);
+                        settings_section(ui, "语言服务");
+                        ui.add_space(4.0);
+                        ui.checkbox(
+                            &mut draft.clangd_enabled,
+                            "启用 clangd（补全 / 跳转 / 引用 / 悬停 / 重命名）",
+                        )
+                        .on_hover_text(
+                            "需要安装 clangd（LLVM 或 VS Code clangd 扩展）；clangd 读取工程的 -I、-D 和 --target 参数，保存后会重新生成 compile_commands.json 并重启语言服务",
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("clangd")
+                                    .size(11.5)
+                                    .color(theme::text_dim()),
+                            );
+                            ui.add(
+                                TextEdit::singleline(&mut draft.clangd_path)
+                                    .desired_width(300.0)
+                                    .hint_text("留空自动查找 LLVM / VS Code 扩展，或填写 clangd.exe"),
+                            );
+                            if ui.button("浏览").clicked() {
+                                let mut dialog = rfd::FileDialog::new().set_title("选择 clangd");
+                                let current = draft.clangd_path.trim();
+                                if let Some(parent) = Path::new(current)
+                                    .parent()
+                                    .filter(|parent| parent.is_dir())
+                                {
+                                    dialog = dialog.set_directory(parent);
+                                }
+                                if let Some(path) = dialog.pick_file() {
+                                    draft.clangd_path = util::display_path(&path);
+                                }
+                            }
+                            if ui.button("自动检测").clicked() {
+                                match crate::lsp::detect_clangd(&draft.clangd_path) {
+                                    Some(path) => {
+                                        draft.clangd_path = util::display_path(&path);
+                                        draft.note =
+                                            Some(format!("已找到 clangd：{}", draft.clangd_path));
+                                    }
+                                    None => {
+                                        draft.error = Some(
+                                            "未找到 clangd，请用“浏览”选择 clangd.exe".to_owned(),
+                                        );
+                                    }
+                                }
+                            }
+                        });
+                        ui.label(
+                            RichText::new(
+                                "clangd 使用工程信息里的包含目录、宏定义和 Makefile 的 CPU/FPU 参数生成编译数据库；修改后保存设置即可重新加载。",
+                            )
+                            .size(9.5)
+                            .color(theme::text_faint()),
+                        );
+                        ui.add_space(8.0);
                         settings_section(ui, "文件与输出");
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
@@ -8156,6 +8405,8 @@ impl App {
             self.undo.redo.truncate(self.settings.undo_limit);
             self.settings.format_on_save = draft.format_on_save;
             self.settings.clang_format_path = draft.clang_format_path.trim().to_owned();
+            self.settings.clangd_enabled = draft.clangd_enabled;
+            self.settings.clangd_path = draft.clangd_path.trim().to_owned();
             if project_root.is_some() {
                 self.project_debug.program = draft.debug_program.trim().to_owned();
                 self.project_debug.gdb_path = draft.gdb_path.trim().to_owned();
@@ -8195,6 +8446,9 @@ impl App {
                 );
             }
             self.build.auto_scroll = draft.auto_scroll_output;
+            if project_root.is_some() {
+                self.start_lsp();
+            }
             self.settings_draft = None;
             self.set_toast("设置已保存", Severity::Success);
         } else {

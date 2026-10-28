@@ -101,6 +101,15 @@ enum MicroPythonJobResult {
     },
 }
 
+#[derive(Clone)]
+struct RenameDialog {
+    path: PathBuf,
+    cursor: usize,
+    original: String,
+    name: String,
+    error: Option<String>,
+}
+
 struct SettingsDraft {
     tab: SettingsTab,
     config: BuildConfig,
@@ -118,6 +127,8 @@ struct SettingsDraft {
     undo_limit: usize,
     format_on_save: bool,
     clang_format_path: String,
+    clangd_enabled: bool,
+    clangd_path: String,
     debug_program: String,
     gdb_path: String,
     auto_scroll_output: bool,
@@ -898,6 +909,7 @@ enum Action {
     OpenGitStatus,
     OpenTodos,
     OpenSymbols,
+    LspRename,
     OpenRegisters,
     OpenHex(PathBuf),
     OpenArrayGenerator,
@@ -1022,6 +1034,11 @@ pub struct App {
     column_selection: Option<ColumnSelectionState>,
     multi_cursor: Option<MultiCursorState>,
     undo: UndoState,
+    lsp: Option<crate::lsp::Session>,
+    lsp_config_key: u64,
+    lsp_refs: Option<crate::lsp::RefsView>,
+    lsp_hover: Option<crate::lsp::HoverView>,
+    lsp_rename: Option<RenameDialog>,
     split_path: Option<PathBuf>,
     split_primary: Option<PathBuf>,
     split_direction: SplitDirection,
@@ -1114,6 +1131,11 @@ impl App {
             column_selection: None,
             multi_cursor: None,
             undo: UndoState::default(),
+            lsp: None,
+            lsp_config_key: 0,
+            lsp_refs: None,
+            lsp_hover: None,
+            lsp_rename: None,
             split_path: None,
             split_primary: None,
             split_direction: SplitDirection::Right,
@@ -1353,6 +1375,7 @@ impl App {
                 );
             }
         }
+        self.start_lsp();
         true
     }
 
@@ -2346,40 +2369,42 @@ impl App {
     }
 
     fn definition_at_cursor(&mut self, ctx: &egui::Context) {
-        let Some(word) = self.current_word() else {
-            self.set_toast("光标不在标识符上", Severity::Info);
-            return;
-        };
-        self.ensure_symbols();
-        let current_path = self.active_document().map(|doc| doc.path.clone());
-        let mut candidates = self
-            .symbols
-            .items
-            .iter()
-            .filter(|symbol| symbol.name == word)
-            .cloned()
-            .collect::<Vec<_>>();
-        if candidates.is_empty() {
-            self.open_references_for_word(&word);
-            self.set_toast(
-                format!("没有找到 {word} 的定义，已列出相关匹配"),
-                Severity::Info,
-            );
-            return;
+        if self.lsp.as_ref().is_some_and(|session| session.is_ready()) {
+            let data = self.active_document().map(|doc| {
+                (
+                    doc.path.clone(),
+                    doc.buffer.as_string().to_owned(),
+                    doc.cursor_index,
+                )
+            });
+            if let Some((path, text, cursor)) = data {
+                if let Some(session) = self.lsp.as_mut() {
+                    if session.definition(&path, &text, cursor).is_ok() {
+                        return;
+                    }
+                }
+            }
         }
-        if let Some(path) = current_path {
-            candidates.sort_by_key(|symbol| !same_path(&symbol.path, &path));
-        }
-        let symbol = candidates[0].clone();
-        self.open_at(
-            ctx,
-            &symbol.path.to_string_lossy(),
-            symbol.line,
-            symbol.column,
-        );
+        self.definition_from_index(ctx);
     }
 
     fn references_at_cursor(&mut self) {
+        if self.lsp.as_ref().is_some_and(|session| session.is_ready()) {
+            let data = self.active_document().map(|doc| {
+                (
+                    doc.path.clone(),
+                    doc.buffer.as_string().to_owned(),
+                    doc.cursor_index,
+                )
+            });
+            if let Some((path, text, cursor)) = data {
+                if let Some(session) = self.lsp.as_mut() {
+                    if session.references(&path, &text, cursor).is_ok() {
+                        return;
+                    }
+                }
+            }
+        }
         let Some(word) = self.current_word() else {
             self.set_toast("光标不在标识符上", Severity::Info);
             return;
@@ -2497,21 +2522,27 @@ impl App {
             return;
         };
         let items = self.completion_items(&context);
-        if items.is_empty() {
-            self.set_toast("没有可用的补全项", Severity::Info);
-            self.completion.open = false;
-            return;
-        }
-        self.completion.open = true;
         self.completion.query = context.prefix;
         self.completion.prefix_start = context.prefix_start;
         self.completion.cursor = cursor;
-        self.completion.selected = 0;
-        self.completion.items = items;
         self.completion.member_chain = context.member_chain;
         self.completion.path = Some(path);
         self.completion.last_revision = revision;
         self.completion.last_cursor = cursor;
+        if items.is_empty() {
+            if self.lsp.as_ref().is_some_and(|session| session.is_ready()) {
+                self.completion.open = false;
+                self.request_lsp_completion();
+            } else {
+                self.set_toast("没有可用的补全项", Severity::Info);
+                self.completion.open = false;
+            }
+            return;
+        }
+        self.completion.open = true;
+        self.completion.selected = 0;
+        self.completion.items = items;
+        self.request_lsp_completion();
     }
 
     fn completion_filtered(&self) -> Vec<usize> {
@@ -2539,6 +2570,7 @@ impl App {
             || self.rename_entry.is_some()
             || self.delete_entry.is_some()
             || self.memory_draft.is_some()
+            || self.lsp_rename.is_some()
     }
 
     fn handle_completion_keys(&mut self, ctx: &egui::Context) {
@@ -2632,27 +2664,30 @@ impl App {
             let trigger = context.member_chain.is_some() || context.prefix.chars().count() >= 2;
             if trigger {
                 let items = self.completion_items(&context);
+                let query_changed = self.completion.query != context.prefix
+                    || self.completion.member_chain != context.member_chain;
+                self.completion.query = context.prefix;
+                self.completion.prefix_start = context.prefix_start;
+                self.completion.cursor = cursor;
+                self.completion.member_chain = context.member_chain;
+                self.completion.path = Some(path.clone());
                 if items.is_empty() {
                     self.completion.open = false;
                 } else {
-                    let query_changed = self.completion.query != context.prefix
-                        || self.completion.member_chain != context.member_chain;
                     self.completion.open = true;
-                    self.completion.query = context.prefix;
-                    self.completion.prefix_start = context.prefix_start;
-                    self.completion.cursor = cursor;
                     self.completion.items = items;
-                    self.completion.member_chain = context.member_chain;
                     if query_changed {
                         self.completion.selected = 0;
                     }
-                    self.completion.path = Some(path.clone());
                 }
+                self.completion.last_revision = revision;
+                self.completion.last_cursor = cursor;
+                self.request_lsp_completion();
             } else {
                 self.completion.open = false;
+                self.completion.last_revision = revision;
+                self.completion.last_cursor = cursor;
             }
-            self.completion.last_revision = revision;
-            self.completion.last_cursor = cursor;
         } else if self.completion.open && self.completion.cursor != cursor {
             self.completion.open = false;
             self.completion.last_cursor = cursor;
@@ -5208,6 +5243,8 @@ impl App {
             undo_limit: self.settings.undo_limit,
             format_on_save: self.settings.format_on_save,
             clang_format_path: self.settings.clang_format_path.clone(),
+            clangd_enabled: self.settings.clangd_enabled,
+            clangd_path: self.settings.clangd_path.clone(),
             debug_program,
             gdb_path,
             auto_scroll_output: self.settings.auto_scroll_output,
@@ -5346,10 +5383,10 @@ impl App {
             self.settings.respect_gitignore,
             &self.settings.ignore_patterns,
         );
-        let detected = crate::project_meta::detect_header_include_dirs(&root, &base, &ignore);
+        let detected = crate::project_meta::detect_include_dirs(&root, &base, &ignore);
         if detected.is_empty() {
             self.set_toast(
-                "未找到 C/C++ 头文件；请确认工程中包含 .h / .hpp 文件",
+                "未找到 C/C++ 源文件或头文件；请确认工程中包含 .c / .h / .cpp 文件",
                 Severity::Info,
             );
             return;
@@ -5359,7 +5396,7 @@ impl App {
         if added == 0 {
             self.set_toast(
                 format!(
-                    "已检测到 {} 个头文件目录，全部已在包含目录中",
+                    "已检测到 {} 个源文件 / 头文件目录，全部已在包含目录中",
                     detected.len()
                 ),
                 Severity::Info,
@@ -5370,7 +5407,7 @@ impl App {
         let result = self.persist_meta_overrides();
         self.notify_sync(
             &format!(
-                "已添加 {} 个头文件包含目录（共 {} 个）",
+                "已添加 {} 个源文件 / 头文件包含目录（共 {} 个）",
                 added,
                 merged.len()
             ),
@@ -5438,6 +5475,412 @@ impl App {
         }
         self.settings.save();
         self.refresh_memory_layout();
+    }
+
+    fn report_link_problem(&mut self) {
+        if !matches!(
+            self.build.last().map(|last| &last.outcome),
+            Some(BuildOutcome::Failed(_))
+        ) {
+            return;
+        }
+        let len = self.build.log.len();
+        let start = len.saturating_sub(400);
+        let mut symbols = Vec::new();
+        for index in start..len {
+            if let Some(line) = self.build.log.line_at(index) {
+                if let Some(symbol) = crate::log::undefined_reference(&line.plain) {
+                    if !symbols.contains(&symbol) {
+                        symbols.push(symbol);
+                    }
+                }
+            }
+        }
+        if symbols.is_empty() {
+            return;
+        }
+        let names = symbols
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" / ");
+        let hint = format!(
+            "链接失败：找不到 {names} 的实现。请检查对应的 .c 是否加入 Makefile 的 C_SOURCES（或在 CubeMX 中勾选源文件），并确认函数已实现且没有加 static。"
+        );
+        self.build.log.push_message(hint.clone(), Severity::Warning);
+        self.set_toast(hint, Severity::Error);
+    }
+
+    fn lsp_config_fingerprint(&self, root: &Path) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        root.hash(&mut hasher);
+        for include in self.effective_includes() {
+            include.hash(&mut hasher);
+        }
+        for define in self.effective_defines() {
+            define.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn start_lsp(&mut self) {
+        self.stop_lsp();
+        if !self.settings.clangd_enabled {
+            return;
+        }
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        self.lsp_config_key = self.lsp_config_fingerprint(&root);
+        let Some(clangd) = crate::lsp::detect_clangd(&self.settings.clangd_path) else {
+            self.set_toast(
+                "未找到 clangd；请安装 LLVM/clangd，或在 配置 → 其他 → 语言服务 指定路径",
+                Severity::Info,
+            );
+            return;
+        };
+        let compiler = crate::lsp::detect_arm_gcc(&self.build_config.extra_paths);
+        let config = crate::lsp::WorkspaceConfig {
+            root: root.clone(),
+            includes: self.effective_includes().to_vec(),
+            defines: self.effective_defines().to_vec(),
+            cpu_flags: crate::lsp::makefile_cpu_flags(&root),
+            compiler,
+        };
+        let ignore = crate::ignore::IgnoreRules::load(
+            &root,
+            self.settings.respect_gitignore,
+            &self.settings.ignore_patterns,
+        );
+        match crate::lsp::Session::start(&clangd, &config, &ignore) {
+            Ok(session) => {
+                self.lsp = Some(session);
+            }
+            Err(err) => {
+                self.lsp = None;
+                self.set_toast(format!("clangd 启动失败：{err}"), Severity::Warning);
+            }
+        }
+    }
+
+    fn stop_lsp(&mut self) {
+        if let Some(mut session) = self.lsp.take() {
+            session.stop();
+        }
+        self.lsp_refs = None;
+        self.lsp_hover = None;
+        self.lsp_rename = None;
+    }
+
+    fn sync_lsp(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        if self.settings.clangd_enabled
+            && self.lsp_config_key != 0
+            && self.lsp_config_key != self.lsp_config_fingerprint(&root)
+        {
+            self.start_lsp();
+            return;
+        }
+        let Some(session) = self.lsp.as_mut() else {
+            return;
+        };
+        let docs = self
+            .tabs
+            .iter()
+            .map(|doc| (doc.path.clone(), doc.buffer.revision()))
+            .collect::<Vec<_>>();
+        let needed = session.sync(&docs);
+        if needed.is_empty() {
+            return;
+        }
+        let mut feeds = Vec::new();
+        for path in needed {
+            if let Some(doc) = self.tabs.iter().find(|doc| same_path(&doc.path, &path)) {
+                feeds.push((
+                    path,
+                    doc.buffer.as_string().to_owned(),
+                    doc.buffer.revision(),
+                ));
+            }
+        }
+        for (path, text, revision) in feeds {
+            session.feed(&path, &text, revision);
+        }
+    }
+
+    fn poll_lsp(&mut self, ctx: &egui::Context) {
+        let events = match self.lsp.as_mut() {
+            Some(session) => session.poll(),
+            None => return,
+        };
+        for event in events {
+            match event {
+                crate::lsp::Event::Ready => {
+                    self.set_toast("clangd 已就绪", Severity::Success);
+                    self.sync_lsp();
+                }
+                crate::lsp::Event::Failed(err) | crate::lsp::Event::Error(err) => {
+                    self.set_toast(err, Severity::Warning);
+                }
+                crate::lsp::Event::Definition(items) => {
+                    if items.is_empty() {
+                        self.definition_from_index(ctx);
+                    } else if items.len() == 1 {
+                        let item = &items[0];
+                        let path = item.path.to_string_lossy().to_string();
+                        self.open_at(ctx, &path, item.line, item.column);
+                    } else {
+                        self.lsp_refs = Some(crate::lsp::RefsView {
+                            title: "定义".to_owned(),
+                            query: self.current_word().unwrap_or_default(),
+                            items,
+                        });
+                    }
+                }
+                crate::lsp::Event::References(view) => {
+                    if view.items.is_empty() {
+                        self.set_toast("clangd 没有找到引用", Severity::Info);
+                    } else {
+                        self.lsp_refs = Some(view);
+                    }
+                }
+                crate::lsp::Event::Hover(view) => {
+                    self.lsp_hover = Some(view);
+                    ctx.request_repaint();
+                }
+                crate::lsp::Event::Completion(view) => {
+                    let matches = self.active_document().is_some_and(|doc| {
+                        same_path(&doc.path, &view.path)
+                            && doc.cursor_index == view.cursor
+                            && doc.buffer.revision() == view.revision
+                    });
+                    if matches && !view.items.is_empty() {
+                        self.completion.items = view
+                            .items
+                            .into_iter()
+                            .map(|item| crate::completion::CompletionItem {
+                                name: item.label,
+                                kind: completion_kind(item.kind),
+                                detail: item.detail,
+                            })
+                            .collect();
+                        self.completion.open = true;
+                        self.completion.selected = 0;
+                        self.completion.prefix_start = view.prefix_start;
+                        self.completion.cursor = view.cursor;
+                        ctx.request_repaint();
+                    }
+                }
+                crate::lsp::Event::Rename(files) => {
+                    self.apply_lsp_edits(ctx, files);
+                }
+            }
+        }
+    }
+
+    fn lsp_hover_text(&self, path: &Path, line: usize, word: &str) -> Option<String> {
+        self.lsp_hover
+            .as_ref()
+            .filter(|hover| {
+                same_path(&hover.path, path) && hover.line == line && hover.word == word
+            })
+            .map(|hover| hover.text.clone())
+    }
+
+    fn request_lsp_hover(&mut self, pane_index: usize, line: usize, column: usize) {
+        let Some(doc) = self.tabs.get(pane_index) else {
+            return;
+        };
+        let path = doc.path.clone();
+        let text = doc.buffer.as_string().to_owned();
+        let cursor = crate::util::char_index_at_line(&text, line) + column.saturating_sub(1);
+        if let Some(session) = self.lsp.as_mut() {
+            let _ = session.hover(&path, &text, cursor);
+        }
+    }
+
+    fn request_lsp_completion(&mut self) {
+        let Some((path, text, revision)) = self.active_document().map(|doc| {
+            (
+                doc.path.clone(),
+                doc.buffer.as_string().to_owned(),
+                doc.buffer.revision(),
+            )
+        }) else {
+            return;
+        };
+        let cursor = self.completion.cursor;
+        let prefix_start = self.completion.prefix_start;
+        if let Some(session) = self.lsp.as_mut() {
+            let _ = session.completion(&path, &text, cursor, revision, prefix_start);
+        }
+    }
+
+    fn open_lsp_rename(&mut self) {
+        if !self.lsp.as_ref().is_some_and(|session| session.is_ready()) {
+            self.set_toast("clangd 尚未就绪，无法重命名", Severity::Warning);
+            return;
+        }
+        let Some(doc) = self.active_document() else {
+            return;
+        };
+        if doc.read_only {
+            self.set_toast("只读文件不能重命名", Severity::Warning);
+            return;
+        }
+        let Some(word) = self.current_word() else {
+            self.set_toast("光标不在标识符上", Severity::Info);
+            return;
+        };
+        let path = doc.path.clone();
+        let cursor = doc.cursor_index;
+        self.lsp_rename = Some(RenameDialog {
+            path,
+            cursor,
+            original: word.clone(),
+            name: word,
+            error: None,
+        });
+    }
+
+    fn confirm_lsp_rename(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.lsp_rename.clone() else {
+            return;
+        };
+        let name = dialog.name.trim().to_owned();
+        if name.is_empty() || name == dialog.original {
+            self.set_toast("请输入新的符号名", Severity::Info);
+            return;
+        }
+        let Some(doc) = self
+            .tabs
+            .iter()
+            .find(|doc| same_path(&doc.path, &dialog.path))
+        else {
+            self.lsp_rename = None;
+            return;
+        };
+        let text = doc.buffer.as_string().to_owned();
+        let Some(session) = self.lsp.as_mut() else {
+            self.lsp_rename = None;
+            return;
+        };
+        match session.rename(&dialog.path, &text, dialog.cursor, &name) {
+            Ok(()) => {
+                self.lsp_rename = None;
+            }
+            Err(err) => {
+                if let Some(dialog) = &mut self.lsp_rename {
+                    dialog.error = Some(err);
+                }
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn apply_lsp_edits(&mut self, ctx: &egui::Context, files: Vec<crate::lsp::FileEdits>) {
+        let mut changed_docs = 0usize;
+        let mut changed_files = 0usize;
+        let mut failures = Vec::new();
+        for file in files {
+            let open_index = self
+                .tabs
+                .iter()
+                .position(|doc| same_path(&doc.path, &file.path));
+            let (mut text, line_ending, bom, encoding) = if let Some(index) = open_index {
+                let doc = &self.tabs[index];
+                (
+                    doc.buffer.as_string().to_owned(),
+                    doc.line_ending,
+                    doc.bom,
+                    doc.encoding,
+                )
+            } else {
+                match crate::util::read_text_file(&file.path) {
+                    Ok(loaded) => (loaded.text, loaded.line_ending, loaded.bom, loaded.encoding),
+                    Err(err) => {
+                        failures.push(format!("{}：{err}", crate::util::display_path(&file.path)));
+                        continue;
+                    }
+                }
+            };
+            let mut edits = file.edits;
+            edits.sort_by(|a, b| {
+                (b.start.line, b.start.character).cmp(&(a.start.line, a.start.character))
+            });
+            for edit in edits {
+                let start = crate::lsp::position_to_char(&text, &edit.start);
+                let end = crate::lsp::position_to_char(&text, &edit.end);
+                let (updated, _) =
+                    crate::navigation::replace_range_chars(&text, start, end, &edit.new_text);
+                text = updated;
+            }
+            if let Some(index) = open_index {
+                let doc = &mut self.tabs[index];
+                doc.buffer.set_text(text);
+                doc.folds.clear();
+                doc.macro_issue_revision = u64::MAX;
+                changed_docs += 1;
+            } else if let Err(err) =
+                crate::util::write_text_file(&file.path, &text, line_ending, bom, encoding)
+            {
+                failures.push(format!("{}：{err}", crate::util::display_path(&file.path)));
+            } else {
+                changed_files += 1;
+            }
+        }
+        self.find.dirty = true;
+        self.sync_lsp();
+        if failures.is_empty() {
+            self.set_toast(
+                format!("已重命名：修改 {changed_docs} 个打开文件、{changed_files} 个磁盘文件"),
+                Severity::Success,
+            );
+        } else {
+            self.set_toast(
+                format!("重命名部分完成：{}", failures.join("；")),
+                Severity::Warning,
+            );
+        }
+        ctx.request_repaint();
+    }
+
+    fn definition_from_index(&mut self, ctx: &egui::Context) {
+        let Some(word) = self.current_word() else {
+            self.set_toast("光标不在标识符上", Severity::Info);
+            return;
+        };
+        self.ensure_symbols();
+        let current_path = self.active_document().map(|doc| doc.path.clone());
+        let mut candidates = self
+            .symbols
+            .items
+            .iter()
+            .filter(|symbol| symbol.name == word)
+            .cloned()
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            self.open_references_for_word(&word);
+            self.set_toast(
+                format!("没有找到 {word} 的定义，已列出相关匹配"),
+                Severity::Info,
+            );
+            return;
+        }
+        if let Some(path) = current_path {
+            candidates.sort_by_key(|symbol| !same_path(&symbol.path, &path));
+        }
+        let symbol = candidates[0].clone();
+        self.open_at(
+            ctx,
+            &symbol.path.to_string_lossy(),
+            symbol.line,
+            symbol.column,
+        );
     }
 
     fn apply_openocd_defaults(&self, openocd: &mut OpenOcdConfig) {
@@ -6051,6 +6494,7 @@ impl App {
             bookmark_toggle,
             bookmark_next,
             bookmark_prev,
+            lsp_rename,
             bracket_jump,
             find_open,
             find_replace,
@@ -6099,9 +6543,10 @@ impl App {
                 command
                     && (input.key_pressed(egui::Key::Plus) || input.key_pressed(egui::Key::Equals)),
                 command && input.key_pressed(egui::Key::Minus),
-                command && input.key_pressed(egui::Key::F2),
+                command && !input.modifiers.shift && input.key_pressed(egui::Key::F2),
                 !command && !input.modifiers.shift && input.key_pressed(egui::Key::F2),
                 !command && input.modifiers.shift && input.key_pressed(egui::Key::F2),
+                command && input.modifiers.shift && input.key_pressed(egui::Key::F2),
                 command && input.key_pressed(egui::Key::CloseBracket),
                 command && !input.modifiers.shift && input.key_pressed(egui::Key::F),
                 command && !input.modifiers.shift && input.key_pressed(egui::Key::H),
@@ -6199,6 +6644,9 @@ impl App {
             self.goto_bookmark(ctx, true);
         } else if bookmark_prev {
             self.goto_bookmark(ctx, false);
+        }
+        if lsp_rename {
+            self.open_lsp_rename();
         }
         if bracket_jump {
             self.jump_to_matching_bracket(ctx);
@@ -7000,6 +7448,9 @@ impl App {
                     self.symbols.open = true;
                     self.refresh_symbols();
                 }
+                Action::LspRename => {
+                    self.open_lsp_rename();
+                }
                 Action::OpenRegisters => {
                     self.registers.open = true;
                     self.refresh_registers();
@@ -7620,6 +8071,16 @@ fn set_editor_selection(ctx: &egui::Context, path: &Path, start: usize, end: usi
     state.store(ctx, editor_id);
 }
 
+fn completion_kind(kind: u32) -> crate::completion::CompletionKind {
+    match kind {
+        2 | 3 => crate::completion::CompletionKind::Function,
+        5 | 10 => crate::completion::CompletionKind::Field,
+        7 | 8 | 9 | 22 | 23 | 25 => crate::completion::CompletionKind::Type,
+        14 => crate::completion::CompletionKind::Macro,
+        _ => crate::completion::CompletionKind::Label,
+    }
+}
+
 fn same_path(a: &Path, b: &Path) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -7636,7 +8097,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         crate::apply_pending_icons();
         let ctx = ui.ctx().clone();
-        self.build.poll();
+        if self.build.poll() {
+            self.report_link_problem();
+        }
+        self.poll_lsp(&ctx);
+        self.sync_lsp();
         self.poll_micropython();
         self.poll_debug_start();
         if let Some(session) = &mut self.debug.session {
@@ -7687,6 +8152,13 @@ impl eframe::App for App {
             self.show_immersive_explorer(&ctx, &mut actions);
         }
         self.update_completion(&ctx);
+        if self
+            .lsp
+            .as_ref()
+            .is_some_and(|session| session.has_pending())
+        {
+            ctx.request_repaint_after(Duration::from_millis(40));
+        }
 
         if self.settings_draft.is_some() {
             self.show_settings_modal(&ctx);
@@ -7736,6 +8208,10 @@ impl eframe::App for App {
             self.show_memory_layout_modal(&ctx);
             actions.clear();
         }
+        if self.lsp_rename.is_some() {
+            self.show_lsp_rename(&ctx);
+            actions.clear();
+        }
         let modal_open = self.has_modal();
         if self.project_search.open && !modal_open {
             self.show_project_search(&ctx, &mut actions);
@@ -7748,6 +8224,9 @@ impl eframe::App for App {
         }
         if self.symbols.open && !modal_open {
             self.show_symbols(&ctx, &mut actions);
+        }
+        if self.lsp_refs.is_some() && !modal_open {
+            self.show_lsp_references(&ctx, &mut actions);
         }
         if self.hex.open && !modal_open {
             self.show_hex_viewer(&ctx);

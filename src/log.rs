@@ -202,6 +202,20 @@ impl LogStore {
     }
 }
 
+/// Extract the missing symbol from a linker `undefined reference to ...` line.
+pub fn undefined_reference(line: &str) -> Option<String> {
+    let rest = line.split("undefined reference to ").nth(1)?;
+    let symbol = rest
+        .trim()
+        .trim_matches(|ch| ch == '`' || ch == '\'' || ch == '"')
+        .trim_end_matches(':')
+        .trim();
+    if symbol.is_empty() || symbol.len() > 160 {
+        return None;
+    }
+    Some(symbol.to_owned())
+}
+
 pub fn parse_location(line: &str) -> Option<SourceLocation> {
     let trimmed = line.trim_start();
     let parts = trimmed.split(':').collect::<Vec<_>>();
@@ -546,6 +560,22 @@ mod tests {
         assert_eq!(
             classify("Finished release [optimized] target(s)"),
             Severity::Normal
+        );
+    }
+
+    #[test]
+    fn extracts_undefined_reference_symbols() {
+        assert_eq!(
+            undefined_reference("main.c:100: undefined reference to `usart_test'"),
+            Some("usart_test".to_owned())
+        );
+        assert_eq!(
+            undefined_reference("ld: undefined reference to `Serial_Send(char*)'"),
+            Some("Serial_Send(char*)".to_owned())
+        );
+        assert_eq!(
+            undefined_reference("collect2.exe: error: ld returned 1"),
+            None
         );
     }
 

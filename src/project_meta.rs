@@ -306,25 +306,24 @@ fn find_extension(root: &Path, extension: &str, max_depth: usize) -> Option<Path
     None
 }
 
-const HEADER_EXTENSIONS: [&str; 5] = ["h", "hpp", "hh", "hxx", "inl"];
-const MAX_HEADER_SCAN_DIRS: usize = 5000;
-const MAX_HEADER_SCAN_DEPTH: usize = 16;
+const INCLUDE_SCAN_EXTENSIONS: [&str; 9] =
+    ["h", "hpp", "hh", "hxx", "inl", "c", "cc", "cpp", "cxx"];
+const MAX_INCLUDE_SCAN_DIRS: usize = 5000;
+const MAX_INCLUDE_SCAN_DEPTH: usize = 16;
 
-/// Collect the parent directory of every C/C++ header in the project. Paths
-/// are returned relative to `base` (the project root for Make, the `.uvprojx`
-/// directory for Keil) so they can be appended to the build system's existing
-/// include list without rewriting its conventions.
-pub(crate) fn detect_header_include_dirs(
-    root: &Path,
-    base: &Path,
-    ignore: &IgnoreRules,
-) -> Vec<String> {
+/// Collect the parent directory of every C/C++ header or source file in the
+/// project. Source directories are included as well so projects that keep
+/// generated headers next to `.c` files (or include `.c` files directly) get a
+/// complete include list. Paths are returned relative to `base` (the project
+/// root for Make, the `.uvprojx` directory for Keil) so they can be appended to
+/// the build system's existing include list without rewriting its conventions.
+pub(crate) fn detect_include_dirs(root: &Path, base: &Path, ignore: &IgnoreRules) -> Vec<String> {
     let mut directories = BTreeSet::new();
     let mut pending = vec![(root.to_path_buf(), 0usize)];
     let mut scanned = 0usize;
     while let Some((dir, depth)) = pending.pop() {
         scanned += 1;
-        if scanned > MAX_HEADER_SCAN_DIRS {
+        if scanned > MAX_INCLUDE_SCAN_DIRS {
             break;
         }
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -338,20 +337,20 @@ pub(crate) fn detect_header_include_dirs(
                 continue;
             };
             if file_type.is_dir() {
-                if depth >= MAX_HEADER_SCAN_DEPTH {
+                if depth >= MAX_INCLUDE_SCAN_DEPTH {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
                 let relative = path.strip_prefix(root).unwrap_or(&path);
-                if skip_header_scan_dir(&name) || ignore.is_ignored(relative, true) {
+                if skip_include_scan_dir(&name) || ignore.is_ignored(relative, true) {
                     continue;
                 }
                 pending.push((path, depth + 1));
             } else if file_type.is_file()
                 && path.extension().is_some_and(|extension| {
-                    HEADER_EXTENSIONS
+                    INCLUDE_SCAN_EXTENSIONS
                         .iter()
-                        .any(|header| extension.eq_ignore_ascii_case(header))
+                        .any(|scanned| extension.eq_ignore_ascii_case(scanned))
                 })
             {
                 let relative = path.strip_prefix(root).unwrap_or(&path);
@@ -370,7 +369,7 @@ pub(crate) fn detect_header_include_dirs(
     result
 }
 
-fn skip_header_scan_dir(name: &str) -> bool {
+fn skip_include_scan_dir(name: &str) -> bool {
     name.starts_with('.')
         || matches!(
             name,
@@ -724,35 +723,48 @@ mod tests {
     }
 
     #[test]
-    fn detects_header_parent_directories_and_merges_them() {
+    fn detects_source_and_header_parent_directories_and_merges_them() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("Core/Inc")).unwrap();
         std::fs::write(root.join("Core/Inc/main.h"), "").unwrap();
         std::fs::create_dir_all(root.join("Middlewares/Lib/Inc")).unwrap();
         std::fs::write(root.join("Middlewares/Lib/Inc/lib.hpp"), "").unwrap();
+        // A source-only directory must be included as well.
+        std::fs::create_dir_all(root.join("BSP")).unwrap();
+        std::fs::write(root.join("BSP/bsp_usart.c"), "").unwrap();
         std::fs::create_dir_all(root.join("build/generated")).unwrap();
         std::fs::write(root.join("build/generated/generated.h"), "").unwrap();
+        std::fs::write(root.join("build/generated/generated.c"), "").unwrap();
         std::fs::create_dir_all(root.join(".hidden")).unwrap();
         std::fs::write(root.join(".hidden/secret.h"), "").unwrap();
 
         let ignore = IgnoreRules::load(root, false, "");
-        let detected = detect_header_include_dirs(root, root, &ignore);
+        let detected = detect_include_dirs(root, root, &ignore);
         assert_eq!(
             detected,
-            vec!["Core/Inc".to_owned(), "Middlewares/Lib/Inc".to_owned()]
+            vec![
+                "BSP".to_owned(),
+                "Core/Inc".to_owned(),
+                "Middlewares/Lib/Inc".to_owned()
+            ]
         );
 
         let (merged, added) = merge_include_dirs(&["Core/Inc".to_owned()], &detected, root);
-        assert_eq!(added, 1);
+        assert_eq!(added, 2);
         assert_eq!(
             merged,
-            vec!["Core/Inc".to_owned(), "Middlewares/Lib/Inc".to_owned()]
+            vec![
+                "Core/Inc".to_owned(),
+                "BSP".to_owned(),
+                "Middlewares/Lib/Inc".to_owned()
+            ]
         );
 
         let mdk = root.join("MDK-ARM");
         std::fs::create_dir_all(&mdk).unwrap();
-        let relative = detect_header_include_dirs(root, &mdk, &ignore);
+        let relative = detect_include_dirs(root, &mdk, &ignore);
+        assert!(relative.iter().any(|value| value == "../BSP"));
         assert!(relative.iter().any(|value| value == "../Core/Inc"));
         assert!(relative
             .iter()
