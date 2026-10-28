@@ -5,6 +5,7 @@
  * Open this folder, then press Build (Ctrl+B). */
 int main(void) {
     board_init();
+    uint8_t i = 0;
 
     for (;;) {
         led_set(1);
@@ -13,3 +14,5 @@ int main(void) {
         delay_ms(250);
     }
 }
+
+//TODO: 你好呀
