@@ -386,6 +386,10 @@ impl App {
                                         }
                                         if has_project {
                                             ui.separator();
+                                            if ui.button("生成资源报告...").clicked() {
+                                                actions.push(Action::GenerateResourceReport);
+                                                ui.close();
+                                            }
                                             if ui.button("打开工程配置 settings.json").clicked()
                                             {
                                                 actions.push(Action::OpenProjectConfig);
@@ -1796,6 +1800,32 @@ impl App {
                 .clicked()
             {
                 actions.push(Action::EditMeta);
+            }
+        });
+
+        meta_group(ui, "资源报告", true, |ui| {
+            ui.label(
+                RichText::new("分析芯片、内存、外设、引脚、源码、组件和构建配置")
+                    .size(9.5)
+                    .color(theme::text_faint()),
+            );
+            ui.add_space(2.0);
+            let running = self.report.receiver.is_some();
+            if ui
+                .add_enabled(
+                    !running,
+                    theme::secondary_button(if running {
+                        "正在分析…"
+                    } else {
+                        "生成资源报告"
+                    }),
+                )
+                .on_hover_text(
+                    "扫描工程并保存 <工程名>.resources.json 到工程根目录；包含硬件资源、软件资源和系统信息",
+                )
+                .clicked()
+            {
+                actions.push(Action::GenerateResourceReport);
             }
         });
     }

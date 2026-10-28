@@ -716,6 +716,11 @@ struct InstallState {
     receiver: Option<Receiver<Result<String, String>>>,
 }
 
+#[derive(Default)]
+struct ReportState {
+    receiver: Option<Receiver<Result<PathBuf, String>>>,
+}
+
 #[derive(Clone, Debug)]
 struct Diagnostic {
     path: PathBuf,
@@ -983,6 +988,7 @@ enum Action {
     ImportSupportPack(PathBuf),
     EditFlashConfig,
     EditMemoryLayout,
+    GenerateResourceReport,
     RunMemoryCheck,
     SetFlashTool(FlashTool),
     SetOpenOcdPath(String),
@@ -1036,6 +1042,7 @@ pub struct App {
     registers: RegisterState,
     relations: RelationState,
     install: InstallState,
+    report: ReportState,
     hex: HexState,
     array: ArrayState,
     debug: DebugState,
@@ -1139,6 +1146,7 @@ impl App {
             registers: RegisterState::default(),
             relations: RelationState::default(),
             install: InstallState::default(),
+            report: ReportState::default(),
             hex: HexState::default(),
             array: ArrayState::default(),
             debug: DebugState::default(),
@@ -1273,6 +1281,7 @@ impl App {
         self.firmware_view = FirmwareViewState::default();
         self.registers = RegisterState::default();
         self.relations = RelationState::default();
+        self.report = ReportState::default();
         self.output_view = OutputView::Build;
 
         let mut config_error = None;
@@ -4144,6 +4153,116 @@ impl App {
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                 self.install.receiver = None;
                 self.set_toast("安装任务已中断", Severity::Error);
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                ctx.request_repaint_after(Duration::from_millis(200));
+            }
+            None => {}
+        }
+    }
+
+    fn start_resource_report(&mut self) {
+        let Some((root, project_name)) = self
+            .project
+            .as_ref()
+            .map(|project| (project.root.clone(), project.name.clone()))
+        else {
+            self.set_toast("请先打开工程", Severity::Warning);
+            return;
+        };
+        if self.report.receiver.is_some() {
+            self.set_toast("正在生成资源报告，请稍候", Severity::Info);
+            return;
+        }
+        let memory_usage = self.build_memory_usage();
+        let firmware_path = self.debug_target();
+        let firmware_analysis = firmware_path.as_ref().and_then(|path| {
+            self.firmware_view
+                .path
+                .as_ref()
+                .filter(|view_path| same_path(view_path, path))
+                .and_then(|_| self.firmware_view.analysis.clone())
+        });
+        let request = crate::project_report::ReportRequest {
+            root,
+            project_name,
+            meta: self.project_meta.clone(),
+            build: self.build_config.clone(),
+            debug: self.project_debug.clone(),
+            memory_layout: self.memory_layout.clone(),
+            memory_usage,
+            support_packs: self.support_packs.clone(),
+            registers: if self.registers.peripherals.is_empty() {
+                None
+            } else {
+                Some(self.registers.peripherals.clone())
+            },
+            register_source: if self.registers.source.is_empty() {
+                None
+            } else {
+                Some(self.registers.source.clone())
+            },
+            registers_truncated: self.registers.truncated,
+            symbols: if self.symbols.scanned {
+                Some(self.symbols.items.clone())
+            } else {
+                None
+            },
+            symbols_truncated: self.symbols.truncated,
+            relations: self.relations.index.clone(),
+            firmware_path,
+            firmware_analysis,
+            include_dirs: self.effective_includes().to_vec(),
+            library_dirs: self.effective_library_dirs().to_vec(),
+            defines: self.effective_defines().to_vec(),
+            respect_gitignore: self.settings.respect_gitignore,
+            ignore_patterns: self.settings.ignore_patterns.clone(),
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.report.receiver = Some(receiver);
+        let spawned = std::thread::Builder::new()
+            .name("simple-embedded-resource-report".to_owned())
+            .spawn(move || {
+                let _ = sender.send(crate::project_report::generate_and_write(request));
+            });
+        if let Err(err) = spawned {
+            self.report.receiver = None;
+            self.set_toast(format!("无法启动资源分析：{err}"), Severity::Error);
+        } else {
+            self.set_toast(
+                "正在分析工程资源，完成后会保存到工程根目录…",
+                Severity::Info,
+            );
+        }
+    }
+
+    fn poll_resource_report(&mut self, ctx: &egui::Context) {
+        let received = self
+            .report
+            .receiver
+            .as_ref()
+            .map(|receiver| receiver.try_recv());
+        match received {
+            Some(Ok(Ok(path))) => {
+                self.report.receiver = None;
+                if let Some(tree) = &mut self.tree {
+                    tree.refresh();
+                }
+                self.set_toast(
+                    format!("已生成资源报告：{}", util::display_path(&path)),
+                    Severity::Success,
+                );
+                ctx.request_repaint();
+            }
+            Some(Ok(Err(err))) => {
+                self.report.receiver = None;
+                self.set_toast(err, Severity::Error);
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.report.receiver = None;
+                self.set_toast("资源分析任务已中断", Severity::Error);
                 ctx.request_repaint();
             }
             Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
@@ -7981,6 +8100,7 @@ impl App {
                 Action::ImportSupportPack(path) => self.import_support_pack_files(vec![path]),
                 Action::EditFlashConfig => self.open_flash_config(),
                 Action::EditMemoryLayout => self.open_memory_layout(),
+                Action::GenerateResourceReport => self.start_resource_report(),
                 Action::RunMemoryCheck => self.open_memory_check(),
                 Action::SetFlashTool(tool) => self.set_flash_tool(tool),
                 Action::SetOpenOcdPath(path) => self.set_openocd_path(path),
@@ -8520,6 +8640,7 @@ impl eframe::App for App {
         self.poll_lsp(&ctx);
         self.poll_relations(&ctx);
         self.poll_install_system(&ctx);
+        self.poll_resource_report(&ctx);
         self.sync_lsp();
         self.poll_micropython();
         self.poll_debug_start();

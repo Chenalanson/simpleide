@@ -204,13 +204,16 @@ fn collect_files(root: &Path, ignore: &IgnoreRules) -> Vec<PathBuf> {
 /// Find a matching SVD in installed Keil/CMSIS pack directories when the
 /// project itself does not contain one.
 pub fn scan_keil_svd(device: Option<&str>) -> Option<RegisterIndex> {
-    let token = device_family_token(device?);
-    if token.is_empty() {
+    let tokens = device_svd_tokens(device?);
+    if tokens.is_empty() {
         return None;
     }
-    let mut visited = 0usize;
     for root in keil_svd_roots() {
-        if let Some(svd) = find_svd(&root, &token, 0, &mut visited) {
+        for token in &tokens {
+            let mut visited = 0usize;
+            let Some(svd) = find_svd(&root, token, 0, &mut visited) else {
+                continue;
+            };
             let Ok(loaded) = read_text_file(&svd) else {
                 continue;
             };
@@ -286,13 +289,26 @@ fn keil_svd_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn device_family_token(device: &str) -> String {
+fn device_svd_tokens(device: &str) -> Vec<String> {
     let upper = device.trim().to_ascii_uppercase();
-    if upper.starts_with("STM32") && upper.len() >= 7 {
-        upper[..7].to_ascii_lowercase()
-    } else {
-        upper.to_ascii_lowercase()
+    if !upper.starts_with("STM32") {
+        return if upper.is_empty() {
+            Vec::new()
+        } else {
+            vec![upper.to_ascii_lowercase()]
+        };
     }
+    let mut tokens = Vec::new();
+    if upper.len() >= 9 {
+        tokens.push(upper[..9].to_ascii_lowercase());
+    }
+    if upper.len() >= 7 {
+        let family = upper[..7].to_ascii_lowercase();
+        if !tokens.contains(&family) {
+            tokens.push(family);
+        }
+    }
+    tokens
 }
 
 #[derive(Clone)]
@@ -685,6 +701,18 @@ mod tests {
     </peripheral>
   </peripherals>
 </device>"#;
+
+    #[test]
+    fn prefers_device_specific_svd_tokens() {
+        assert_eq!(
+            device_svd_tokens("STM32F103C8Tx"),
+            vec!["stm32f103", "stm32f1"]
+        );
+        assert_eq!(
+            device_svd_tokens("STM32G431CBTx"),
+            vec!["stm32g431", "stm32g4"]
+        );
+    }
 
     #[test]
     fn parses_svd_peripherals_and_registers() {

@@ -49,6 +49,7 @@ src/app/ui.rs          app 的子模块：文件树、Tab、编辑器、空工�
 src/build.rs           子进程、stdout/stderr、停止、构建事件与结果
 src/config.rs          全局/工程设置、ToolchainKind 选择、自动检测、SSH 命令构造、工作区文件
 src/project_meta.rs    按所选构建系统提取 Makefile / Keil .uvprojx 元数据和 AC5/AC6/GCC 编译器
+src/project_report.rs  硬件 / 软件 / 系统资源静态分析并写入 <工程名>.resources.json
 src/editor.rs          EditorBuffer（String + revision）和 Document
 src/file_tree.rs       惰性目录树
 src/flash.rs           烧录配置、OpenOCD 接口预设/USB 探针检测、pyOCD 命令构造
@@ -254,6 +255,14 @@ docs/                  README 截图和使用教程
 - 配置 → 其他 → **系统集成** 提供“安装到系统 / 重新安装更新”和“移除右键菜单与关联”；安装任务在后台线程执行，状态通过 Toast 和设置页提示反馈。CLI `--install-system` / `--uninstall-system` 供脚本和 Windows 应用列表调用。
 - 右键菜单是 HKCU 用户级注册表；Windows 11 默认精简菜单中可能位于“显示更多选项”。不做 MSI、系统级 Program Files 安装或提权卸载。
 
+### 工程资源报告
+
+- 工程信息底部的 **资源报告** 分组点击 **生成资源报告** 后，`project_report.rs` 在后台线程扫描工程，并写入根目录 `<工程名>.resources.json`（如 `blink.resources.json`）。
+- 报告 JSON 包含：`application`（版本 / 作者 / 可执行文件 / debug/release）、`project`（路径、工程配置、构建系统、工具链、构建 / 调试配置、有效包含目录 / 库目录 / 宏）、`hardware`（芯片、CPU、FPU、Flash/RAM、使用率、固件 ELF 数据 / bss / 栈堆 / 最大全局变量、SVD 外设 / 寄存器、`.ioc` 引脚和组件）、`software`（语言、源码 / 头文件 / Python / 链接脚本 / 启动文件 / 库清单、源码行数、组件识别、符号统计、调用图统计、支持包）、`system`（系统、架构、报告文件、扫描统计）和 `warnings` / `notes`。
+- 文件清单跳过 `build` / `Debug` / `Release` / `out` / `target` / `Objects` / `Listings` / `tools` / `dist` / `.git` / `.simple-embedded` / `node_modules` 等目录；最多扫描 2 万文件、单文件 2 MB，源码/头文件列表最多各 500 个，超限在 `counts.truncated` 标记。
+- `.ioc` 解析 `Mcu.IP*`、`ProjectManager.DeviceId`、`*.Signal` 和 `*.GPIO_Label`；SVD/寄存器索引和符号索引优先复用当前内存中的结果，缺失时由报告线程重新扫描。报告只读工程，不改写 `.uvprojx`、Makefile 或链接脚本。
+- 报告是静态分析，不是电路网表或 BOM；引脚和组件来自 `.ioc` / 文件路径启发式，函数调用图只统计项目内函数，未就绪时 `warnings` 会说明。报告使用已保存文件和当前内存索引，未保存的编辑不会进入清单或符号统计。
+
 ## UI/产品约定
 
 - 用户界面使用中文；默认暗色主题，同时支持 50 套暗色 / 亮色主题，保持 `docs/` 截图的深色工程风格。
@@ -278,6 +287,7 @@ docs/                  README 截图和使用教程
 - 没有安装或启用 clangd 时，符号搜索、TODO、寄存器浏览器和补全/定义/引用仍是轻量索引；成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型。clangd 启用后语义级定义/引用/悬停/补全/重命名以 clangd 为准；没有 clangd 诊断面板、语义高亮、代码操作或 inlay hints。
 - 悬停调用/引用索引是文本级预览，不是语义分析：同名 `static` 函数会合并，函数指针调用、宏展开、重载、继承和条件编译块无法准确解析；引用最多保留每个符号 24 处、全局 6 万条，悬停只展示前 3 个文件各 2 处。只索引已保存文件和常见 C/C++ 源码/头文件，跳过 `build` / `Debug` / `Release` / `out` / `target` / `Objects` / `Listings` 等生成目录；注释和字符串不参与。
 - 系统安装是 HKCU 用户级集成，不写 Program Files，不需要管理员权限；Windows 11 精简右键菜单可能需要点“显示更多选项”。卸载保留 `%APPDATA%\SimpleEmbedded` 用户设置、备份和最近工程；安装目录中的自带工具链较大，首次安装/更新可能需要等待后台复制或硬链接完成。
+- 工程资源报告是静态启发式分析：SVD 外设是芯片能力清单，不代表全部已使用；引脚和 CubeMX 组件来自 `.ioc`，没有 `.ioc` 时为空；组件识别依赖路径关键字，外部器件、网络和实际连线无法自动发现；源码清单跳过 `tools` / `dist` 等目录，同名报告会被覆盖，不替代原理图、BOM 或链接映射文件。
 - 内存布局的起始地址/大小只写入工程 `.simple-embedded/settings.json`，不会自动改写链接脚本；Flash/RAM 总量优先来自链接脚本，其次来自芯片支持包。`.bin` 使用内存布局里的下载起始地址。
 - 多光标支持 Alt+Click、Ctrl+Alt+Up/Down、Ctrl+D 和统一编辑；方向键只移动主光标并清除次级光标，不实现 VS Code 的多光标同时移动、Ctrl+U 回退光标和跨文件多光标。Ctrl+Alt+左键仍提供单一矩形列选择；分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
 - 代码折叠只识别 C 风格大括号块，不识别 `#if` / 函数式语言缩进块；折叠时隐藏起始行与结束行之间的块内行，保留结束行（右花括号），起始行仍可编辑，折叠状态不写入工程配置。
@@ -299,7 +309,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD 外设/寄存器/位域（含 peripheral 与 register 的 derivedFrom、bitRange/lsb-msb）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、大括号折叠范围/可编辑折叠缓冲/源行映射、Makefile 行级高亮、C_SOURCES 源文件同步/删除同步、clangd compile_commands/URI/UTF-16 位置/悬停清洗/C/C++ 文件过滤、undefined reference 符号提取、撤销深度默认值与上限、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、悬停调用/引用索引（函数调用、跨文件引用、注释/字符串过滤、多行签名、循环调用、生成目录跳过）、系统安装目录复制/临时目录跳过/PowerShell 引号与快捷方式/安装路径判断、图标 ICO 条目与 exe 嵌入资源一致性。当前共 242 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD 外设/寄存器/位域（含 peripheral 与 register 的 derivedFrom、bitRange/lsb-msb）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、大括号折叠范围/可编辑折叠缓冲/源行映射、Makefile 行级高亮、C_SOURCES 源文件同步/删除同步、clangd compile_commands/URI/UTF-16 位置/悬停清洗/C/C++ 文件过滤、undefined reference 符号提取、撤销深度默认值与上限、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、悬停调用/引用索引（函数调用、跨文件引用、注释/字符串过滤、多行签名、循环调用、生成目录跳过）、系统安装目录复制/临时目录跳过/PowerShell 引号与快捷方式/安装路径判断、工程资源报告（源码/头文件/链接脚本/组件识别、.ioc 引脚与组件、外设/寄存器 JSON、报告文件名）、Keil SVD 设备/系列 token 优先匹配、图标 ICO 条目与 exe 嵌入资源一致性。当前共 246 个测试。
 
 UI 改动后建议：
 
@@ -335,6 +345,7 @@ UI 改动后建议：
 - `docs/TUTORIAL.md`：面向用户的中文操作教程
 - `docs/DYNAMIC.md`：动态监测（watchpoint）教程，含时间戳、调用栈和自动启动
 - `docs/FLASH.md`：烧录配置教程（ST-Link、CubeProgrammer、OpenOCD、pyOCD、J-Link、Keil）
+- `.opencode/skills/simple-embedded/`：本软件的使用 skill（SKILL.md + references），并同步安装到 `~/.config/opencode/skills/simple-embedded/`
 - `docs/editor.png` / `docs/welcome.png`：界面截图
 - 本文件：面向后续开发/代理的工程上下文
 

@@ -34,6 +34,7 @@ mod minimap;
 mod multi_cursor;
 mod navigation;
 mod project_meta;
+mod project_report;
 mod registers;
 mod relations;
 mod search;
