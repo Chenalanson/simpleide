@@ -4507,7 +4507,7 @@ impl App {
                 self.ai.sending = false;
                 let parsed = crate::ai_edit::parse_edits(&reply);
                 let text = parsed.text.trim().to_owned();
-                let mut edits = parsed.edits;
+                let mut edits = crate::ai_edit::merge_edits(parsed.edits);
                 if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
                     for edit in &mut edits {
                         edit.prepare(&root);

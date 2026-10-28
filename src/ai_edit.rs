@@ -148,6 +148,32 @@ impl AiEdit {
 /// Parse `se-file` and `se-replace` fences out of an assistant reply.
 /// The returned `text` has those fences removed so the chat can render the
 /// explanation while the edit card shows the files and diff.
+/// Merge consecutive `se-replace` blocks for the same file so a model that
+/// emits one block per hunk does not trip the duplicate-file guard. `se-file`
+/// blocks (and mixed write+replace blocks) are kept as-is; the apply step
+/// reports those as conflicts because their ordering is ambiguous.
+pub fn merge_edits(edits: Vec<AiEdit>) -> Vec<AiEdit> {
+    let mut merged: Vec<AiEdit> = Vec::new();
+    let mut indexes = std::collections::HashMap::<String, usize>::new();
+    for edit in edits {
+        let key = normalize_rel_path(&edit.path)
+            .map(|path| path.to_ascii_lowercase())
+            .unwrap_or_else(|_| edit.path.to_ascii_lowercase());
+        if let Some(&index) = indexes.get(&key) {
+            let existing = &mut merged[index];
+            if existing.kind == AiEditKind::Replace && edit.kind == AiEditKind::Replace {
+                existing.pairs.extend(edit.pairs);
+                continue;
+            }
+            merged.push(edit);
+            continue;
+        }
+        indexes.insert(key, merged.len());
+        merged.push(edit);
+    }
+    merged
+}
+
 pub fn parse_edits(text: &str) -> ParsedEdits {
     let mut cleaned = String::new();
     let mut edits = Vec::new();
@@ -402,6 +428,25 @@ mod tests {
             normalize_rel_path("./Core\\Src\\main.c").unwrap(),
             "Core/Src/main.c"
         );
+    }
+
+    #[test]
+    fn merges_multiple_replaces_for_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("Core/Src/main.c"), "a\nb\nc\n");
+        let first = AiEdit::replace(
+            "Core/Src/main.c".to_owned(),
+            vec![("a\n".to_owned(), "x\n".to_owned())],
+        );
+        let second = AiEdit::replace(
+            "Core/Src/main.c".to_owned(),
+            vec![("c\n".to_owned(), "z\n".to_owned())],
+        );
+        let mut merged = merge_edits(vec![first, second]);
+        assert_eq!(merged.len(), 1);
+        merged[0].prepare(dir.path());
+        assert!(merged[0].error.is_none());
+        assert_eq!(merged[0].resolved.as_deref(), Some("x\nb\nz\n"));
     }
 
     #[test]
