@@ -56,16 +56,16 @@ const EMBEDDED_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../.opencode/skills/stm32-embedded-dev/references/checklist.md"),
     ),
     (
-        "references/coding-guide.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/coding-guide.md"),
+        "references/code-rules.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/code-rules.md"),
     ),
     (
-        "references/debug-guide.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/debug-guide.md"),
+        "references/debug-playbook.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/debug-playbook.md"),
     ),
     (
-        "references/field-mapping.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/field-mapping.md"),
+        "references/field-map.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/field-map.md"),
     ),
     (
         "references/ledger-schema.md",
@@ -238,9 +238,10 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
     let mut prompt = String::new();
     prompt.push_str(
         "你是 Simple embedded 的 AI 助手，正在协助 STM32 嵌入式开发。\n\
-         必须优先遵循已加载的 stm32-embedded-dev skill：先建立/更新 hardware.dts 硬件台账，再生成分层代码；\
-         现有工程只做最小改动，不重写已有初始化，不修改已验证的引脚、时钟和句柄。\
-         交付代码时写清文件路径、插入位置和改动原因；手册级事实（AF、IRQn、DMA 映射、地址、电气极限）不确定时标注待核对，不要编造。\n\n",
+         必须优先遵循已加载的 stm32-embedded-dev skill：先按第 1 节判定 T1–T5 任务类型，再按第 3 节对应固定模板的小节编号、标题和表格输出；\
+         模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载，不要自创分点或省略不适用的 N/A 行。\
+         硬件资源变化先更新/新建 hardware.dts 台账；现有工程只做最小改动，不重写已有初始化，不修改已验证的引脚、时钟和句柄。\
+         手册级事实（AF、IRQn、DMA 映射、地址、电气极限）不确定时用 TODO/待核对表标注，不要编造。\n\n",
     );
     prompt.push_str("## 已加载 Skill\n\n");
     prompt.push_str(&context.skill.text);
@@ -400,12 +401,12 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
          规则：路径必须相对工程根目录，禁止绝对路径、`..`、`build` / `Debug` / `Release` / `out` / `target` 等生成目录；一次最多修改 20 个文件；SEARCH 必须能在当前文件中唯一匹配；不要修改 `.simple-embedded` 工程配置。IDE 会生成差异，只有用户点击“应用全部”后才会写入，写入前会备份到用户目录。skill 中要求输出代码块的步骤在 AI 模式下改用上述格式，解释文字照常输出。\n",
     );
     prompt.push_str(
-        "\n\n## 输出要求\n\n\
-         1. 先判断用户是在新增功能、补外设、改逻辑还是排查报错；信息不足时只追问 1-2 个决定性参数。\n\
-         2. 涉及新硬件资源时，先更新 hardware.dts 节点，再给代码；硬件事实不确定时标注待核对。\n\
-         3. 代码按“板级初始化层 / 驱动接口层 / 业务层”组织；已有工程优先用 se-replace 做最小改动，不重写无关代码。\n\
-         4. 最后给出台账-代码一致性检查和需要核对的手册事实。\n\
-         5. 需要写入工程的内容必须放在 se-file / se-replace 块中；普通说明可以使用 Markdown，但不要重复粘贴同一份完整代码。\n",
+        "\n\n## 输出要求（与 skill 固定模板的关系）\n\n\
+         1. 正文结构以 skill 第 1 节任务判定和第 3 节对应模板为准：保留模板的小节编号、标题、表格维度和 N/A 行，不得自创分点。\n\
+         2. skill 模板中的代码实现/代码修改节仍保留编号，但实际写入工程的内容用 se-file / se-replace 块承载；执行器会显示差异卡片，不要在普通代码块里重复同一份完整代码。\n\
+         3. 涉及硬件资源变化时，先按模板输出 hardware.dts 台账；手册级事实不确定时放在待核对表/TODO 中。\n\
+         4. S4 核对表和 S5 构建/排查是必输出项；不要用本提示词的通用分点替代 skill 模板。\n\
+         5. 若模型无法完整遵循模板，至少给出任务判定、台账/无变更说明、代码修改、核对表和验证步骤，并明确缺失项。\n",
     );
 
     if prompt.len() > MAX_SYSTEM_PROMPT_BYTES {

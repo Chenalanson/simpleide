@@ -127,6 +127,7 @@ docs/                  README 截图和使用教程
 - 输入框支持 `Ctrl+Enter` 发送；进入时默认把当前文件作为上下文，可在输入面板移除。发送前调用 `save_all_dirty` 保存所有未保存标签页（失败则中止发送），保证提示词和文件修改的 base hash 基于最新磁盘内容。AI 请求在后台线程执行，UI 每帧 `poll_ai`。
 - AI 设置弹窗填写 API Key / API 地址 / 模型名称；保存在全局 `%APPDATA%\SimpleEmbedded\settings.json` 的 `ai_api_key` / `ai_base_url` / `ai_model`，不写入工程。默认 `https://api.deepseek.com/v1` + `deepseek-chat`。API Key 明文保存，界面已说明。
 - `src/ai.rs` 负责 OpenAI 兼容 `/chat/completions`（非流式，`ureq`，180s 超时）、系统提示词和上下文构建：优先从工程或其上级、当前目录、可执行文件目录、用户全局 skills 目录查找 `.opencode/skills/stm32-embedded-dev/SKILL.md`，读取 SKILL.md 和 references 下的 Markdown；找不到时使用 `include_str!` 编译进 exe 的内置副本（构建依赖 `.opencode/skills/stm32-embedded-dev/` 目录存在）。系统提示词包含 skill 全文（上限 160KB）、工程名/芯片/CPU/FPU/工具链/内存布局/包含目录/宏/当前文件、文件树（最多 400 个）、`hardware.dts`、当前文件、`main.c`、`.ioc`、`Makefile` / CMake / Cargo，以及 `<工程名>.resources.json` 摘要；这些文件从磁盘读取，未保存的编辑不会进入上下文；总上限 220KB；聊天历史最多 12 条、每条 12k 字符、总计 48k 字符。
+- 内置 skill 副本由 `src/ai.rs::EMBEDDED_SKILL_FILES` 的 `include_str!` 固定列出；当前 references 为 `checklist.md` / `code-rules.md` / `debug-playbook.md` / `field-map.md` / `ledger-schema.md`。skill 增删或重命名文件时必须同步该列表，否则编译失败。系统提示词要求正文按 skill 第 1 节 T1–T5 任务判定和第 3 节固定模板输出，模板中的代码节用 `se-file` / `se-replace` 承载。
 - 已知限制：非流式，长回答要等；没有 function calling、自动应用、一键撤销、请求取消或流式输出；文件修改使用文本协议，模型不遵循 `se-file`/`se-replace` 时只会显示普通代码块，需要用户手动复制；只支持新建/覆盖/局部替换，不支持 AI 删除或重命名文件；上下文可能超过小模型窗口，错误会显示在聊天里；目录 skill 不存在时用内置副本，修改 skill 后需要重新进入或点击“重新加载”，请求时始终重新读取目录 skill。
 
 ### 编辑器
