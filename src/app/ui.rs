@@ -5,7 +5,7 @@ use crate::config::autodetect;
 use crate::micropython::{BoardFile, BoardNode};
 use eframe::egui::{
     self, Align, Align2, Button, Checkbox, Color32, FontId, Frame, Id, Label, Layout, Margin,
-    RadioButton, Rect, RichText, ScrollArea, Sense, Shape, Stroke, TextEdit,
+    RadioButton, Rect, RichText, ScrollArea, Sense, Shape, Stroke, TextBuffer, TextEdit,
 };
 
 impl App {
@@ -875,6 +875,118 @@ impl App {
                     }
                 });
             });
+    }
+
+    fn show_folded_editor(&mut self, ui: &mut egui::Ui, pane_index: usize) {
+        let code_theme = *self.code_theme();
+        let font_size = self.settings.font_size;
+        let word_wrap = self.settings.word_wrap;
+        let available_width = ui.available_width();
+        let Some(doc) = self.tabs.get_mut(pane_index) else {
+            return;
+        };
+        let path = doc.path.clone();
+        let text = doc.buffer.as_string().to_owned();
+        let ranges = crate::fold::ranges(&text);
+        let (view_text, markers) = crate::fold::view(&text, &doc.folds, &ranges);
+        let mut view_text = ReadOnlyText(view_text);
+        let fold_count = doc.folds.len();
+        let cache = doc.layout_cache.clone();
+        let revision = doc.buffer.revision().wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let syntax_name = doc.syntax_name.clone();
+        let highlighter = Arc::clone(&self.highlighter);
+        let font_id = FontId::monospace(font_size);
+        let theme_key = code_theme.key();
+        let mut layouter = move |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
+            let effective_wrap = if word_wrap { wrap_width } else { f32::INFINITY };
+            highlight::layout_cached(
+                &highlighter,
+                ui,
+                buffer.as_str(),
+                &highlight::LayoutSpec {
+                    syntax_name: syntax_name.as_deref(),
+                    revision,
+                    wrap_width: effective_wrap,
+                    font_id: font_id.clone(),
+                    decorations_key: 0,
+                    theme_key,
+                    search_ranges: &[],
+                },
+                &cache,
+            )
+        };
+        let folded_id = Id::new(("simple_embedded_folded_editor", &path));
+        let mut unfold_all = false;
+        let mut unfold_start = None;
+        Frame::new().fill(code_theme.bg).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("折叠视图（只读）")
+                        .size(11.0)
+                        .strong()
+                        .color(theme::text_dim()),
+                );
+                ui.label(
+                    RichText::new(format!("· {fold_count} 个块"))
+                        .size(9.5)
+                        .color(theme::text_faint()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add(theme::secondary_button("展开全部"))
+                        .on_hover_text("展开所有折叠块，恢复编辑")
+                        .clicked()
+                    {
+                        unfold_all = true;
+                    }
+                });
+            });
+            ui.add_space(3.0);
+            ScrollArea::both()
+                .id_salt("simple_embedded_folded_scroll")
+                .auto_shrink([false, false])
+                .max_height((ui.available_height() - 6.0).max(80.0))
+                .show(ui, |ui| {
+                    let output = TextEdit::multiline(&mut view_text)
+                        .id(folded_id)
+                        .code_editor()
+                        .font(FontId::monospace(font_size))
+                        .desired_width(if word_wrap {
+                            available_width.max(80.0)
+                        } else {
+                            f32::INFINITY
+                        })
+                        .background_color(code_theme.bg)
+                        .frame(Frame::new().inner_margin(Margin::symmetric(8, 8)))
+                        .layouter(&mut layouter)
+                        .show(ui);
+                    if output.response.response.clicked() {
+                        if let Some(pointer) = ui.ctx().input(|input| input.pointer.interact_pos())
+                        {
+                            let cursor = output.galley.cursor_from_pos(pointer - output.galley_pos);
+                            let line =
+                                crate::util::line_column_at_char(view_text.as_str(), cursor.index)
+                                    .0
+                                    .saturating_sub(1);
+                            if let Some((_, start)) =
+                                markers.iter().find(|(marker_line, _)| *marker_line == line)
+                            {
+                                unfold_start = Some(*start);
+                            }
+                        }
+                    }
+                });
+        });
+        if unfold_all {
+            doc.folds.clear();
+        } else if let Some(start) = unfold_start {
+            doc.folds.remove(&start);
+        }
+        if unfold_all || unfold_start.is_some() {
+            self.find.dirty = true;
+            self.focus_editor = true;
+            ui.ctx().request_repaint();
+        }
     }
 
     fn show_project_meta(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -5284,6 +5396,29 @@ impl App {
         });
         let indent_width = self.settings.indent_width.max(1) as usize;
         let use_spaces = self.settings.use_spaces;
+        let Some(fold_path) = self.tabs.get(pane_index).map(|doc| doc.path.clone()) else {
+            return;
+        };
+        let editor_id = Id::new(("simple_embedded_code_editor", &fold_path));
+        let editor_focused = ui.memory(|memory| memory.has_focus(editor_id));
+        let folded_id = Id::new(("simple_embedded_folded_editor", &fold_path));
+        if self
+            .tabs
+            .get(pane_index)
+            .is_some_and(|doc| !doc.folds.is_empty())
+        {
+            let edit_event = ui.ctx().input(has_edit_event);
+            let folded_focused = ui.memory(|memory| memory.has_focus(folded_id));
+            if edit_event && (editor_focused || folded_focused) {
+                if let Some(doc) = self.tabs.get_mut(pane_index) {
+                    doc.folds.clear();
+                }
+                self.focus_editor = true;
+            } else {
+                self.show_folded_editor(ui, pane_index);
+                return;
+            }
+        }
         let Some(doc) = self.tabs.get_mut(pane_index) else {
             return;
         };
@@ -5310,10 +5445,8 @@ impl App {
                 *entry = Severity::Error;
             }
         }
-        let editor_id = Id::new(("simple_embedded_code_editor", &doc.path));
         let scroll_id = Id::new(("simple_embedded_code_scroll", &doc.path));
         let read_only = doc.read_only;
-        let editor_focused = ui.memory(|memory| memory.has_focus(editor_id));
         let primary_before_edit = doc.cursor_index;
         let has_column_selection = self
             .column_selection
@@ -7604,6 +7737,26 @@ impl App {
                         .on_hover_text(
                             "PWM1PIN / PWM2PIN / PWM3PIN 等不同宏名使用相同替换值时给出黄色波浪线；C 语言本身允许这种写法，默认关闭",
                         );
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("撤销栈深度")
+                                    .size(10.5)
+                                    .color(theme::text_dim()),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut draft.undo_limit)
+                                    .range(1..=64)
+                                    .speed(1),
+                            );
+                            ui.label(
+                                RichText::new("次（最多 64）")
+                                    .size(9.5)
+                                    .color(theme::text_faint()),
+                            );
+                        })
+                        .response
+                        .on_hover_text("跨文件撤销 / 重做保留的最大编辑次数");
                         ui.add_space(8.0);
                         settings_section(ui, "文件与输出");
                         ui.add_space(4.0);
@@ -7698,6 +7851,9 @@ impl App {
             self.settings.indent_width = draft.indent_width.clamp(1, 8);
             self.settings.autosave = draft.autosave;
             self.settings.autosave_delay_ms = draft.autosave_delay_ms.clamp(500, 10_000);
+            self.settings.undo_limit = draft.undo_limit.clamp(1, 64);
+            self.undo.undo.truncate(self.settings.undo_limit);
+            self.undo.redo.truncate(self.settings.undo_limit);
             self.settings.format_on_save = draft.format_on_save;
             self.settings.clang_format_path = draft.clang_format_path.trim().to_owned();
             if project_root.is_some() {
@@ -8098,6 +8254,48 @@ impl App {
         }
         self.theme_settings = Some(draft);
     }
+}
+
+struct ReadOnlyText(String);
+
+impl egui::TextBuffer for ReadOnlyText {
+    fn is_mutable(&self) -> bool {
+        false
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn insert_text(&mut self, _text: &str, _char_index: usize) -> usize {
+        0
+    }
+
+    fn delete_char_range(&mut self, _char_range: std::ops::Range<usize>) {}
+
+    fn type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<Self>()
+    }
+}
+
+fn has_edit_event(input: &egui::InputState) -> bool {
+    let paste = input
+        .events
+        .iter()
+        .any(|event| matches!(event, egui::Event::Paste(_)));
+    let modified = input.modifiers.ctrl || input.modifiers.command || input.modifiers.alt;
+    let text = !modified
+        && input
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::Text(_)));
+    paste
+        || text
+        || (!modified
+            && (input.key_pressed(egui::Key::Backspace)
+                || input.key_pressed(egui::Key::Delete)
+                || input.key_pressed(egui::Key::Enter)
+                || input.key_pressed(egui::Key::Tab)))
 }
 
 fn handle_multi_cursor_shortcuts(

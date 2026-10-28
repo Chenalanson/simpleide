@@ -13,6 +13,7 @@ mod debugger;
 mod editor;
 mod file_tree;
 mod flash;
+mod fold;
 mod formatting;
 mod git;
 mod hexview;

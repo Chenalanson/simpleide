@@ -115,6 +115,7 @@ struct SettingsDraft {
     indent_width: u8,
     autosave: bool,
     autosave_delay_ms: u64,
+    undo_limit: usize,
     format_on_save: bool,
     clang_format_path: String,
     debug_program: String,
@@ -301,6 +302,30 @@ struct MultiCursorState {
     primary: usize,
     /// Secondary selections as normalized `(start, end)` character ranges.
     secondary: Vec<(usize, usize)>,
+}
+
+#[derive(Clone)]
+struct UndoSnapshot {
+    revision: u64,
+    text: String,
+    cursor: usize,
+}
+
+#[derive(Clone)]
+struct UndoEntry {
+    path: PathBuf,
+    before_text: String,
+    after_text: String,
+    before_cursor: usize,
+    after_cursor: usize,
+}
+
+#[derive(Default)]
+struct UndoState {
+    undo: Vec<UndoEntry>,
+    redo: Vec<UndoEntry>,
+    snapshots: std::collections::BTreeMap<PathBuf, UndoSnapshot>,
+    applying: bool,
 }
 
 #[derive(Default)]
@@ -996,6 +1021,7 @@ pub struct App {
     column_edit: ColumnEditState,
     column_selection: Option<ColumnSelectionState>,
     multi_cursor: Option<MultiCursorState>,
+    undo: UndoState,
     split_path: Option<PathBuf>,
     split_primary: Option<PathBuf>,
     split_direction: SplitDirection,
@@ -1087,6 +1113,7 @@ impl App {
             column_edit: ColumnEditState::default(),
             column_selection: None,
             multi_cursor: None,
+            undo: UndoState::default(),
             split_path: None,
             split_primary: None,
             split_direction: SplitDirection::Right,
@@ -1298,6 +1325,7 @@ impl App {
         self.split_focus = 0;
         self.column_selection = None;
         self.multi_cursor = None;
+        self.undo = UndoState::default();
         self.focus_editor = false;
         self.git_line_marks.clear();
         self.git_line_key = None;
@@ -4168,6 +4196,156 @@ impl App {
         }
     }
 
+    fn capture_undo(&mut self) {
+        let limit = self.settings.undo_limit.clamp(1, 64);
+        let mut open_paths = std::collections::BTreeSet::new();
+        for doc in &self.tabs {
+            open_paths.insert(doc.path.clone());
+            let revision = doc.buffer.revision();
+            let text = doc.buffer.as_string();
+            let cursor = doc.cursor_index;
+            if let Some(snapshot) = self.undo.snapshots.get_mut(&doc.path) {
+                if snapshot.revision == revision {
+                    snapshot.cursor = cursor;
+                    continue;
+                }
+                if !self.undo.applying && snapshot.text != text {
+                    self.undo.undo.push(UndoEntry {
+                        path: doc.path.clone(),
+                        before_text: snapshot.text.clone(),
+                        after_text: text.to_owned(),
+                        before_cursor: snapshot.cursor,
+                        after_cursor: cursor,
+                    });
+                    if self.undo.undo.len() > limit {
+                        let excess = self.undo.undo.len() - limit;
+                        self.undo.undo.drain(0..excess);
+                    }
+                    self.undo.redo.clear();
+                }
+                snapshot.revision = revision;
+                snapshot.text = text.to_owned();
+                snapshot.cursor = cursor;
+            } else {
+                self.undo.snapshots.insert(
+                    doc.path.clone(),
+                    UndoSnapshot {
+                        revision,
+                        text: text.to_owned(),
+                        cursor,
+                    },
+                );
+            }
+        }
+        self.undo
+            .snapshots
+            .retain(|path, _| open_paths.contains(path));
+        self.undo.applying = false;
+    }
+
+    fn fold_current(&mut self, ctx: &egui::Context) {
+        let Some(active) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(active) else {
+            return;
+        };
+        let ranges = crate::fold::ranges(doc.buffer.as_string());
+        let line = doc.cursor_line.saturating_sub(1);
+        let Some(start) = crate::fold::fold_start_for_line(line, &ranges) else {
+            self.set_toast("当前行没有可折叠的代码块", Severity::Info);
+            return;
+        };
+        if !doc.folds.remove(&start) {
+            doc.folds.insert(start);
+        }
+        self.find.dirty = true;
+        ctx.request_repaint();
+    }
+
+    fn unfold_active(&mut self, ctx: &egui::Context) {
+        let Some(active) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get_mut(active) else {
+            return;
+        };
+        if !doc.folds.is_empty() {
+            doc.folds.clear();
+            self.find.dirty = true;
+            ctx.request_repaint();
+        }
+    }
+
+    fn ensure_undo_document(&mut self, path: &Path) -> Option<usize> {
+        if let Some(index) = self.tabs.iter().position(|doc| same_path(&doc.path, path)) {
+            return Some(index);
+        }
+        self.open_file(path.to_path_buf());
+        self.tabs.iter().position(|doc| same_path(&doc.path, path))
+    }
+
+    fn apply_undo(&mut self, ctx: &egui::Context, entry: UndoEntry, undo: bool) {
+        let Some(index) = self.ensure_undo_document(&entry.path) else {
+            self.set_toast(
+                format!("无法打开 {}", util::display_path(&entry.path)),
+                Severity::Warning,
+            );
+            return;
+        };
+        self.undo.applying = true;
+        self.active = Some(index);
+        self.focus_editor = true;
+        self.scroll_to_cursor = true;
+        self.column_selection = None;
+        self.multi_cursor = None;
+        {
+            let doc = &mut self.tabs[index];
+            let (text, cursor) = if undo {
+                (entry.before_text.clone(), entry.before_cursor)
+            } else {
+                (entry.after_text.clone(), entry.after_cursor)
+            };
+            doc.buffer.set_text(text);
+            doc.update_cursor(cursor);
+            doc.macro_issue_revision = u64::MAX;
+            doc.folds.clear();
+            set_editor_cursor(ctx, &doc.path, cursor);
+        }
+        self.find.dirty = true;
+        let limit = self.settings.undo_limit.clamp(1, 64);
+        if undo {
+            self.undo.redo.push(entry);
+            if self.undo.redo.len() > limit {
+                let excess = self.undo.redo.len() - limit;
+                self.undo.redo.drain(0..excess);
+            }
+        } else {
+            self.undo.undo.push(entry);
+            if self.undo.undo.len() > limit {
+                let excess = self.undo.undo.len() - limit;
+                self.undo.undo.drain(0..excess);
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn undo_last(&mut self, ctx: &egui::Context) {
+        let Some(entry) = self.undo.undo.pop() else {
+            self.set_toast("没有可撤销的操作", Severity::Info);
+            return;
+        };
+        self.apply_undo(ctx, entry, true);
+    }
+
+    fn redo_last(&mut self, ctx: &egui::Context) {
+        let Some(entry) = self.undo.redo.pop() else {
+            self.set_toast("没有可重做的操作", Severity::Info);
+            return;
+        };
+        self.apply_undo(ctx, entry, false);
+    }
+
     fn find_next(&mut self, ctx: &egui::Context, forward: bool) {
         let Some(active) = self.active else {
             return;
@@ -4201,8 +4379,13 @@ impl App {
                 .current()
                 .map(|matched| matched.start_char)
                 .unwrap_or(0);
+            doc.folds.clear();
             doc.update_cursor(target);
             set_editor_cursor(ctx, &doc.path, target);
+            self.scroll_to_cursor = true;
+            self.multi_cursor = None;
+            self.column_selection = None;
+            ctx.request_repaint();
         }
     }
 
@@ -5020,6 +5203,7 @@ impl App {
             indent_width: self.settings.indent_width,
             autosave: self.settings.autosave,
             autosave_delay_ms: self.settings.autosave_delay_ms,
+            undo_limit: self.settings.undo_limit,
             format_on_save: self.settings.format_on_save,
             clang_format_path: self.settings.clang_format_path.clone(),
             debug_program,
@@ -5773,6 +5957,58 @@ impl App {
             return;
         }
 
+        let editor_focused = self.active_document().is_some_and(|doc| {
+            let editor_id = egui::Id::new(("simple_embedded_code_editor", &doc.path));
+            let folded_id = egui::Id::new(("simple_embedded_folded_editor", &doc.path));
+            ctx.memory(|memory| memory.has_focus(editor_id) || memory.has_focus(folded_id))
+        });
+        let undo_pressed = editor_focused
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z));
+        let redo_pressed = editor_focused
+            && ctx.input_mut(|input| {
+                input.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::Z,
+                ) || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
+            });
+        if undo_pressed {
+            self.undo_last(ctx);
+            return;
+        }
+        if redo_pressed {
+            self.redo_last(ctx);
+            return;
+        }
+
+        let fold_pressed = editor_focused
+            && ctx.input_mut(|input| {
+                input.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::OpenBracket,
+                ) || input.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::OpenCurlyBracket,
+                )
+            });
+        let unfold_pressed = editor_focused
+            && ctx.input_mut(|input| {
+                input.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::CloseBracket,
+                ) || input.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::CloseCurlyBracket,
+                )
+            });
+        if fold_pressed {
+            self.fold_current(ctx);
+            return;
+        }
+        if unfold_pressed {
+            self.unfold_active(ctx);
+            return;
+        }
+
         let toggle_immersive = ctx.input_mut(|input| {
             input.consume_key(
                 egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
@@ -6079,6 +6315,13 @@ impl App {
         }
         if format_document {
             self.format_current_document();
+        }
+        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            if let Some(active) = self.active {
+                if let Some(doc) = self.tabs.get_mut(active) {
+                    doc.folds.clear();
+                }
+            }
         }
         if self.find.open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.find.open = false;
@@ -7543,6 +7786,7 @@ impl eframe::App for App {
             self.apply_actions(&ctx, actions);
         }
 
+        self.capture_undo();
         self.refresh_git_line_marks();
         self.tick_autosave(&ctx);
         self.show_toast(&ctx);

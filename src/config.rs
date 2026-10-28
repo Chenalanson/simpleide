@@ -1351,6 +1351,7 @@ pub struct Settings {
     pub indent_width: u8,
     pub autosave: bool,
     pub autosave_delay_ms: u64,
+    pub undo_limit: usize,
     pub format_on_save: bool,
     pub clang_format_path: String,
     pub compiler_path: String,
@@ -1392,6 +1393,7 @@ impl Default for Settings {
             indent_width: 4,
             autosave: false,
             autosave_delay_ms: 1500,
+            undo_limit: 64,
             format_on_save: false,
             clang_format_path: String::new(),
             compiler_path: String::new(),
@@ -1478,6 +1480,7 @@ impl Settings {
         }
         self.indent_width = self.indent_width.clamp(1, 8);
         self.autosave_delay_ms = self.autosave_delay_ms.clamp(500, 10_000);
+        self.undo_limit = self.undo_limit.clamp(1, 64);
         if !self.output_height.is_finite() || self.output_height <= 0.0 {
             self.output_height = 214.0;
         }
@@ -1581,6 +1584,20 @@ mod tests {
         assert!(!settings.check_duplicate_macro_values);
         assert_eq!(settings.editor_theme, "示波器原色");
         assert_eq!(settings.left_panel_width, 300.0);
+        assert_eq!(settings.undo_limit, 64);
+    }
+
+    #[test]
+    fn settings_clamps_undo_limit_to_64() {
+        let mut settings = Settings {
+            undo_limit: 0,
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.undo_limit, 1);
+        settings.undo_limit = 999;
+        settings.sanitize();
+        assert_eq!(settings.undo_limit, 64);
     }
 
     #[test]
