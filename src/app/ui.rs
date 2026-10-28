@@ -11404,14 +11404,24 @@ impl App {
     }
 
     pub(super) fn show_toast(&mut self, ctx: &egui::Context) {
+        // The enter transition already owns the whole screen; a toast in the
+        // bottom-right corner would sit on top of the meteor impact.
+        if self.ai.enabled && self.ai.transition.is_some() {
+            return;
+        }
         let Some(toast) = &self.toast else {
             return;
         };
         let color = toast.severity.color();
         let message = toast.message.clone();
         let severity = toast.severity;
+        let (anchor, offset) = if self.ai.enabled {
+            (Align2::RIGHT_TOP, egui::vec2(-18.0, 18.0))
+        } else {
+            (Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -38.0))
+        };
         egui::Area::new(Id::new("simple_embedded_toast"))
-            .anchor(Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -38.0))
+            .anchor(anchor, offset)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 Frame::new()

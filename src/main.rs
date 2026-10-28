@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ai;
 mod app;
 mod arraygen;
 mod brackets;
@@ -74,6 +75,7 @@ fn main() -> eframe::Result<()> {
     let silent = raw_args
         .iter()
         .any(|arg| arg.to_string_lossy() == "--silent");
+    let start_ai = raw_args.iter().any(|arg| arg.to_string_lossy() == "--ai");
     if do_uninstall {
         if let Err(err) = install::uninstall_system() {
             if silent {
@@ -104,7 +106,12 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    let mut args = raw_args.into_iter();
+    let path_args = raw_args
+        .iter()
+        .filter(|arg| !arg.to_string_lossy().starts_with("--"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut args = path_args.into_iter();
     let first = args.next().map(PathBuf::from).filter(|path| path.exists());
     let second = args.next().map(PathBuf::from).filter(|path| path.is_file());
     let (initial_project, initial_file) = match first {
@@ -134,11 +141,11 @@ fn main() -> eframe::Result<()> {
             configure_fonts(&cc.egui_ctx);
             theme::install(&cc.egui_ctx);
             install_native_icons(cc);
-            Ok(Box::new(app::App::new(
-                cc,
-                initial_project.clone(),
-                initial_file.clone(),
-            )))
+            let mut app = app::App::new(cc, initial_project.clone(), initial_file.clone());
+            if start_ai {
+                app.start_in_ai_mode();
+            }
+            Ok(Box::new(app))
         }),
     )
 }

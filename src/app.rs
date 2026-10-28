@@ -1,5 +1,6 @@
 //! Simple embedded application shell: workspace, setup steps, tabs and build output.
 
+mod ai_ui;
 mod ui;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -722,6 +723,42 @@ struct ReportState {
 }
 
 #[derive(Clone, Debug)]
+struct AiChatMessage {
+    role: String,
+    content: String,
+    error: bool,
+}
+
+struct AiTransition {
+    started: Instant,
+    from: egui::Rect,
+}
+
+#[derive(Default)]
+struct AiState {
+    enabled: bool,
+    messages: Vec<AiChatMessage>,
+    input: String,
+    sending: bool,
+    receiver: Option<Receiver<Result<String, String>>>,
+    transition: Option<AiTransition>,
+    focus_input: bool,
+    context_file: Option<PathBuf>,
+    skill_source: Option<String>,
+    skill_files: usize,
+    skill_error: Option<String>,
+    skill_builtin: bool,
+}
+
+struct AiSettingsDraft {
+    api_key: String,
+    base_url: String,
+    model: String,
+    show_key: bool,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 struct Diagnostic {
     path: PathBuf,
     line: usize,
@@ -976,6 +1013,7 @@ enum Action {
     ToggleHidden,
     OpenSettings,
     OpenThemeSettings,
+    EnterAiMode,
     OpenFirmwareConfirm,
     RefreshBoardFiles,
     ReadBoardFile(crate::micropython::BoardFile),
@@ -1043,6 +1081,8 @@ pub struct App {
     relations: RelationState,
     install: InstallState,
     report: ReportState,
+    ai: AiState,
+    ai_settings_draft: Option<AiSettingsDraft>,
     hex: HexState,
     array: ArrayState,
     debug: DebugState,
@@ -1147,6 +1187,8 @@ impl App {
             relations: RelationState::default(),
             install: InstallState::default(),
             report: ReportState::default(),
+            ai: AiState::default(),
+            ai_settings_draft: None,
             hex: HexState::default(),
             array: ArrayState::default(),
             debug: DebugState::default(),
@@ -1282,6 +1324,8 @@ impl App {
         self.registers = RegisterState::default();
         self.relations = RelationState::default();
         self.report = ReportState::default();
+        self.ai = AiState::default();
+        self.ai_settings_draft = None;
         self.output_view = OutputView::Build;
 
         let mut config_error = None;
@@ -2672,6 +2716,7 @@ impl App {
             || self.memory_draft.is_some()
             || self.lsp_rename.is_some()
             || self.debug.peripheral_edit.is_some()
+            || self.ai_settings_draft.is_some()
     }
 
     fn handle_completion_keys(&mut self, ctx: &egui::Context) {
@@ -4234,6 +4279,231 @@ impl App {
                 "正在分析工程资源，完成后会保存到工程根目录…",
                 Severity::Info,
             );
+        }
+    }
+
+    pub(crate) fn start_in_ai_mode(&mut self) {
+        self.enter_ai_mode();
+    }
+
+    fn enter_ai_mode(&mut self) {
+        if self.project.is_none() {
+            self.set_toast("请先打开工程，再进入 AI 模式", Severity::Warning);
+            return;
+        }
+        if self.ai.enabled {
+            return;
+        }
+        self.ai.enabled = true;
+        self.ai.context_file = self.active_document().map(|doc| doc.path.clone());
+        self.ai.focus_input = true;
+        self.refresh_ai_skill();
+        self.ai.transition = Some(AiTransition {
+            started: Instant::now(),
+            from: self.last_editor_rect.unwrap_or(egui::Rect::NOTHING),
+        });
+    }
+
+    fn exit_ai_mode(&mut self) {
+        self.ai.enabled = false;
+        self.ai.transition = None;
+        self.ai.sending = false;
+        self.ai.receiver = None;
+        self.ai_settings_draft = None;
+        self.focus_editor = true;
+    }
+
+    fn refresh_ai_skill(&mut self) {
+        self.ai.skill_error = None;
+        self.ai.skill_builtin = false;
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.ai.skill_source = None;
+            self.ai.skill_files = 0;
+            self.ai.skill_error = Some("尚未打开工程".to_owned());
+            return;
+        };
+        match crate::ai::find_skill(&root) {
+            Some(path) => match crate::ai::load_skill(&path) {
+                Ok(bundle) => {
+                    self.ai.skill_source = Some(util::display_path(&bundle.root));
+                    self.ai.skill_files = bundle.files.len();
+                }
+                Err(err) => {
+                    self.ai.skill_source = Some(util::display_path(&path));
+                    self.ai.skill_files = 0;
+                    self.ai.skill_error = Some(format!("读取 skill 失败：{err}"));
+                }
+            },
+            None => {
+                let bundle = crate::ai::embedded_skill();
+                self.ai.skill_source = Some("内置副本（随程序编译）".to_owned());
+                self.ai.skill_files = bundle.files.len();
+                self.ai.skill_builtin = true;
+            }
+        }
+    }
+
+    fn open_ai_settings(&mut self) {
+        if self.has_modal() && self.ai_settings_draft.is_none() {
+            return;
+        }
+        self.refresh_ai_skill();
+        self.ai_settings_draft = Some(AiSettingsDraft {
+            api_key: self.settings.ai_api_key.clone(),
+            base_url: self.settings.ai_base_url.clone(),
+            model: self.settings.ai_model.clone(),
+            show_key: false,
+            error: None,
+        });
+    }
+
+    fn clear_ai_chat(&mut self) {
+        self.ai.messages.clear();
+        self.ai.input.clear();
+        self.ai.sending = false;
+        self.ai.receiver = None;
+    }
+
+    fn send_ai_message(&mut self) {
+        if self.ai.sending {
+            return;
+        }
+        let text = self.ai.input.trim().to_owned();
+        if text.is_empty() {
+            return;
+        }
+        if !self.ai_config().is_ready() {
+            self.set_toast("请先在 AI 设置中填写 API Key 和模型名称", Severity::Info);
+            self.open_ai_settings();
+            return;
+        }
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Warning);
+            return;
+        };
+        // Prefer the skill checked out in the project (or a global skills
+        // folder), then fall back to the copy compiled into the executable.
+        let skill = crate::ai::find_skill(&root)
+            .and_then(|path| crate::ai::load_skill(&path).ok())
+            .unwrap_or_else(crate::ai::embedded_skill);
+        let project_name = self
+            .project
+            .as_ref()
+            .map(|project| project.name.clone())
+            .unwrap_or_default();
+        let system_prompt = crate::ai::build_system_prompt(&crate::ai::Context {
+            root: &root,
+            project_name: &project_name,
+            meta: &self.project_meta,
+            build: &self.build_config,
+            debug: &self.project_debug,
+            memory_layout: self.memory_layout.as_ref(),
+            active_file: self.ai.context_file.as_deref(),
+            include_dirs: self.effective_includes(),
+            library_dirs: self.effective_library_dirs(),
+            defines: self.effective_defines(),
+            skill: &skill,
+        });
+        self.ai.messages.push(AiChatMessage {
+            role: "user".to_owned(),
+            content: text,
+            error: false,
+        });
+        // Keep the recent conversation, but do not let a few long code
+        // answers grow every follow-up request without bound.
+        let mut history = Vec::new();
+        let mut history_chars = 0usize;
+        for message in self
+            .ai
+            .messages
+            .iter()
+            .rev()
+            .filter(|message| !message.error)
+            .take(12)
+        {
+            let content = crate::ai::truncate_chars(&message.content, 12_000);
+            let chars = content.chars().count();
+            if !history.is_empty() && history_chars + chars > 48_000 {
+                break;
+            }
+            history_chars += chars;
+            history.push(crate::ai::ChatMessage {
+                role: message.role.clone(),
+                content,
+            });
+        }
+        history.reverse();
+        let config = self.ai_config();
+        let (sender, receiver) = mpsc::channel();
+        self.ai.receiver = Some(receiver);
+        self.ai.sending = true;
+        self.ai.input.clear();
+        self.ai.focus_input = true;
+        let spawned = std::thread::Builder::new()
+            .name("simple-embedded-ai".to_owned())
+            .spawn(move || {
+                let _ = sender.send(crate::ai::chat(&config, &system_prompt, &history));
+            });
+        if let Err(err) = spawned {
+            self.ai.sending = false;
+            self.ai.receiver = None;
+            self.ai.messages.push(AiChatMessage {
+                role: "assistant".to_owned(),
+                content: format!("无法启动 AI 请求：{err}"),
+                error: true,
+            });
+        }
+    }
+
+    fn ai_config(&self) -> crate::ai::AiConfig {
+        crate::ai::AiConfig {
+            api_key: self.settings.ai_api_key.trim().to_owned(),
+            base_url: self.settings.ai_base_url.trim().to_owned(),
+            model: self.settings.ai_model.trim().to_owned(),
+        }
+    }
+
+    fn poll_ai(&mut self, ctx: &egui::Context) {
+        let received = self
+            .ai
+            .receiver
+            .as_ref()
+            .map(|receiver| receiver.try_recv());
+        match received {
+            Some(Ok(Ok(reply))) => {
+                self.ai.receiver = None;
+                self.ai.sending = false;
+                self.ai.messages.push(AiChatMessage {
+                    role: "assistant".to_owned(),
+                    content: reply,
+                    error: false,
+                });
+                ctx.request_repaint();
+            }
+            Some(Ok(Err(err))) => {
+                self.ai.receiver = None;
+                self.ai.sending = false;
+                self.ai.messages.push(AiChatMessage {
+                    role: "assistant".to_owned(),
+                    content: err,
+                    error: true,
+                });
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.ai.receiver = None;
+                self.ai.sending = false;
+                self.ai.messages.push(AiChatMessage {
+                    role: "assistant".to_owned(),
+                    content: "AI 请求线程已结束".to_owned(),
+                    error: true,
+                });
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                ctx.request_repaint_after(Duration::from_millis(150));
+            }
+            None => {}
         }
     }
 
@@ -6890,7 +7160,23 @@ impl App {
                 self.rename_entry = None;
                 self.delete_entry = None;
                 self.memory_draft = None;
+                self.ai_settings_draft = None;
             }
+            return;
+        }
+
+        let ai_toggle = ctx.input_mut(|input| {
+            input.consume_key(egui::Modifiers::CTRL | egui::Modifiers::ALT, egui::Key::A)
+        });
+        if ai_toggle {
+            if self.ai.enabled {
+                self.exit_ai_mode();
+            } else {
+                self.enter_ai_mode();
+            }
+            return;
+        }
+        if self.ai.enabled {
             return;
         }
 
@@ -8084,6 +8370,7 @@ impl App {
                 }
                 Action::OpenSettings => self.open_settings(),
                 Action::OpenThemeSettings => self.open_theme_settings(),
+                Action::EnterAiMode => self.enter_ai_mode(),
                 Action::OpenFirmwareConfirm => {
                     if self.build_config_uses_micropython() {
                         self.firmware_confirm = true;
@@ -8199,7 +8486,9 @@ impl App {
     }
 
     fn sync_title(&mut self, ctx: &egui::Context) {
-        let base = if let Some(doc) = self.active_document() {
+        let base = if self.ai.enabled {
+            format!("AI 模式 · {APP_NAME}")
+        } else if let Some(doc) = self.active_document() {
             let dirty = if doc.is_dirty() { " ●" } else { "" };
             format!("{}{dirty} — {APP_NAME}", doc.name)
         } else {
@@ -8641,6 +8930,7 @@ impl eframe::App for App {
         self.poll_relations(&ctx);
         self.poll_install_system(&ctx);
         self.poll_resource_report(&ctx);
+        self.poll_ai(&ctx);
         self.sync_lsp();
         self.poll_micropython();
         self.poll_debug_start();
@@ -8671,14 +8961,16 @@ impl eframe::App for App {
 
         let mut actions = Vec::new();
 
-        if !self.immersive {
+        if !self.immersive && !self.ai.enabled {
             self.show_status_bar(ui, &mut actions);
         }
         let old_spacing = ui.spacing().item_spacing;
         let old_resize = ui.style().interaction.resize_grab_radius_side;
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.style_mut().interaction.resize_grab_radius_side = 0.0;
-        if self.immersive {
+        if self.ai.enabled {
+            self.show_ai_mode(ui);
+        } else if self.immersive {
             self.show_center(ui, &mut actions);
         } else {
             self.show_action_rail(ui, &mut actions);
@@ -8688,7 +8980,7 @@ impl eframe::App for App {
         }
         ui.spacing_mut().item_spacing = old_spacing;
         ui.style_mut().interaction.resize_grab_radius_side = old_resize;
-        if self.immersive {
+        if self.immersive && !self.ai.enabled {
             self.show_immersive_explorer(&ctx, &mut actions);
         }
         self.update_completion(&ctx);
@@ -8702,6 +8994,10 @@ impl eframe::App for App {
 
         if self.settings_draft.is_some() {
             self.show_settings_modal(&ctx);
+            actions.clear();
+        }
+        if self.ai_settings_draft.is_some() {
+            self.show_ai_settings_modal(&ctx);
             actions.clear();
         }
         if self.theme_settings.is_some() {
@@ -8756,45 +9052,47 @@ impl eframe::App for App {
             self.show_peripheral_edit(&ctx);
             actions.clear();
         }
-        let modal_open = self.has_modal();
-        if self.project_search.open && !modal_open {
-            self.show_project_search(&ctx, &mut actions);
-        }
-        if self.git_open && !modal_open {
-            self.show_git_status(&ctx, &mut actions);
-        }
-        if self.todo.open && !modal_open {
-            self.show_todos(&ctx, &mut actions);
-        }
-        if self.symbols.open && !modal_open {
-            self.show_symbols(&ctx, &mut actions);
-        }
-        if self.lsp_refs.is_some() && !modal_open {
-            self.show_lsp_references(&ctx, &mut actions);
-        }
-        if self.hex.open && !modal_open {
-            self.show_hex_viewer(&ctx);
-        }
-        if self.registers.open && !modal_open {
-            self.show_registers(&ctx, &mut actions);
-        }
-        if self.memory_check.open && !modal_open {
-            self.show_memory_check(&ctx, &mut actions);
-        }
-        if self.array.open && !modal_open {
-            self.show_array_generator(&ctx);
-        }
-        if self.debug.open && !self.immersive && !modal_open {
-            self.show_debug_overlay(&ctx, &mut actions);
-        }
-        if self.image_preview.is_some() {
-            self.show_image_preview(&ctx);
-        }
-        if self.completion.open && !modal_open {
-            self.show_completion(&ctx);
-        }
-        if self.column_edit.open && !modal_open {
-            self.show_column_edit(&ctx);
+        if !self.ai.enabled {
+            let modal_open = self.has_modal();
+            if self.project_search.open && !modal_open {
+                self.show_project_search(&ctx, &mut actions);
+            }
+            if self.git_open && !modal_open {
+                self.show_git_status(&ctx, &mut actions);
+            }
+            if self.todo.open && !modal_open {
+                self.show_todos(&ctx, &mut actions);
+            }
+            if self.symbols.open && !modal_open {
+                self.show_symbols(&ctx, &mut actions);
+            }
+            if self.lsp_refs.is_some() && !modal_open {
+                self.show_lsp_references(&ctx, &mut actions);
+            }
+            if self.hex.open && !modal_open {
+                self.show_hex_viewer(&ctx);
+            }
+            if self.registers.open && !modal_open {
+                self.show_registers(&ctx, &mut actions);
+            }
+            if self.memory_check.open && !modal_open {
+                self.show_memory_check(&ctx, &mut actions);
+            }
+            if self.array.open && !modal_open {
+                self.show_array_generator(&ctx);
+            }
+            if self.debug.open && !self.immersive && !modal_open {
+                self.show_debug_overlay(&ctx, &mut actions);
+            }
+            if self.image_preview.is_some() {
+                self.show_image_preview(&ctx);
+            }
+            if self.completion.open && !modal_open {
+                self.show_completion(&ctx);
+            }
+            if self.column_edit.open && !modal_open {
+                self.show_column_edit(&ctx);
+            }
         }
 
         if self.settings_draft.is_none()
@@ -8807,6 +9105,7 @@ impl eframe::App for App {
             && self.rename_entry.is_none()
             && self.delete_entry.is_none()
             && self.memory_draft.is_none()
+            && self.ai_settings_draft.is_none()
         {
             self.apply_actions(&ctx, actions);
         }
@@ -9181,9 +9480,19 @@ impl App {
                         ui.spinner();
                     }
                     let remaining = ui.available_height();
-                    if remaining > 38.0 {
-                        ui.add_space(remaining - 38.0);
+                    if remaining > 74.0 {
+                        ui.add_space(remaining - 74.0);
                     }
+                    if ui
+                        .add_sized([width, 30.0], theme::primary_button("AI模式"))
+                        .on_hover_text(
+                            "AI 模式：加载 stm32-embedded-dev skill，按工程上下文生成代码 (Ctrl+Alt+A)",
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::EnterAiMode);
+                    }
+                    ui.add_space(6.0);
                     if ui
                         .add_sized([width, 30.0], theme::secondary_button("设置"))
                         .on_hover_text("打开设置")

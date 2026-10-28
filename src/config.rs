@@ -1402,6 +1402,11 @@ pub struct Settings {
     pub resource_open: bool,
     pub info_open: bool,
     pub auto_start_watch: bool,
+    /// AI mode credentials are user-wide. The key is stored in the global
+    /// settings JSON so it is not written into project files.
+    pub ai_api_key: String,
+    pub ai_base_url: String,
+    pub ai_model: String,
 }
 
 impl Default for Settings {
@@ -1446,6 +1451,9 @@ impl Default for Settings {
             resource_open: true,
             info_open: true,
             auto_start_watch: false,
+            ai_api_key: String::new(),
+            ai_base_url: "https://api.deepseek.com/v1".to_owned(),
+            ai_model: "deepseek-chat".to_owned(),
         }
     }
 }
@@ -1527,6 +1535,15 @@ impl Settings {
             self.left_split = 0.5;
         }
         self.left_split = self.left_split.clamp(0.18, 0.82);
+        self.ai_api_key = self.ai_api_key.trim().to_owned();
+        self.ai_base_url = self.ai_base_url.trim().to_owned();
+        if self.ai_base_url.is_empty() {
+            self.ai_base_url = "https://api.deepseek.com/v1".to_owned();
+        }
+        self.ai_model = self.ai_model.trim().to_owned();
+        if self.ai_model.is_empty() {
+            self.ai_model = "deepseek-chat".to_owned();
+        }
         for config in self.build_configs.values_mut() {
             config.build_jobs = config.build_jobs.min(128);
         }
@@ -1619,6 +1636,23 @@ mod tests {
         assert_eq!(settings.editor_theme, "示波器原色");
         assert_eq!(settings.left_panel_width, 300.0);
         assert_eq!(settings.undo_limit, 64);
+        assert!(settings.ai_api_key.is_empty());
+        assert_eq!(settings.ai_base_url, "https://api.deepseek.com/v1");
+        assert_eq!(settings.ai_model, "deepseek-chat");
+    }
+
+    #[test]
+    fn settings_sanitizes_ai_fields() {
+        let mut settings = Settings {
+            ai_api_key: "  key  ".to_owned(),
+            ai_base_url: "   ".to_owned(),
+            ai_model: "   ".to_owned(),
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.ai_api_key, "key");
+        assert_eq!(settings.ai_base_url, "https://api.deepseek.com/v1");
+        assert_eq!(settings.ai_model, "deepseek-chat");
     }
 
     #[test]
