@@ -1792,11 +1792,20 @@ impl App {
             if ui
                 .add(theme::secondary_button("自动检测包含目录"))
                 .on_hover_text(
-                    "扫描工程中的 .h / .c / .cpp 等源文件，把所在父目录加入包含目录；Make 工程会同步到 Makefile",
+                    "扫描 .h / .hpp / .hh / .hxx / .inl 头文件，把所在父目录加入包含目录并清理只含 .c 的目录；Make 工程同时把未加入的 .c / .cpp 追加到 C_SOURCES",
                 )
                 .clicked()
             {
                 actions.push(Action::DetectIncludeDirs);
+            }
+            if ui
+                .add(theme::secondary_button("同步源文件到 Makefile"))
+                .on_hover_text(
+                    "扫描工程中的 .c / .cc / .cpp / .cxx，把未加入的源文件追加到 Makefile 的 C_SOURCES；跳过 Drivers / Middlewares / CMSIS 等供应商目录，修改前自动备份",
+                )
+                .clicked()
+            {
+                actions.push(Action::SyncMakefileSources);
             }
             ui.add_space(2.0);
             meta_editable_list(

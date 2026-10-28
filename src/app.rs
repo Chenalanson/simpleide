@@ -948,6 +948,7 @@ enum Action {
     ReadBoardFile(crate::micropython::BoardFile),
     EditMeta,
     DetectIncludeDirs,
+    SyncMakefileSources,
     AddMetaItem(MetaListField),
     EditBuildOptions,
     AddSupportPack,
@@ -5396,36 +5397,101 @@ impl App {
             &self.settings.ignore_patterns,
         );
         let detected = crate::project_meta::detect_include_dirs(&root, &base, &ignore);
-        if detected.is_empty() {
+        let existing = self.effective_includes().to_vec();
+        let (pruned, removed) = crate::project_meta::prune_source_only_includes(&existing, &base);
+        let (merged, added) = crate::project_meta::merge_include_dirs(&pruned, &detected, &base);
+        if added > 0 || removed > 0 {
+            self.build_config.meta_includes = Some(merged.clone());
+            let result = self.persist_meta_overrides();
+            let removed_note = if removed > 0 {
+                format!("，移除 {removed} 个仅含源文件的目录")
+            } else {
+                String::new()
+            };
+            self.notify_sync(
+                &format!(
+                    "已添加 {} 个头文件包含目录（共 {} 个）{removed_note}",
+                    added,
+                    merged.len()
+                ),
+                result,
+                Severity::Success,
+            );
+        } else if detected.is_empty() {
             self.set_toast(
-                "未找到 C/C++ 源文件或头文件；请确认工程中包含 .c / .h / .cpp 文件",
+                "未找到 C/C++ 头文件；请确认工程中包含 .h / .hpp 文件",
                 Severity::Info,
             );
-            return;
-        }
-        let existing = self.effective_includes().to_vec();
-        let (merged, added) = crate::project_meta::merge_include_dirs(&existing, &detected, &base);
-        if added == 0 {
+        } else {
             self.set_toast(
                 format!(
-                    "已检测到 {} 个源文件 / 头文件目录，全部已在包含目录中",
+                    "已检测到 {} 个头文件目录，全部已在包含目录中",
                     detected.len()
                 ),
                 Severity::Info,
             );
+        }
+        // One click also keeps the Makefile source list in sync, so a BSP or
+        // application `.c` file that was never added to `C_SOURCES` is picked
+        // up without a second action.
+        if self.build_config.effective_build_system() == BuildSystem::Make {
+            self.sync_makefile_sources();
+        }
+    }
+
+    fn sync_makefile_sources(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Info);
+            return;
+        };
+        if self.build_config.effective_build_system() != BuildSystem::Make {
+            self.set_toast("自动同步 C_SOURCES 仅支持 Makefile 工程", Severity::Info);
             return;
         }
-        self.build_config.meta_includes = Some(merged.clone());
-        let result = self.persist_meta_overrides();
-        self.notify_sync(
-            &format!(
-                "已添加 {} 个源文件 / 头文件包含目录（共 {} 个）",
-                added,
-                merged.len()
-            ),
-            result,
-            Severity::Success,
+        let Some(makefile_path) = makefile::find_makefile(&root) else {
+            self.set_toast("未找到 Makefile", Severity::Warning);
+            return;
+        };
+        if let Some(doc) = self
+            .tabs
+            .iter()
+            .find(|doc| same_path(&doc.path, &makefile_path))
+        {
+            if doc.is_dirty() {
+                self.set_toast("请先保存 Makefile，再同步源文件", Severity::Warning);
+                return;
+            }
+        }
+        let ignore = IgnoreRules::load(
+            &root,
+            self.settings.respect_gitignore,
+            &self.settings.ignore_patterns,
         );
+        let sources = crate::project_meta::detect_source_files(&root, &ignore);
+        match crate::makefile::sync_sources(&root, &sources) {
+            Ok((changed, added)) => {
+                if let Some(changed) = changed {
+                    if let Some(doc) = self
+                        .tabs
+                        .iter_mut()
+                        .find(|doc| same_path(&doc.path, &changed))
+                    {
+                        if let Ok(loaded) = crate::util::read_text_file(&changed) {
+                            doc.buffer.set_text(loaded.text);
+                            doc.saved_revision = doc.buffer.revision();
+                            doc.update_cursor(0);
+                        }
+                    }
+                    self.set_toast(
+                        format!("已向 Makefile 的 C_SOURCES 添加 {added} 个源文件（修改前已备份）"),
+                        Severity::Success,
+                    );
+                } else if added == 0 {
+                    self.set_toast("C_SOURCES 已包含工程内所有可同步的源文件", Severity::Info);
+                }
+            }
+            Err(err) => self.set_toast(err, Severity::Warning),
+        }
     }
 
     fn persist_meta_overrides(&mut self) -> Result<bool, String> {
@@ -5444,16 +5510,28 @@ impl App {
         let Some(makefile_path) = makefile::find_makefile(&root) else {
             return Ok(false);
         };
-        if self
+        let open_tab = self
             .tabs
             .iter()
-            .any(|document| same_path(&document.path, &makefile_path))
-        {
-            return Err("Makefile 已在编辑器中打开，请先关闭后再同步".to_owned());
+            .position(|document| same_path(&document.path, &makefile_path));
+        if let Some(index) = open_tab {
+            if self.tabs[index].is_dirty() {
+                return Err("Makefile 有未保存修改，请先保存后再同步".to_owned());
+            }
         }
         let synced = makefile::sync_lists(&root, &includes, &library_dirs, &defines)?.is_some();
         if synced {
             self.refresh_project_meta();
+            if let Some(index) = open_tab {
+                if let Ok(loaded) = crate::util::read_text_file(&makefile_path) {
+                    let doc = &mut self.tabs[index];
+                    let cursor = doc.cursor_index.min(loaded.text.chars().count());
+                    doc.buffer.set_text(loaded.text);
+                    doc.update_cursor(cursor);
+                    doc.saved_revision = doc.buffer.revision();
+                    doc.folds.clear();
+                }
+            }
         }
         Ok(synced)
     }
@@ -7577,6 +7655,7 @@ impl App {
                 Action::ReadBoardFile(file) => self.start_board_file(file),
                 Action::EditMeta => self.open_meta_editor(),
                 Action::DetectIncludeDirs => self.detect_include_dirs(),
+                Action::SyncMakefileSources => self.sync_makefile_sources(),
                 Action::AddMetaItem(field) => self.open_meta_add(field),
                 Action::EditBuildOptions => self.open_build_options(),
                 Action::AddSupportPack => self.add_support_pack(),

@@ -306,17 +306,16 @@ fn find_extension(root: &Path, extension: &str, max_depth: usize) -> Option<Path
     None
 }
 
-const INCLUDE_SCAN_EXTENSIONS: [&str; 9] =
-    ["h", "hpp", "hh", "hxx", "inl", "c", "cc", "cpp", "cxx"];
+const HEADER_EXTENSIONS: [&str; 5] = ["h", "hpp", "hh", "hxx", "inl"];
+const SOURCE_EXTENSIONS: [&str; 4] = ["c", "cc", "cpp", "cxx"];
 const MAX_INCLUDE_SCAN_DIRS: usize = 5000;
 const MAX_INCLUDE_SCAN_DEPTH: usize = 16;
 
-/// Collect the parent directory of every C/C++ header or source file in the
-/// project. Source directories are included as well so projects that keep
-/// generated headers next to `.c` files (or include `.c` files directly) get a
-/// complete include list. Paths are returned relative to `base` (the project
-/// root for Make, the `.uvprojx` directory for Keil) so they can be appended to
-/// the build system's existing include list without rewriting its conventions.
+/// Collect the parent directory of every C/C++ header in the project. Paths
+/// are returned relative to `base` (the project root for Make, the `.uvprojx`
+/// directory for Keil) so they can be appended to the build system's existing
+/// include list without rewriting its conventions. Source directories belong in
+/// `C_SOURCES`, not in `C_INCLUDES`.
 pub(crate) fn detect_include_dirs(root: &Path, base: &Path, ignore: &IgnoreRules) -> Vec<String> {
     let mut directories = BTreeSet::new();
     let mut pending = vec![(root.to_path_buf(), 0usize)];
@@ -348,9 +347,9 @@ pub(crate) fn detect_include_dirs(root: &Path, base: &Path, ignore: &IgnoreRules
                 pending.push((path, depth + 1));
             } else if file_type.is_file()
                 && path.extension().is_some_and(|extension| {
-                    INCLUDE_SCAN_EXTENSIONS
+                    HEADER_EXTENSIONS
                         .iter()
-                        .any(|scanned| extension.eq_ignore_ascii_case(scanned))
+                        .any(|header| extension.eq_ignore_ascii_case(header))
                 })
             {
                 let relative = path.strip_prefix(root).unwrap_or(&path);
@@ -367,6 +366,109 @@ pub(crate) fn detect_include_dirs(root: &Path, base: &Path, ignore: &IgnoreRules
     result.sort_by_key(|value| value.to_ascii_lowercase());
     result.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
     result
+}
+
+/// Collect every project `.c` / `.cc` / `.cpp` / `.cxx` file relative to
+/// `root`. These are the candidates for the Makefile `C_SOURCES` list.
+pub(crate) fn detect_source_files(root: &Path, ignore: &IgnoreRules) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    let mut scanned = 0usize;
+    while let Some((dir, depth)) = pending.pop() {
+        scanned += 1;
+        if scanned > MAX_INCLUDE_SCAN_DIRS {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries = entries.flatten().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let relative = path.strip_prefix(root).unwrap_or(path.as_path());
+            if file_type.is_dir() {
+                if depth >= MAX_INCLUDE_SCAN_DEPTH {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                if skip_include_scan_dir(&name) || ignore.is_ignored(relative, true) {
+                    continue;
+                }
+                pending.push((path, depth + 1));
+            } else if file_type.is_file()
+                && !ignore.is_ignored(relative, false)
+                && path.extension().is_some_and(|extension| {
+                    SOURCE_EXTENSIONS
+                        .iter()
+                        .any(|source| extension.eq_ignore_ascii_case(source))
+                })
+            {
+                files.push(include_dir_string(root, &path));
+            }
+        }
+    }
+    files.sort_by_key(|value| value.to_ascii_lowercase());
+    files.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    files
+}
+
+/// Drop include entries that are source-only directories (they contain `.c`
+/// files but no headers). The old auto-detect mistakenly added `Core/Src` and
+/// `Drivers/.../Src` to `C_INCLUDES`; running auto-detect again cleans them up.
+pub(crate) fn prune_source_only_includes(existing: &[String], base: &Path) -> (Vec<String>, usize) {
+    let mut kept = Vec::new();
+    let mut removed = 0usize;
+    for include in existing {
+        let trimmed = include.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let path = Path::new(trimmed);
+        let dir = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            base.join(path)
+        };
+        if !dir.is_dir() {
+            kept.push(include.clone());
+            continue;
+        }
+        let mut headers = 0usize;
+        let mut sources = 0usize;
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let extension = path
+                    .extension()
+                    .map(|value| value.to_string_lossy().to_ascii_lowercase())
+                    .unwrap_or_default();
+                if HEADER_EXTENSIONS
+                    .iter()
+                    .any(|header| extension.eq_ignore_ascii_case(header))
+                {
+                    headers += 1;
+                } else if SOURCE_EXTENSIONS
+                    .iter()
+                    .any(|source| extension.eq_ignore_ascii_case(source))
+                {
+                    sources += 1;
+                }
+            }
+        }
+        if sources > 0 && headers == 0 {
+            removed += 1;
+        } else {
+            kept.push(include.clone());
+        }
+    }
+    (kept, removed)
 }
 
 fn skip_include_scan_dir(name: &str) -> bool {
@@ -740,31 +842,33 @@ mod tests {
         std::fs::write(root.join(".hidden/secret.h"), "").unwrap();
 
         let ignore = IgnoreRules::load(root, false, "");
+        // Source-only directories must NOT be added to C_INCLUDES.
         let detected = detect_include_dirs(root, root, &ignore);
         assert_eq!(
             detected,
-            vec![
-                "BSP".to_owned(),
-                "Core/Inc".to_owned(),
-                "Middlewares/Lib/Inc".to_owned()
-            ]
+            vec!["Core/Inc".to_owned(), "Middlewares/Lib/Inc".to_owned()]
         );
 
+        // .c files are collected separately for C_SOURCES.
+        let sources = detect_source_files(root, &ignore);
+        assert_eq!(sources, vec!["BSP/bsp_usart.c".to_owned()]);
+
+        // The old buggy entries are pruned the next time auto-detect runs.
+        let (pruned, removed) =
+            prune_source_only_includes(&["Core/Inc".to_owned(), "BSP".to_owned()], root);
+        assert_eq!(removed, 1);
+        assert_eq!(pruned, vec!["Core/Inc".to_owned()]);
+
         let (merged, added) = merge_include_dirs(&["Core/Inc".to_owned()], &detected, root);
-        assert_eq!(added, 2);
+        assert_eq!(added, 1);
         assert_eq!(
             merged,
-            vec![
-                "Core/Inc".to_owned(),
-                "BSP".to_owned(),
-                "Middlewares/Lib/Inc".to_owned()
-            ]
+            vec!["Core/Inc".to_owned(), "Middlewares/Lib/Inc".to_owned()]
         );
 
         let mdk = root.join("MDK-ARM");
         std::fs::create_dir_all(&mdk).unwrap();
         let relative = detect_include_dirs(root, &mdk, &ignore);
-        assert!(relative.iter().any(|value| value == "../BSP"));
         assert!(relative.iter().any(|value| value == "../Core/Inc"));
         assert!(relative
             .iter()

@@ -56,7 +56,7 @@ src/memory.rs          ELF 符号 / 全局变量 / 栈堆分析、链接脚本 /
 src/memory_check.rs    数组越界、危险字符串函数、重复释放等 C 内存安全静态扫描
 src/macro_check.rs     同名宏重复、宏族相同替换值（可选黄色波浪线）诊断
 src/completion.rs      轻量成员索引、补全上下文和候选类型
-src/highlight.rs       syntect 高亮和 galley 缓存
+src/highlight.rs       syntect 高亮和 galley 缓存；Makefile / CMake 行级轻量高亮
 src/hover.rs           标识符悬停：声明签名、注释、返回值/类型
 src/minimap.rs         编辑器右侧代码预览、缩略行缓存和滚动跳转
 src/log.rs             ANSI SGR、错误分级、日志上限、链接错误提示
@@ -110,7 +110,7 @@ docs/                  README 截图和使用教程
 ### 编辑器
 
 - egui `TextEdit` 要求 `TextBuffer::as_str()` 返回连续切片，所以不要直接接 ropey。`EditorBuffer` 用 `String` + `Rc<Cell<u64>>` revision，所有插入/删除都会递增 revision。
-- 高亮缓存键是 `(revision, wrap_width, font_size)`；修改文本后 `layout_cached` 会自动重建。换字号、换自动换行宽度也由键覆盖。
+- 高亮缓存键是 `(revision, wrap_width, font_size)`；修改文本后 `layout_cached` 会自动重建。换字号、换自动换行宽度也由键覆盖。Makefile / CMake 不走 syntect 的逐 token 语法，而用行级轻量高亮（变量名、注释、目标），避免 `C_INCLUDES` / `CFLAGS` 长行生成大量 section 导致输入卡顿。
 - 文档打开时会规范化到内部 LF，保存时恢复原 CRLF/LF 和 BOM。
 - `util::read_text_file` 先按 UTF-8 读取，失败后回退 GBK；`LoadedText.encoding` / `Document.encoding` 记录编码，保存时用 `write_text_file` 按编码写回。工具栏可切换 UTF-8 / GBK。
 - 文件上限 16 MB；二进制文件不按文本打开，而是用只读十六进制视图显示（上限 32 MB）。
@@ -165,7 +165,7 @@ docs/                  README 截图和使用教程
 
 ### clangd 语言服务
 
-- `lsp.rs` 用 `std::process` 启动 clangd，通过 stdio 交换 LSP JSON-RPC；读线程把消息送回 `mpsc`，UI 每帧 `poll`，不阻塞。`Session` 在 Drop 时发送 shutdown/exit 并回收进程。
+- `lsp.rs` 用 `std::process` 启动 clangd，通过 stdio 交换 LSP JSON-RPC；读线程把消息送回 `mpsc`，UI 每帧 `poll`，不阻塞。`Session` 在 Drop 时发送 shutdown/exit 并回收进程。clangd 以 `--background-index=0` 启动，避免大工程后台索引长时间占用 CPU 导致编辑器输入卡顿；跨文件定义/引用以已打开文件和头文件为主。
 - 启动时生成 `%APPDATA%\SimpleEmbedded\clangd\<hash>\compile_commands.json`：包含目录来自 `effective_includes()`，宏来自 `effective_defines()`，CPU/FPU 从根 Makefile 的 `CPU` / `FPU` / `FLOAT-ABI` / `MCU` 解析；ARM 工程补 `--target=arm-none-eabi`，并通过 `arm-none-eabi-gcc -E -Wp,-v` 收集 newlib 系统头目录。
 - `detect_clangd` 依次查找设置里的路径、PATH、LLVM 默认目录、VS Code / Cursor clangd 扩展自带的 clangd；`Settings.clangd_enabled` / `clangd_path` 在 **配置 → 其他 → 语言服务** 修改。
 - 打开/修改的 `.c/.h/.cpp` 通过 didOpen/didChange（280ms 防抖）同步；关闭标签或切换工程时 didClose / 重启 clangd。
@@ -183,7 +183,7 @@ docs/                  README 截图和使用教程
 - MicroPython 固件烧录：`BuildConfig.firmware` 保存 `esptool`、`file`、`chip`、`address`、`erase`、`verify`，随工程配置持久化。串口面板提供固件 `.bin`/esptool 路径（可浏览和自动检测）、芯片下拉、烧录地址、整片擦除和写入校验；右侧 **固件** 按钮打开确认窗口，确认后后台调用 esptool。ESP32/ESP32-S2 默认地址 `0x1000`，S3/C3/C6/H2 默认 `0x0`；`erase_flash` 作为独立步骤执行，随后 `write_flash -z`。`micropython.rs` 先运行 `esptool version` 探测主版本：4.x 使用 `erase_flash` / `write_flash`，关闭写入校验时传 `--no-verify`；5.x 使用 `erase-flash` / `write-flash`，校验由 esptool 自动完成，不再传 `--verify`/`--no-verify`，取消勾选时会提示该开关被忽略。烧录成功会清空芯片文件列表和本地→芯片路径映射；烧录失败、esptool 缺失、串口占用等会写入 MicroPython 输出和芯片文件面板。需要用户自行安装 esptool 并准备合并固件。
 - 左栏先显示资源管理器，再显示“工程信息”；分割线紧贴“工程信息”标题上下，包含“构建配置”“芯片支持包”“烧录配置”“C/C++ 属性”四个分组。分组标题以及三个 C/C++ 列表标题左侧各有折叠箭头，整行可点击并切换展开；点击行会记录选中状态并显示淡蓝色背景，加号只在鼠标悬停对应行时显示，点击只添加、不折叠。信息行固定 18px 高、行距 2px，`interact_size.y` 在工程信息内收紧到 20px，整体密度接近资源管理器。构建配置的“编辑”、C/C++ 属性的“自动检测包含目录”/“批量编辑”、烧录配置的“编辑”和“内存布局...”都使用内容宽度的按钮并左对齐。展开和选中状态存在 egui 内存中。数据按工程缓存，刷新文件树时重新读取。
 - “芯片支持包”分组右侧的绿色 `+` 打开文件选择器，只接受 Keil/CMSIS `.pack` / `.pdsc`，并把文件复制到工程根目录（同名文件不覆盖）。`support_pack.rs` 解析包名、厂商、版本、设备列表和 SVD 数量；`.pack` 通过 zip 读取包内 `.pdsc`，不整体解压。寄存器浏览器在工程内没有独立 `.svd` 时，会直接读取第一个 `.pack` 内的 SVD。支持包不会生成自定义工程文件，也不代表完整的 Keil 设备树/启动文件/烧录算法导入。
-- 包含目录、库搜索目录和预处理器定义支持在左栏编辑：每个列表右侧有绿色 `+`，批量编辑仍可用。包含目录下方的 **自动检测包含目录** 会递归扫描工程内 `.h` / `.hpp` / `.hh` / `.hxx` / `.inl` 头文件和 `.c` / `.cc` / `.cpp` / `.cxx` 源文件，跳过构建目录、隐藏目录和忽略目录，按绝对路径去重后把父目录追加到列表；因此只有 `.c` 没有头文件的 BSP/驱动目录也会被加入包含目录。覆盖值存 `BuildConfig.meta_includes` / `meta_library_dirs` / `meta_defines`（`None` 表示自动检测）。仅当有效构建系统是 Make 时保存会同步到 `C_INCLUDES` / `LIBDIR` / `C_DEFS`，修改前备份到 `%APPDATA%\SimpleEmbedded\backups`；选择 Keil AC5/AC6 时只写工程配置，`.uvprojx` 不会被修改。
+- 包含目录、库搜索目录和预处理器定义支持在左栏编辑：每个列表右侧有绿色 `+`，批量编辑仍可用。包含目录下方的 **自动检测包含目录** 只递归扫描工程内 `.h` / `.hpp` / `.hh` / `.hxx` / `.inl` 头文件，跳过构建目录、隐藏目录和忽略目录，按绝对路径去重后把父目录追加到列表；再次点击时会移除只含 `.c` 而没有头文件的目录（旧版本误加的 `Core/Src`、`Drivers/.../Src`）。旁边的 **同步源文件到 Makefile** 扫描 `.c` / `.cc` / `.cpp` / `.cxx`，把未加入的源文件追加到 `C_SOURCES`；跳过 Drivers / Middlewares / CMSIS / third_party / vendor 等供应商目录，修改前备份，已打开且未保存的 Makefile 会拒绝写入。覆盖值存 `BuildConfig.meta_includes` / `meta_library_dirs` / `meta_defines`（`None` 表示自动检测）。仅当有效构建系统是 Make 时保存会同步到 `C_INCLUDES` / `LIBDIR` / `C_DEFS`，修改前备份到 `%APPDATA%\SimpleEmbedded\backups`；选择 Keil AC5/AC6 时只写工程配置，`.uvprojx` 不会被修改。
 - “构建选项”编辑器存 `BuildConfig.build_options`，分为全局选项、C/C++ 编译器、汇编器、链接器四个页面；显示在构建配置中。打开 Make 工程时会从 `OPT` / `CFLAGS` / `AS_DEFS` 等解析当前值，保存时只回写发生变化的字段；链接器输出格式选 `AXF` 时会在 Makefile 末尾添加受管理的 `.axf` 复制规则。全局选项页按工具链切换：GCC/Clang 显示 Use MicroLIB 作为总开关，勾选后才启用 newlib-nano `printf_float` / `scanf_float`（`-u _printf_float` / `-u _scanf_float`），并显示函数分段/LTO；Keil AC5/AC6 显示 Use MicroLIB、Split Load/Store 和 Keil 链接器字段，隐藏 newlib 开关。弹窗内容区固定为 320px（以 C/C++ 编译器页高度为准），切换页签时高度不变；工具链信息由左侧构建卡片显示，不再在弹窗内重复。只有有效构建系统为 Make 且工具链为 GCC/Clang 时才同步构建选项到 Makefile；Keil 和 Make AC5/AC6 只写入工程的 `.simple-embedded/settings.json`，不修改 `.uvprojx`。
 - 没有可解析的工程文件时只依赖 `BuildConfig`，不要为空字段编造值。
 
@@ -285,7 +285,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、源文件 / 头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、大括号折叠范围/可编辑折叠缓冲/源行映射、clangd compile_commands/URI/UTF-16 位置/悬停清洗/C/C++ 文件过滤、undefined reference 符号提取、撤销深度默认值与上限、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、图标 ICO 条目与 exe 嵌入资源一致性。当前共 229 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD/寄存器（含 derivedFrom）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、大括号折叠范围/可编辑折叠缓冲/源行映射、Makefile 行级高亮、C_SOURCES 源文件同步、clangd compile_commands/URI/UTF-16 位置/悬停清洗/C/C++ 文件过滤、undefined reference 符号提取、撤销深度默认值与上限、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、图标 ICO 条目与 exe 嵌入资源一致性。当前共 230 个测试。
 
 UI 改动后建议：
 

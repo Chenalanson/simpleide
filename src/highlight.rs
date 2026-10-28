@@ -113,6 +113,13 @@ impl Highlighter {
             apply_search_highlights(&mut job, search_ranges, &code_theme);
             return job;
         };
+        // Syntect's Makefile grammar produces a section per flag/path, which
+        // makes egui re-layout long `C_INCLUDES`/`CFLAGS` lines very slowly.
+        // A small line-oriented highlighter keeps variable names, comments and
+        // targets colored without that cost.
+        if matches!(syntax_name, "Makefile" | "CMake") {
+            return build_make_like_job(text, &font_id, &code_theme, wrap_width, search_ranges);
+        }
         let Some(syntax) = self.syntax_set.find_syntax_by_name(syntax_name) else {
             job.append(text, 0.0, default_format);
             return job;
@@ -228,6 +235,74 @@ fn syntect_color(color: Color32) -> Color {
         b: color.b(),
         a: 255,
     }
+}
+
+fn build_make_like_job(
+    text: &str,
+    font_id: &FontId,
+    code_theme: &CodeTheme,
+    wrap_width: f32,
+    search_ranges: &[(Range<usize>, bool)],
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap_width;
+    job.wrap.break_anywhere = false;
+    job.break_on_newline = true;
+    job.halign = egui::Align::LEFT;
+
+    let format = |color: Color32| TextFormat {
+        font_id: font_id.clone(),
+        color,
+        ..Default::default()
+    };
+    let plain = format(code_theme.text);
+    let comment = format(code_theme.comment);
+    let variable = format(code_theme.keyword);
+    let target = format(code_theme.function);
+
+    for line in text.split_inclusive('\n') {
+        let (body, ending) = line
+            .strip_suffix('\n')
+            .map(|body| (body, "\n"))
+            .unwrap_or((line, ""));
+        if body.starts_with('\t') {
+            job.append(body, 0.0, plain.clone());
+            job.append(ending, 0.0, plain.clone());
+            continue;
+        }
+        let leading = body.len() - body.trim_start().len();
+        let (indent, rest) = body.split_at(leading);
+        if !indent.is_empty() {
+            job.append(indent, 0.0, plain.clone());
+        }
+        if rest.is_empty() {
+            job.append(ending, 0.0, plain.clone());
+            continue;
+        }
+        if rest.starts_with('#') {
+            job.append(rest, 0.0, comment.clone());
+            job.append(ending, 0.0, comment.clone());
+            continue;
+        }
+        let equals = rest.find('=');
+        let colon = rest.find(':').filter(|_| !rest.starts_with('-'));
+        let assignment = equals.is_some_and(|equals| colon.is_none_or(|colon| equals < colon));
+        if assignment {
+            let equals = equals.expect("assignment has an equals sign");
+            job.append(&rest[..equals], 0.0, variable.clone());
+            job.append(&rest[equals..], 0.0, plain.clone());
+        } else if let Some(colon) = colon {
+            job.append(&rest[..colon], 0.0, target.clone());
+            job.append(&rest[colon..], 0.0, plain.clone());
+        } else {
+            job.append(rest, 0.0, plain.clone());
+        }
+        if !ending.is_empty() {
+            job.append(ending, 0.0, plain.clone());
+        }
+    }
+    apply_search_highlights(&mut job, search_ranges, code_theme);
+    job
 }
 
 fn apply_search_highlights(

@@ -5,6 +5,7 @@
 //! using them) are touched. Every write is backed up in the application data
 //! directory, and line endings/BOM are preserved.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -83,6 +84,85 @@ pub fn sync_lists(
     )?;
 
     commit(&makefile, root, &loaded, lines)
+}
+
+/// Append project source files that are missing from the Makefile `C_SOURCES`.
+///
+/// Vendor trees (`Drivers/`, `Middlewares/`, `CMSIS/`, ...) are skipped: a
+/// CubeMX Makefile intentionally lists only the HAL modules the project uses.
+/// Returns the changed Makefile (if any) and the number of added sources.
+pub fn sync_sources(root: &Path, sources: &[String]) -> Result<(Option<PathBuf>, usize), String> {
+    let Some(makefile) = find_makefile(root) else {
+        return Ok((None, 0));
+    };
+    let loaded = read_text_file(&makefile)?;
+    let mut lines = text_lines(&loaded.text);
+    if !is_supported(&lines) {
+        return Err("未识别的 Makefile 结构，未自动修改 C_SOURCES".to_owned());
+    }
+    let Some(assignment) = first_assignment(&lines, "C_SOURCES") else {
+        return Err("Makefile 中未找到 C_SOURCES".to_owned());
+    };
+    let existing = tokens(&assignment.value);
+    let mut keys = existing
+        .iter()
+        .map(|value| source_key(value))
+        .collect::<BTreeSet<_>>();
+    let mut additions = Vec::new();
+    for source in sources {
+        let source = source.trim().replace('\\', "/");
+        if source.is_empty() || is_vendor_source(&source) {
+            continue;
+        }
+        if keys.insert(source_key(&source)) {
+            additions.push(source);
+        }
+    }
+    if additions.is_empty() {
+        return Ok((None, 0));
+    }
+
+    let last = assignment.end.saturating_sub(1);
+    if last < lines.len() {
+        let trimmed = lines[last].trim_end().to_owned();
+        if !trimmed.ends_with('\\') {
+            lines[last] = format!("{trimmed} \\");
+        }
+    }
+    let mut inserted = Vec::with_capacity(additions.len());
+    for (index, source) in additions.iter().enumerate() {
+        let suffix = if index + 1 == additions.len() {
+            ""
+        } else {
+            " \\"
+        };
+        inserted.push(format!("{source}{suffix}"));
+    }
+    let insert_at = assignment.end.min(lines.len());
+    lines.splice(insert_at..insert_at, inserted);
+    let changed = commit(&makefile, root, &loaded, lines)?;
+    Ok((changed, additions.len()))
+}
+
+fn source_key(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches("./")
+        .replace('\\', "/")
+        .to_ascii_lowercase()
+}
+
+fn is_vendor_source(path: &str) -> bool {
+    let lower = path
+        .trim_start_matches("./")
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    lower.starts_with("drivers/")
+        || lower.starts_with("middlewares/")
+        || lower.starts_with("cmsis/")
+        || lower.starts_with("third_party/")
+        || lower.starts_with("third-party/")
+        || lower.starts_with("vendor/")
 }
 
 /// Rewrite only the build-option fields that differ between `before` and `after`.
@@ -775,6 +855,10 @@ mod tests {
             "-DUSE_HAL_DRIVER \\",
             "-DSTM32F103xB",
             "",
+            "C_SOURCES =  \\",
+            "Core/Src/main.c \\",
+            "Core/Src/gpio.c",
+            "",
             "AS_INCLUDES = ",
             "C_INCLUDES =  \\",
             "-ICore/Inc \\",
@@ -918,6 +1002,30 @@ mod tests {
         sync_options(&root, &parsed, &elf).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("$(TARGET).axf"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn appends_missing_sources_to_c_sources() {
+        let (root, path) = temp_project("sources", &sample());
+        let (changed, added) = sync_sources(
+            &root,
+            &[
+                "Core/Src/main.c".to_owned(),
+                "BSP/bsp_usart.c".to_owned(),
+                "Drivers/STM32G4xx_HAL_Driver/Src/extra.c".to_owned(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(added, 1);
+        assert_eq!(changed.as_deref(), Some(path.as_path()));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("BSP/bsp_usart.c"));
+        assert!(!text.contains("Drivers/STM32G4xx_HAL_Driver/Src/extra.c"));
+
+        let (changed, added) = sync_sources(&root, &["BSP/bsp_usart.c".to_owned()]).unwrap();
+        assert!(changed.is_none());
+        assert_eq!(added, 0);
         let _ = std::fs::remove_dir_all(root);
     }
 

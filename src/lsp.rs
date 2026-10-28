@@ -686,15 +686,17 @@ impl Session {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| database.clone());
-        let mut args = vec![
+        let args = vec![
             format!("--compile-commands-dir={}", database_dir.display()),
             "--header-insertion=never".to_owned(),
             "--completion-style=detailed".to_owned(),
+            // Background indexing a CubeMX project can keep a CPU core busy
+            // for minutes and makes typing in the IDE feel sluggish. The
+            // compile database and on-demand parsing are enough for the
+            // editor features used here.
+            "--background-index=0".to_owned(),
             "--log=error".to_owned(),
         ];
-        if !cfg!(windows) {
-            args.push("--background-index".to_owned());
-        }
         let mut client = Client::spawn(clangd, &args, &config.root)?;
         let root_uri = path_to_uri(&config.root);
         let initialize_id = client.request(
