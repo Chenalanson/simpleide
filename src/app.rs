@@ -722,11 +722,37 @@ struct ReportState {
     receiver: Option<Receiver<Result<PathBuf, String>>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AiEditStatus {
+    #[default]
+    Pending,
+    Applied,
+    Cancelled,
+}
+
 #[derive(Clone, Debug)]
 struct AiChatMessage {
     role: String,
     content: String,
     error: bool,
+    edits: Vec<crate::ai_edit::AiEdit>,
+    edit_status: AiEditStatus,
+    apply_error: Option<String>,
+    backup_dir: Option<PathBuf>,
+}
+
+impl AiChatMessage {
+    fn text(role: &str, content: String, error: bool) -> Self {
+        Self {
+            role: role.to_owned(),
+            content,
+            error,
+            edits: Vec::new(),
+            edit_status: AiEditStatus::Pending,
+            apply_error: None,
+            backup_dir: None,
+        }
+    }
 }
 
 struct AiTransition {
@@ -4383,6 +4409,12 @@ impl App {
             self.set_toast("请先打开工程", Severity::Warning);
             return;
         };
+        // The prompt and the file-edit base hashes are built from disk. Save
+        // dirty tabs first so the model sees the same content the user does.
+        if let Err(err) = self.save_all_dirty() {
+            self.set_toast(format!("发送前保存失败：{err}"), Severity::Error);
+            return;
+        }
         // Prefer the skill checked out in the project (or a global skills
         // folder), then fall back to the copy compiled into the executable.
         let skill = crate::ai::find_skill(&root)
@@ -4406,11 +4438,9 @@ impl App {
             defines: self.effective_defines(),
             skill: &skill,
         });
-        self.ai.messages.push(AiChatMessage {
-            role: "user".to_owned(),
-            content: text,
-            error: false,
-        });
+        self.ai
+            .messages
+            .push(AiChatMessage::text("user", text, false));
         // Keep the recent conversation, but do not let a few long code
         // answers grow every follow-up request without bound.
         let mut history = Vec::new();
@@ -4449,11 +4479,11 @@ impl App {
         if let Err(err) = spawned {
             self.ai.sending = false;
             self.ai.receiver = None;
-            self.ai.messages.push(AiChatMessage {
-                role: "assistant".to_owned(),
-                content: format!("无法启动 AI 请求：{err}"),
-                error: true,
-            });
+            self.ai.messages.push(AiChatMessage::text(
+                "assistant",
+                format!("无法启动 AI 请求：{err}"),
+                true,
+            ));
         }
     }
 
@@ -4475,31 +4505,49 @@ impl App {
             Some(Ok(Ok(reply))) => {
                 self.ai.receiver = None;
                 self.ai.sending = false;
+                let parsed = crate::ai_edit::parse_edits(&reply);
+                let text = parsed.text.trim().to_owned();
+                let mut edits = parsed.edits;
+                if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
+                    for edit in &mut edits {
+                        edit.prepare(&root);
+                    }
+                }
+                let content = if text.is_empty() && !edits.is_empty() {
+                    format!(
+                        "已准备 {} 个文件修改，请查看下方差异并点击“应用全部”。",
+                        edits.len()
+                    )
+                } else {
+                    text
+                };
                 self.ai.messages.push(AiChatMessage {
                     role: "assistant".to_owned(),
-                    content: reply,
+                    content,
                     error: false,
+                    edits,
+                    edit_status: AiEditStatus::Pending,
+                    apply_error: None,
+                    backup_dir: None,
                 });
                 ctx.request_repaint();
             }
             Some(Ok(Err(err))) => {
                 self.ai.receiver = None;
                 self.ai.sending = false;
-                self.ai.messages.push(AiChatMessage {
-                    role: "assistant".to_owned(),
-                    content: err,
-                    error: true,
-                });
+                self.ai
+                    .messages
+                    .push(AiChatMessage::text("assistant", err, true));
                 ctx.request_repaint();
             }
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                 self.ai.receiver = None;
                 self.ai.sending = false;
-                self.ai.messages.push(AiChatMessage {
-                    role: "assistant".to_owned(),
-                    content: "AI 请求线程已结束".to_owned(),
-                    error: true,
-                });
+                self.ai.messages.push(AiChatMessage::text(
+                    "assistant",
+                    "AI 请求线程已结束".to_owned(),
+                    true,
+                ));
                 ctx.request_repaint();
             }
             Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
@@ -4507,6 +4555,199 @@ impl App {
             }
             None => {}
         }
+    }
+
+    fn cancel_ai_edits(&mut self, index: usize) {
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            if message.edit_status == AiEditStatus::Pending {
+                message.edit_status = AiEditStatus::Cancelled;
+                message.apply_error = None;
+            }
+        }
+    }
+
+    /// Validate and apply the file edits proposed in an assistant message.
+    /// Everything is checked before the first write; modified files are copied
+    /// to `%APPDATA%\SimpleEmbedded\backups\...` first.
+    fn apply_ai_edits(&mut self, index: usize) {
+        let Some(message) = self.ai.messages.get(index) else {
+            return;
+        };
+        if message.edit_status != AiEditStatus::Pending || message.edits.is_empty() {
+            return;
+        }
+        let edits = message.edits.clone();
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message.apply_error = Some("请先打开工程".to_owned());
+            }
+            return;
+        };
+
+        struct Plan {
+            edit: crate::ai_edit::AiEdit,
+            absolute: PathBuf,
+            loaded: Option<util::LoadedText>,
+            new_text: String,
+            open_index: Option<usize>,
+        }
+
+        macro_rules! fail {
+            ($err:expr) => {{
+                if let Some(message) = self.ai.messages.get_mut(index) {
+                    message.apply_error = Some($err);
+                }
+                return;
+            }};
+        }
+
+        let mut plans = Vec::new();
+        for edit in edits {
+            if let Some(err) = edit.error.clone() {
+                fail!(err);
+            }
+            let Some(new_text) = edit.resolved.clone() else {
+                fail!(format!("{} 没有可应用的内容", edit.path));
+            };
+            let absolute = root.join(&edit.path);
+            let loaded = if absolute.is_file() {
+                match util::read_text_file(&absolute) {
+                    Ok(loaded) => Some(loaded),
+                    Err(err) => fail!(format!("读取 {} 失败：{err}", edit.path)),
+                }
+            } else {
+                None
+            };
+            let actual_hash = loaded
+                .as_ref()
+                .map(|loaded| crate::ai_edit::hash_text(&loaded.text));
+            match (edit.base_hash, actual_hash) {
+                (Some(expected), Some(actual)) if expected == actual => {}
+                (None, None) => {}
+                _ => fail!(format!(
+                    "{} 在 AI 生成后被修改或创建，请重新生成或取消本次修改",
+                    edit.path
+                )),
+            }
+            let open_index = self
+                .tabs
+                .iter()
+                .position(|doc| same_path(&doc.path, &absolute));
+            if let Some(doc_index) = open_index {
+                let doc = &self.tabs[doc_index];
+                if doc.is_dirty() {
+                    fail!(format!(
+                        "{} 有未保存修改，请先保存（Ctrl+S）后再应用",
+                        edit.path
+                    ));
+                }
+                if doc.read_only || doc.binary.is_some() {
+                    fail!(format!("{} 是只读或二进制文件，不能由 AI 修改", edit.path));
+                }
+            }
+            if plans
+                .iter()
+                .any(|plan: &Plan| plan.edit.path.eq_ignore_ascii_case(&edit.path))
+            {
+                fail!(format!("同一文件出现了多次修改：{}", edit.path));
+            }
+            plans.push(Plan {
+                edit,
+                absolute,
+                loaded,
+                new_text,
+                open_index,
+            });
+        }
+
+        let stamp = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default();
+        let project_name = root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "project".to_owned());
+        let key = crate::ai_edit::hash_text(&project_key(&root));
+        let backup_root = crate::config::settings_path()
+            .parent()
+            .map(|path| path.join("backups"))
+            .unwrap_or_else(|| std::env::temp_dir().join("SimpleEmbedded-backups"));
+        let backup_dir = backup_root
+            .join(format!("{project_name}-{key:08x}"))
+            .join(format!("ai-{stamp}"));
+        if let Err(err) = std::fs::create_dir_all(&backup_dir) {
+            fail!(format!("无法创建 AI 修改备份目录：{err}"));
+        }
+        for plan in &plans {
+            if plan.loaded.is_none() {
+                continue;
+            }
+            let destination = backup_dir.join(&plan.edit.path);
+            if let Some(parent) = destination.parent() {
+                if let Err(err) = std::fs::create_dir_all(parent) {
+                    fail!(format!("无法创建备份目录：{err}"));
+                }
+            }
+            if let Err(err) = std::fs::copy(&plan.absolute, &destination) {
+                fail!(format!(
+                    "备份 {} 失败：{err}",
+                    util::display_path(&plan.absolute)
+                ));
+            }
+        }
+
+        for plan in &plans {
+            if let Some(doc_index) = plan.open_index {
+                let doc = &mut self.tabs[doc_index];
+                doc.buffer.set_text(plan.new_text.clone());
+                if let Err(err) = doc.save() {
+                    fail!(format!("写入 {} 失败：{err}", plan.edit.path));
+                }
+                doc.macro_issue_revision = u64::MAX;
+            } else {
+                if let Some(parent) = plan.absolute.parent() {
+                    if let Err(err) = std::fs::create_dir_all(parent) {
+                        fail!(format!("无法创建目录：{err}"));
+                    }
+                }
+                let (line_ending, bom, encoding) = plan
+                    .loaded
+                    .as_ref()
+                    .map(|loaded| (loaded.line_ending, loaded.bom, loaded.encoding))
+                    .unwrap_or((util::LineEnding::Lf, false, util::TextEncoding::Utf8));
+                if let Err(err) = util::write_text_file(
+                    &plan.absolute,
+                    &plan.new_text,
+                    line_ending,
+                    bom,
+                    encoding,
+                ) {
+                    fail!(format!("写入 {} 失败：{err}", plan.edit.path));
+                }
+            }
+        }
+
+        let count = plans.len();
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            message.edit_status = AiEditStatus::Applied;
+            message.apply_error = None;
+            message.backup_dir = Some(backup_dir.clone());
+        }
+        if let Some(tree) = &mut self.tree {
+            tree.refresh();
+        }
+        self.symbols.scanned = false;
+        self.relations = RelationState::default();
+        self.start_relations_scan();
+        self.find.dirty = true;
+        self.set_toast(
+            format!(
+                "AI 已应用 {count} 个文件修改，备份：{}",
+                util::display_path(&backup_dir)
+            ),
+            Severity::Success,
+        );
     }
 
     fn poll_resource_report(&mut self, ctx: &egui::Context) {

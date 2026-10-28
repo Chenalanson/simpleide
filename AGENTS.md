@@ -48,6 +48,7 @@ src/icon_codec.rs      字标/标记 PNG 解码、缩放和 ICO 编码（build.r
 src/app.rs             App 状态、快捷键、打开/保存、右侧操作栏、构建输出
 src/app/ai_ui.rs       AI 模式三栏界面、聊天 Markdown、设置弹窗、雾化/双流星转场
 src/ai.rs              OpenAI 兼容请求、工程上下文与 stm32-embedded-dev skill 加载
+src/ai_edit.rs         AI 文件修改协议解析、路径校验、diff 与 base hash
 src/app/ui.rs          app 的子模块：文件树、Tab、编辑器、空工程/空标签占位、设置/确认弹窗
 src/build.rs           子进程、stdout/stderr、停止、构建事件与结果
 src/config.rs          全局/工程设置、ToolchainKind 选择、自动检测、SSH 命令构造、工作区文件
@@ -119,11 +120,14 @@ docs/                  README 截图和使用教程
 - `App.ai: AiState` 不持久化，保存对话、输入、发送线程 receiver、skill 状态、上下文文件和转场状态；切换工程时重置。`App.ai_settings_draft` 是独立弹窗，已加入 `has_modal`，Esc 可关闭。
 - AI 模式接管整个窗口（不显示状态栏、左栏、右栏、输出面板），由 `src/app/ai_ui.rs::show_ai_mode` 画三个大圆角控件：左上 AI 输出、左下输入、右侧 AI 工作台。右侧面板右下角是 **原始模式** 和 **设置**；设置打开 AI 设置弹窗。
 - 进入转场总时长 3.05s：前 `AI_EARLY_FOG_SECS`（0.32s）仍渲染正常编辑器并在其上叠加由 0 变浓的程序化雾（`show_ai_early_fog`），0.32s 后切换到 AI 模式；同时 Win32 分层窗口把整个窗口 alpha 从 255 降到 0（0.45–1.20s），保持全透明约 0.45s 露出桌面，再在 1.65–2.15s 恢复不透明。两颗流星分别在 1.15–1.95s / 1.35–2.25s 沿贝塞尔曲线落到右侧工作台和左上输出面板的 AI 图标上；输出/工作台面板从各自 AI 图标中心向外展开，输入面板最后从右下角展开。转场期间 `show_toast` 不绘制，面板内容在动画完成前禁用。窗口透明度通过 `apply_ai_window_opacity` + `SetLayeredWindowAttributes` 实现，是 Windows 专用；其他平台保持不透明，只播放雾化和流星/面板动画。AI 模式空闲时 33ms、发送中 16ms 请求重绘，避免 AI 图标轨道旋转卡顿。
-- 聊天渲染支持 fenced code block（语言标签 + 复制按钮 + 横向滚动）、行内 `code`、标题、列表和粗体；消息卡片带角色/错误色、复制按钮和自动滚底。代码块不自动写入文件，必须由用户复制。
-- 输入框支持 `Ctrl+Enter` 发送；进入时默认把当前文件作为上下文，可在输入面板移除。AI 请求在后台线程执行，UI 每帧 `poll_ai`。
+- 聊天渲染支持 fenced code block（语言标签 + 复制按钮 + 横向滚动）、行内 `code`、标题、列表和粗体；消息卡片带角色/错误色、复制按钮和自动滚底。普通代码块仍然只显示/复制；`se-file` / `se-replace` 特殊块会从正文移除并生成“AI 文件修改”卡片。
+- 文件修改协议：系统提示词要求模型用 ` ```se-file path=相对路径 ` 新建/整体覆盖文件，或用 ` ```se-replace path=相对路径 ` + `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE` 做唯一匹配替换；`src/ai_edit.rs::parse_edits` 解析这些围栏，`prepare` 读取当前文件、校验路径、计算 `similar` 行级 diff 和 base hash。模型被明确告知 IDE 会执行修改，不要声称无法写盘；优先 `se-replace` 保留无关代码。
+- 应用流程：`poll_ai` 收到回复后准备 diff，聊天气泡下方显示文件列表、kind（新建/覆盖/替换）、可展开差异、**应用全部** / **取消**；只有点击应用才调用 `App::apply_ai_edits`。应用前统一校验：路径相对工程根、禁止 `..`/绝对路径/生成目录（`build`、`Debug`、`Release`、`out`、`target`、`tools`、`dist`、`.simple-embedded` 等）和二进制扩展；同一路径一次回复中最多出现一次；校验 base hash，文件在生成后变化会拒绝；打开且未保存的 Tab 会拒绝；打开且干净的 Tab 更新缓冲区并保存，关闭的文件按原编码/行尾/BOM 写回。写入前把已存在文件备份到 `%APPDATA%\SimpleEmbedded\backups\<工程名>-<hash>\ai-<timestamp>\`。应用后刷新文件树、符号/调用索引和查找状态。没有自动应用开关，也没有一键撤销。
+- 上下文构建会额外附带 `Core/Src`、`Core/Inc`、`src`、`include` 下的主要 `.c/.h` 文件（最多 30 个、约 110KB，跳过 Drivers/Middlewares/vendor 等），方便模型用 `se-replace` 修改 `gpio.c` 等非当前文件；这些文件同样从磁盘读取，未保存编辑不会进入上下文。
+- 输入框支持 `Ctrl+Enter` 发送；进入时默认把当前文件作为上下文，可在输入面板移除。发送前调用 `save_all_dirty` 保存所有未保存标签页（失败则中止发送），保证提示词和文件修改的 base hash 基于最新磁盘内容。AI 请求在后台线程执行，UI 每帧 `poll_ai`。
 - AI 设置弹窗填写 API Key / API 地址 / 模型名称；保存在全局 `%APPDATA%\SimpleEmbedded\settings.json` 的 `ai_api_key` / `ai_base_url` / `ai_model`，不写入工程。默认 `https://api.deepseek.com/v1` + `deepseek-chat`。API Key 明文保存，界面已说明。
 - `src/ai.rs` 负责 OpenAI 兼容 `/chat/completions`（非流式，`ureq`，180s 超时）、系统提示词和上下文构建：优先从工程或其上级、当前目录、可执行文件目录、用户全局 skills 目录查找 `.opencode/skills/stm32-embedded-dev/SKILL.md`，读取 SKILL.md 和 references 下的 Markdown；找不到时使用 `include_str!` 编译进 exe 的内置副本（构建依赖 `.opencode/skills/stm32-embedded-dev/` 目录存在）。系统提示词包含 skill 全文（上限 160KB）、工程名/芯片/CPU/FPU/工具链/内存布局/包含目录/宏/当前文件、文件树（最多 400 个）、`hardware.dts`、当前文件、`main.c`、`.ioc`、`Makefile` / CMake / Cargo，以及 `<工程名>.resources.json` 摘要；这些文件从磁盘读取，未保存的编辑不会进入上下文；总上限 220KB；聊天历史最多 12 条、每条 12k 字符、总计 48k 字符。
-- 已知限制：非流式，长回答要等；没有 function calling、文件写入、diff 预览或取消请求；上下文可能超过小模型窗口，错误会显示在聊天里；目录 skill 不存在时用内置副本，修改 skill 后需要重新进入或点击“重新加载”，请求时始终重新读取目录 skill。
+- 已知限制：非流式，长回答要等；没有 function calling、自动应用、一键撤销、请求取消或流式输出；文件修改使用文本协议，模型不遵循 `se-file`/`se-replace` 时只会显示普通代码块，需要用户手动复制；只支持新建/覆盖/局部替换，不支持 AI 删除或重命名文件；上下文可能超过小模型窗口，错误会显示在聊天里；目录 skill 不存在时用内置副本，修改 skill 后需要重新进入或点击“重新加载”，请求时始终重新读取目录 skill。
 
 ### 编辑器
 
@@ -303,7 +307,7 @@ docs/                  README 截图和使用教程
 - 悬停调用/引用索引是文本级预览，不是语义分析：同名 `static` 函数会合并，函数指针调用、宏展开、重载、继承和条件编译块无法准确解析；引用最多保留每个符号 24 处、全局 6 万条，悬停只展示前 3 个文件各 2 处。只索引已保存文件和常见 C/C++ 源码/头文件，跳过 `build` / `Debug` / `Release` / `out` / `target` / `Objects` / `Listings` 等生成目录；注释和字符串不参与。
 - 系统安装是 HKCU 用户级集成，不写 Program Files，不需要管理员权限；Windows 11 精简右键菜单可能需要点“显示更多选项”。卸载保留 `%APPDATA%\SimpleEmbedded` 用户设置、备份和最近工程；安装目录中的自带工具链较大，首次安装/更新可能需要等待后台复制或硬链接完成。
 - 工程资源报告是静态启发式分析：SVD 外设是芯片能力清单，不代表全部已使用；引脚和 CubeMX 组件来自 `.ioc`，没有 `.ioc` 时为空；组件识别依赖路径关键字，外部器件、网络和实际连线无法自动发现；源码清单跳过 `tools` / `dist` 等目录，同名报告会被覆盖，不替代原理图、BOM 或链接映射文件。
-- AI 模式使用 OpenAI 兼容的非流式接口：没有 function calling、文件编辑/diff 预览、请求取消或流式输出；API Key 以明文保存在用户全局设置中，不写入工程。系统提示词会附带 skill、工程关键文件和资源报告摘要，大工程或小上下文模型可能超出窗口，错误直接显示在聊天里。skill 目录不存在时使用编译进 exe 的内置副本；构建时 `.opencode/skills/stm32-embedded-dev/` 必须存在。转场中的桌面透视依赖 Win32 分层窗口；非 Windows 平台或系统禁用 DWM 合成时窗口保持不透明，不会看到桌面。
+- AI 模式使用 OpenAI 兼容的非流式接口：没有 function calling、自动应用、一键撤销、请求取消或流式输出；文件修改使用 `se-file` / `se-replace` 文本协议，模型不遵循时只能手动复制，应用前必须确认并自动备份；API Key 以明文保存在用户全局设置中，不写入工程。系统提示词会附带 skill、工程关键文件和资源报告摘要，大工程或小上下文模型可能超出窗口，错误直接显示在聊天里。skill 目录不存在时使用编译进 exe 的内置副本；构建时 `.opencode/skills/stm32-embedded-dev/` 必须存在。转场中的桌面透视依赖 Win32 分层窗口；非 Windows 平台或系统禁用 DWM 合成时窗口保持不透明，不会看到桌面。
 - 内存布局的起始地址/大小只写入工程 `.simple-embedded/settings.json`，不会自动改写链接脚本；Flash/RAM 总量优先来自链接脚本，其次来自芯片支持包。`.bin` 使用内存布局里的下载起始地址。
 - 多光标支持 Alt+Click、Ctrl+Alt+Up/Down、Ctrl+D 和统一编辑；方向键只移动主光标并清除次级光标，不实现 VS Code 的多光标同时移动、Ctrl+U 回退光标和跨文件多光标。Ctrl+Alt+左键仍提供单一矩形列选择；分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
 - 代码折叠只识别 C 风格大括号块，不识别 `#if` / 函数式语言缩进块；折叠时隐藏起始行与结束行之间的块内行，保留结束行（右花括号），起始行仍可编辑，折叠状态不写入工程配置。
@@ -325,7 +329,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD 外设/寄存器/位域（含 peripheral 与 register 的 derivedFrom、bitRange/lsb-msb）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、大括号折叠范围/可编辑折叠缓冲/源行映射、Makefile 行级高亮、C_SOURCES 源文件同步/删除同步、clangd compile_commands/URI/UTF-16 位置/悬停清洗/C/C++ 文件过滤、undefined reference 符号提取、撤销深度默认值与上限、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、悬停调用/引用索引（函数调用、跨文件引用、注释/字符串过滤、多行签名、循环调用、生成目录跳过）、系统安装目录复制/临时目录跳过/PowerShell 引号与快捷方式/安装路径判断、工程资源报告（源码/头文件/链接脚本/组件识别、.ioc 引脚与组件、外设/寄存器 JSON、报告文件名）、Keil SVD 设备/系列 token 优先匹配、图标 ICO 条目与 exe 嵌入资源一致性、AI skill 目录查找/加载/内置副本/系统提示词、AI 设置默认值与字段清理、AI 模式转场缓动/窗口透明度/雾噪声/贝塞尔曲线/LCG 确定性/字符截断。当前共 258 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD 外设/寄存器/位域（含 peripheral 与 register 的 derivedFrom、bitRange/lsb-msb）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、大括号折叠范围/可编辑折叠缓冲/源行映射、Makefile 行级高亮、C_SOURCES 源文件同步/删除同步、clangd compile_commands/URI/UTF-16 位置/悬停清洗/C/C++ 文件过滤、undefined reference 符号提取、撤销深度默认值与上限、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、悬停调用/引用索引（函数调用、跨文件引用、注释/字符串过滤、多行签名、循环调用、生成目录跳过）、系统安装目录复制/临时目录跳过/PowerShell 引号与快捷方式/安装路径判断、工程资源报告（源码/头文件/链接脚本/组件识别、.ioc 引脚与组件、外设/寄存器 JSON、报告文件名）、Keil SVD 设备/系列 token 优先匹配、图标 ICO 条目与 exe 嵌入资源一致性、AI skill 目录查找/加载/内置副本/系统提示词、AI 设置默认值与字段清理、AI 模式转场缓动/窗口透明度/雾噪声/贝塞尔曲线/LCG 确定性/字符截断、AI 文件修改协议 se-file/se-replace 解析、路径逃逸/生成目录/二进制拦截、SEARCH 唯一匹配、base hash 与 diff。当前共 263 个测试。
 
 UI 改动后建议：
 

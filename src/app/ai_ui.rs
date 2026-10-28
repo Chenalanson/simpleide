@@ -11,7 +11,7 @@ use eframe::egui::{
     Rect, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, UiBuilder,
 };
 
-use super::{AiChatMessage, App};
+use super::{AiChatMessage, AiEditStatus, App};
 use crate::log::Severity;
 use crate::theme;
 
@@ -188,6 +188,8 @@ impl App {
         clear: &mut bool,
         quick_prompt: &mut Option<&'static str>,
     ) {
+        let mut apply_request = None;
+        let mut cancel_request = None;
         ai_panel(ui, rect, reveal, origin, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
@@ -196,8 +198,13 @@ impl App {
                         .strong()
                         .color(theme::text()),
                 );
+                let pending = self.ai.messages.iter().any(|message| {
+                    message.edit_status == AiEditStatus::Pending && !message.edits.is_empty()
+                });
                 let (status, color) = if self.ai.sending {
                     ("生成中", theme::accent())
+                } else if pending {
+                    ("待确认", theme::warning())
                 } else if self.ai.messages.is_empty() {
                     ("待命", theme::text_faint())
                 } else {
@@ -231,7 +238,7 @@ impl App {
                         ai_empty_state(ui, quick_prompt);
                     } else {
                         for (index, message) in self.ai.messages.iter().enumerate() {
-                            ai_message(ui, message, index);
+                            ai_message(ui, message, index, &mut apply_request, &mut cancel_request);
                             ui.add_space(8.0);
                         }
                     }
@@ -249,6 +256,14 @@ impl App {
                     ui.add_space(4.0);
                 });
         });
+        if let Some(index) = apply_request {
+            self.apply_ai_edits(index);
+            ui.ctx().request_repaint();
+        }
+        if let Some(index) = cancel_request {
+            self.cancel_ai_edits(index);
+            ui.ctx().request_repaint();
+        }
     }
 
     fn ai_input_panel(&mut self, ui: &mut egui::Ui, rect: Rect, reveal: f32, send: &mut bool) {
@@ -322,9 +337,11 @@ impl App {
             ui.add_space(5.0);
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("AI 读取已保存的工程文件、芯片信息和资源报告")
-                        .size(9.0)
-                        .color(theme::text_faint()),
+                    RichText::new(
+                        "AI 可直接修改工程文件：读取已保存内容，修改前显示差异，确认后写入",
+                    )
+                    .size(9.0)
+                    .color(theme::text_faint()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let label = if self.ai.sending {
@@ -474,6 +491,13 @@ impl App {
                                     "目录 skill 优先；未找到时使用内置副本（{} 个文件）。",
                                     crate::ai::embedded_skill().files.len()
                                 ))
+                                .size(9.0)
+                                .color(theme::text_faint()),
+                            );
+                            ui.label(
+                                RichText::new(
+                                    "AI 的文件修改会先显示差异；点击“应用全部”后写入，写入前备份到用户目录。",
+                                )
                                 .size(9.0)
                                 .color(theme::text_faint()),
                             );
@@ -889,7 +913,13 @@ fn paint_dot(ui: &mut Ui, color: Color32) {
     ui.painter().circle_filled(rect.center(), 3.0, color);
 }
 
-fn ai_message(ui: &mut Ui, message: &AiChatMessage, index: usize) {
+fn ai_message(
+    ui: &mut Ui,
+    message: &AiChatMessage,
+    index: usize,
+    apply_request: &mut Option<usize>,
+    cancel_request: &mut Option<usize>,
+) {
     let user = message.role == "user";
     let (fill, border) = if message.error {
         (
@@ -928,6 +958,176 @@ fn ai_message(ui: &mut Ui, message: &AiChatMessage, index: usize) {
             });
             ui.add_space(3.0);
             render_markdown(ui, &message.content, index, message.error);
+            if !message.edits.is_empty() {
+                ui.add_space(7.0);
+                ai_edits_card(ui, message, index, apply_request, cancel_request);
+            }
+        });
+}
+
+fn ai_edits_card(
+    ui: &mut Ui,
+    message: &AiChatMessage,
+    message_index: usize,
+    apply_request: &mut Option<usize>,
+    cancel_request: &mut Option<usize>,
+) {
+    let has_errors = message.edits.iter().any(|edit| edit.error.is_some());
+    Frame::new()
+        .fill(theme::with_alpha(theme::accent(), 10))
+        .stroke(Stroke::new(1.0_f32, theme::with_alpha(theme::accent(), 75)))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("AI 文件修改")
+                        .size(10.5)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.label(
+                    RichText::new(format!("{} 个文件", message.edits.len()))
+                        .size(9.5)
+                        .color(theme::text_faint()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    match message.edit_status {
+                        AiEditStatus::Pending => {
+                            if has_errors {
+                                ui.add_enabled(false, theme::primary_button("应用全部"));
+                            } else if ui.add(theme::primary_button("应用全部")).clicked() {
+                                *apply_request = Some(message_index);
+                            }
+                            ui.add_space(4.0);
+                            if ui.add(theme::secondary_button("取消")).clicked() {
+                                *cancel_request = Some(message_index);
+                            }
+                        }
+                        AiEditStatus::Applied => {
+                            ui.label(
+                                RichText::new("已应用")
+                                    .size(10.0)
+                                    .strong()
+                                    .color(theme::success()),
+                            );
+                        }
+                        AiEditStatus::Cancelled => {
+                            ui.label(
+                                RichText::new("已取消")
+                                    .size(10.0)
+                                    .color(theme::text_faint()),
+                            );
+                        }
+                    }
+                });
+            });
+            if let Some(error) = &message.apply_error {
+                ui.add_space(4.0);
+                ui.add(Label::new(RichText::new(error).size(9.5).color(theme::error())).wrap());
+            }
+            for (edit_index, edit) in message.edits.iter().enumerate() {
+                ui.add_space(5.0);
+                let (label, color) = match edit.kind {
+                    crate::ai_edit::AiEditKind::Write if edit.base_hash.is_some() => {
+                        ("覆盖", theme::warning())
+                    }
+                    crate::ai_edit::AiEditKind::Write => ("新建", theme::success()),
+                    crate::ai_edit::AiEditKind::Replace => ("替换", theme::accent()),
+                };
+                let id = ui.make_persistent_id((
+                    "simple_embedded_ai_edit_open",
+                    message_index,
+                    edit_index,
+                ));
+                let mut open = ui
+                    .data_mut(|data| data.get_persisted::<bool>(id))
+                    .unwrap_or(message.edits.len() == 1 && edit.diff.len() <= 40);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(label).size(9.0).strong().color(color));
+                    ui.add(
+                        Label::new(
+                            RichText::new(&edit.path)
+                                .monospace()
+                                .size(9.5)
+                                .color(theme::text()),
+                        )
+                        .wrap(),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ai_ghost_button(ui, if open { "收起" } else { "差异" }) {
+                            open = !open;
+                            ui.data_mut(|data| data.insert_persisted(id, open));
+                        }
+                    });
+                });
+                if let Some(error) = &edit.error {
+                    ui.add_space(2.0);
+                    ui.add(Label::new(RichText::new(error).size(9.0).color(theme::error())).wrap());
+                } else if open {
+                    render_ai_diff(ui, edit, message_index, edit_index);
+                }
+            }
+            if let Some(backup) = &message.backup_dir {
+                ui.add_space(5.0);
+                ui.add(
+                    Label::new(
+                        RichText::new(format!("备份：{}", crate::util::display_path(backup)))
+                            .size(8.5)
+                            .color(theme::text_faint()),
+                    )
+                    .wrap(),
+                );
+            }
+        });
+}
+
+fn render_ai_diff(
+    ui: &mut Ui,
+    edit: &crate::ai_edit::AiEdit,
+    message_index: usize,
+    edit_index: usize,
+) {
+    Frame::new()
+        .fill(theme::editor_bg())
+        .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+        .corner_radius(6)
+        .inner_margin(Margin::symmetric(7, 5))
+        .show(ui, |ui| {
+            ScrollArea::vertical()
+                .id_salt(("simple_embedded_ai_diff", message_index, edit_index))
+                .auto_shrink([false, true])
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    for line in &edit.diff {
+                        let (prefix, color, background) = match line.tag {
+                            crate::ai_edit::DiffTag::Add => (
+                                "+",
+                                theme::success(),
+                                theme::with_alpha(theme::success(), 18),
+                            ),
+                            crate::ai_edit::DiffTag::Remove => {
+                                ("-", theme::error(), theme::with_alpha(theme::error(), 18))
+                            }
+                            crate::ai_edit::DiffTag::Context => {
+                                (" ", theme::text_dim(), Color32::TRANSPARENT)
+                            }
+                            crate::ai_edit::DiffTag::Meta => {
+                                ("i", theme::warning(), Color32::TRANSPARENT)
+                            }
+                        };
+                        let mut text = RichText::new(format!("{prefix} {}", line.text))
+                            .monospace()
+                            .size(9.5)
+                            .color(color);
+                        if background != Color32::TRANSPARENT {
+                            text = text.background_color(background);
+                        }
+                        ui.add(Label::new(text).wrap());
+                    }
+                });
         });
 }
 
@@ -950,21 +1150,25 @@ fn ai_empty_state(ui: &mut Ui, quick_prompt: &mut Option<&'static str>) {
                 .color(theme::text()),
         );
         ui.label(
-            RichText::new("先读工程与 stm32-embedded-dev skill，再按硬件台账输出可落地代码")
+            RichText::new("先读工程与 stm32-embedded-dev skill，生成文件修改并在你确认后写入")
                 .size(10.0)
                 .color(theme::text_dim()),
         );
     });
     ui.add_space(12.0);
 
-    let prompts: [(&str, &'static str); 3] = [
+    let prompts: [(&str, &'static str); 4] = [
+        (
+            "直接改文件",
+            "请直接修改当前工程文件，不要只贴代码；使用 se-file / se-replace 协议，应用前给我看差异。",
+        ),
         (
             "新建硬件台账",
-            "请先为本工程建立 hardware.dts 硬件台账，列出芯片、时钟、已用外设、引脚复用、中断和 DMA。",
+            "请为本工程建立 hardware.dts 硬件台账，列出芯片、时钟、已用外设、引脚复用、中断和 DMA，并直接写入工程。",
         ),
         (
             "配置串口收发",
-            "请为当前工程配置 USART1 中断收发，给出 hardware.dts 节点、HAL 初始化代码和中断处理。",
+            "请为当前工程配置 USART1 中断收发，更新 hardware.dts、HAL 初始化和中断处理，并直接修改工程文件。",
         ),
         (
             "排查 HardFault",

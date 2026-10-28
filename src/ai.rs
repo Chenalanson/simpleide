@@ -336,6 +336,26 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
             break;
         }
     }
+    prompt.push_str("\n### 工程主要源文件\n");
+    let mut source_bytes = 0usize;
+    for path in source_candidates(context.root) {
+        if prompt.len() > MAX_SYSTEM_PROMPT_BYTES - 24_000
+            || source_bytes > 110_000
+            || appended.len() > 40
+        {
+            break;
+        }
+        let before = prompt.len();
+        append_file(
+            &mut prompt,
+            context.root,
+            &path,
+            36_000,
+            fence_language(&path),
+            &mut appended,
+        );
+        source_bytes += prompt.len().saturating_sub(before);
+    }
     if let Some(ioc) = first_file_with_extension(context.root, "ioc") {
         append_file(
             &mut prompt,
@@ -363,12 +383,29 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
     }
 
     prompt.push_str(
+        "\n\n## 文件修改协议（重要）\n\n\
+         你运行在 Simple embedded 的 AI 模式中，IDE 会执行你给出的文件修改。不要声称无法写入磁盘，也不要把完整代码只放在普通 Markdown 代码块里让用户手动复制。\n\n\
+         新建或整体覆盖文件，使用：\n\n\
+         ```se-file path=相对路径\n\
+         <完整文件内容>\n\
+         ```\n\n\
+         局部修改（优先使用），使用：\n\n\
+         ```se-replace path=相对路径\n\
+         <<<<<<< SEARCH\n\
+         <当前文件中完全一致的原文，包含缩进和换行>\n\
+         =======\n\
+         <替换后的文本>\n\
+         >>>>>>> REPLACE\n\
+         ```\n\n\
+         规则：路径必须相对工程根目录，禁止绝对路径、`..`、`build` / `Debug` / `Release` / `out` / `target` 等生成目录；一次最多修改 20 个文件；SEARCH 必须能在当前文件中唯一匹配；不要修改 `.simple-embedded` 工程配置。IDE 会生成差异，只有用户点击“应用全部”后才会写入，写入前会备份到用户目录。skill 中要求输出代码块的步骤在 AI 模式下改用上述格式，解释文字照常输出。\n",
+    );
+    prompt.push_str(
         "\n\n## 输出要求\n\n\
          1. 先判断用户是在新增功能、补外设、改逻辑还是排查报错；信息不足时只追问 1-2 个决定性参数。\n\
-         2. 涉及新硬件资源时，先给出/更新 hardware.dts 节点，再给代码。\n\
-         3. 代码按“板级初始化层 / 驱动接口层 / 业务层”输出，标注文件路径与插入位置；已有工程只追加，不重写。\n\
+         2. 涉及新硬件资源时，先更新 hardware.dts 节点，再给代码；硬件事实不确定时标注待核对。\n\
+         3. 代码按“板级初始化层 / 驱动接口层 / 业务层”组织；已有工程优先用 se-replace 做最小改动，不重写无关代码。\n\
          4. 最后给出台账-代码一致性检查和需要核对的手册事实。\n\
-         5. 代码块使用标准 Markdown fenced code block；不要输出与本任务无关的框架文件。\n",
+         5. 需要写入工程的内容必须放在 se-file / se-replace 块中；普通说明可以使用 Markdown，但不要重复粘贴同一份完整代码。\n",
     );
 
     if prompt.len() > MAX_SYSTEM_PROMPT_BYTES {
@@ -439,6 +476,91 @@ fn first_file_with_extension(root: &Path, extension: &str) -> Option<PathBuf> {
             && path
                 .extension()
                 .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+    })
+}
+
+fn source_candidates(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for directory in ["Core/Src", "Core/Inc", "src", "include", "Inc", "Src"] {
+        collect_sources(root, &root.join(directory), &mut files, 0);
+    }
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && is_source_file(&path) {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    files.dedup();
+    files.truncate(30);
+    files
+}
+
+fn collect_sources(root: &Path, directory: &Path, files: &mut Vec<PathBuf>, depth: usize) {
+    if depth > 2 || files.len() >= 30 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let mut entries = entries.flatten().collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if files.len() >= 30 {
+            break;
+        }
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            if !skip_source_dir(relative) {
+                collect_sources(root, &path, files, depth + 1);
+            }
+        } else if file_type.is_file() && is_source_file(&path) {
+            files.push(path);
+        }
+    }
+}
+
+fn is_source_file(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        matches!(
+            extension.to_string_lossy().to_ascii_lowercase().as_str(),
+            "c" | "h" | "cc" | "cpp" | "cxx" | "hpp"
+        )
+    })
+}
+
+fn skip_source_dir(relative: &Path) -> bool {
+    relative.components().any(|component| {
+        matches!(
+            component
+                .as_os_str()
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .as_str(),
+            "build"
+                | "debug"
+                | "release"
+                | "out"
+                | "target"
+                | "objects"
+                | "listings"
+                | "drivers"
+                | "middlewares"
+                | "cmsis"
+                | "third_party"
+                | "vendor"
+                | "node_modules"
+                | "tools"
+                | "dist"
+                | ".git"
+                | ".simple-embedded"
+        )
     })
 }
 
@@ -757,6 +879,10 @@ mod tests {
             &dir.path().join("Core/Src/main.c"),
             "int main(void) { return 0; }\n",
         );
+        write(
+            &dir.path().join("Core/Src/gpio.c"),
+            "void gpio_marker(void) {}\n",
+        );
         let meta = ProjectMeta {
             device: Some("STM32G431CBTx".to_owned()),
             ..ProjectMeta::default()
@@ -779,5 +905,8 @@ mod tests {
         assert!(prompt.contains("hardware.dts"));
         assert!(prompt.contains("int main(void)"));
         assert!(prompt.contains("Core/Src/main.c"));
+        assert!(prompt.contains("gpio_marker"));
+        assert!(prompt.contains("se-file"));
+        assert!(prompt.contains("se-replace"));
     }
 }
