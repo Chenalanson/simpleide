@@ -425,6 +425,17 @@ fn parse_print_value(line: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
+#[derive(Clone)]
+struct PeripheralEditDraft {
+    peripheral: String,
+    register: crate::registers::SvdRegister,
+    address: u64,
+    field: Option<crate::registers::SvdField>,
+    input: String,
+    register_value: Option<u64>,
+    error: Option<String>,
+}
+
 #[derive(Default)]
 struct DebugState {
     open: bool,
@@ -452,6 +463,8 @@ struct DebugState {
     peripheral_filter: String,
     peripheral_values: BTreeMap<u64, String>,
     peripheral_open: BTreeSet<String>,
+    peripheral_registers_open: BTreeSet<String>,
+    peripheral_edit: Option<PeripheralEditDraft>,
     peripheral_initialized: bool,
     peripheral_refresh: Option<u64>,
     peripheral_id: u64,
@@ -672,6 +685,7 @@ struct MemoryDraft {
 struct RegisterState {
     open: bool,
     items: Vec<crate::registers::RegisterItem>,
+    peripherals: Vec<crate::registers::SvdPeripheral>,
     source: String,
     truncated: bool,
     error: Option<String>,
@@ -1239,6 +1253,7 @@ impl App {
         self.image_preview = None;
         self.memory_check = MemoryCheckState::default();
         self.firmware_view = FirmwareViewState::default();
+        self.registers = RegisterState::default();
         self.output_view = OutputView::Build;
 
         let mut config_error = None;
@@ -1295,6 +1310,8 @@ impl App {
         self.debug.registers.clear();
         self.debug.peripheral_values.clear();
         self.debug.peripheral_open.clear();
+        self.debug.peripheral_registers_open.clear();
+        self.debug.peripheral_edit = None;
         self.debug.peripheral_initialized = false;
         self.debug.peripheral_refresh = None;
         self.debug.peripheral_last_refresh = None;
@@ -1667,6 +1684,46 @@ impl App {
         };
     }
 
+    fn import_svd(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Warning);
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("选择芯片 SVD 文件")
+            .add_filter("SVD", &["svd"])
+            .pick_file()
+        else {
+            return;
+        };
+        let name = util::file_name(&path);
+        let destination = root.join(&name);
+        if !same_path(&path, &destination) {
+            if let Err(err) = std::fs::copy(&path, &destination) {
+                self.set_toast(format!("无法复制 SVD 到工程目录：{err}"), Severity::Error);
+                return;
+            }
+        }
+        self.registers.peripherals.clear();
+        self.registers.items.clear();
+        self.refresh_registers();
+        self.debug.peripheral_values.clear();
+        self.debug.peripheral_open.clear();
+        self.debug.peripheral_registers_open.clear();
+        self.debug.peripheral_initialized = false;
+        self.debug.peripheral_last_refresh = None;
+        if self.debug.watch_tab == DebugSideTab::Peripherals {
+            self.refresh_debug_peripheral();
+        }
+        self.set_toast(format!("已加载芯片 SVD：{name}"), Severity::Success);
+    }
+
+    fn ensure_registers_loaded(&mut self) {
+        if self.registers.items.is_empty() {
+            self.refresh_registers();
+        }
+    }
+
     fn refresh_registers(&mut self) {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             self.set_toast("请先打开一个工程文件夹", Severity::Warning);
@@ -1680,12 +1737,14 @@ impl App {
         match crate::registers::scan_project(&root, &ignore, self.project_meta.device.as_deref()) {
             Ok(index) => {
                 self.registers.items = index.items;
+                self.registers.peripherals = index.peripherals;
                 self.registers.source = index.source;
                 self.registers.truncated = index.truncated;
                 self.registers.error = None;
             }
             Err(err) => {
                 self.registers.items.clear();
+                self.registers.peripherals.clear();
                 self.registers.error = Some(err);
             }
         }
@@ -2583,6 +2642,7 @@ impl App {
             || self.delete_entry.is_some()
             || self.memory_draft.is_some()
             || self.lsp_rename.is_some()
+            || self.debug.peripheral_edit.is_some()
     }
 
     fn handle_completion_keys(&mut self, ctx: &egui::Context) {
@@ -2823,9 +2883,7 @@ impl App {
                 );
             }
         }
-        if self.registers.items.is_empty() {
-            self.refresh_registers();
-        }
+        self.ensure_registers_loaded();
         let kind = crate::debugger::target_kind(&target);
         let configured_gdb = if self.project_debug.gdb_path.trim().is_empty() {
             self.settings.gdb_path.clone()
@@ -2937,6 +2995,8 @@ impl App {
         self.debug.registers.clear();
         self.debug.peripheral_values.clear();
         self.debug.peripheral_open.clear();
+        self.debug.peripheral_registers_open.clear();
+        self.debug.peripheral_edit = None;
         self.debug.peripheral_initialized = false;
         self.debug.peripheral_refresh = None;
         self.debug.peripheral_last_refresh = None;
@@ -3177,6 +3237,8 @@ impl App {
         self.detach_hardware_watchpoints();
         self.debug.peripheral_values.clear();
         self.debug.peripheral_open.clear();
+        self.debug.peripheral_registers_open.clear();
+        self.debug.peripheral_edit = None;
         self.debug.peripheral_initialized = false;
         self.debug.peripheral_refresh = None;
         self.debug.peripheral_last_refresh = None;
@@ -3531,41 +3593,77 @@ impl App {
             return;
         }
         let filter = self.debug.peripheral_filter.trim().to_lowercase();
-        let mut groups: BTreeMap<String, Vec<u64>> = BTreeMap::new();
-        for item in self.registers.items.iter().filter(|item| {
-            filter.is_empty()
-                || item.name.to_lowercase().contains(&filter)
-                || item.description.to_lowercase().contains(&filter)
-                || format!("0x{:08X}", item.address)
-                    .to_lowercase()
-                    .contains(&filter)
-        }) {
-            let group = item.name.split('.').next().unwrap_or(&item.name).to_owned();
-            groups.entry(group).or_default().push(item.address);
-        }
-        if groups.is_empty() {
-            return;
-        }
-        if !self.debug.peripheral_initialized {
-            if let Some(first) = groups.keys().next().cloned() {
-                self.debug.peripheral_open.insert(first);
-            }
-            self.debug.peripheral_initialized = true;
-        }
         let filter_active = !filter.is_empty();
         let mut selected = Vec::new();
-        for (group, addresses) in &groups {
-            if !filter_active && !self.debug.peripheral_open.contains(group) {
-                continue;
+        if self.registers.peripherals.is_empty() {
+            let mut groups: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+            for item in self.registers.items.iter().filter(|item| {
+                filter.is_empty()
+                    || item.name.to_lowercase().contains(&filter)
+                    || item.description.to_lowercase().contains(&filter)
+                    || format!("0x{:08X}", item.address)
+                        .to_lowercase()
+                        .contains(&filter)
+            }) {
+                let group = item.name.split('.').next().unwrap_or(&item.name).to_owned();
+                groups.entry(group).or_default().push(item.address);
             }
-            for address in addresses {
+            if groups.is_empty() {
+                return;
+            }
+            if !self.debug.peripheral_initialized {
+                if let Some(first) = groups.keys().next().cloned() {
+                    self.debug.peripheral_open.insert(first);
+                }
+                self.debug.peripheral_initialized = true;
+            }
+            for (group, addresses) in &groups {
+                if !filter_active && !self.debug.peripheral_open.contains(group) {
+                    continue;
+                }
+                for address in addresses {
+                    if selected.len() >= 160 {
+                        break;
+                    }
+                    selected.push(*address);
+                }
                 if selected.len() >= 160 {
                     break;
                 }
-                selected.push(*address);
             }
-            if selected.len() >= 160 {
-                break;
+        } else {
+            if !self.debug.peripheral_initialized {
+                if let Some(first) = self.registers.peripherals.first() {
+                    self.debug.peripheral_open.insert(first.name.clone());
+                }
+                self.debug.peripheral_initialized = true;
+            }
+            for peripheral in &self.registers.peripherals {
+                let matched = filter.is_empty()
+                    || peripheral.name.to_lowercase().contains(&filter)
+                    || peripheral.description.to_lowercase().contains(&filter)
+                    || peripheral.registers.iter().any(|register| {
+                        register.name.to_lowercase().contains(&filter)
+                            || register.description.to_lowercase().contains(&filter)
+                            || format!("0x{:08X}", peripheral.base.wrapping_add(register.offset))
+                                .to_lowercase()
+                                .contains(&filter)
+                    });
+                if !matched {
+                    continue;
+                }
+                if !filter_active && !self.debug.peripheral_open.contains(&peripheral.name) {
+                    continue;
+                }
+                for register in &peripheral.registers {
+                    if selected.len() >= 160 {
+                        break;
+                    }
+                    selected.push(peripheral.base.wrapping_add(register.offset));
+                }
+                if selected.len() >= 160 {
+                    break;
+                }
             }
         }
         if selected.is_empty() {
@@ -6806,7 +6904,7 @@ impl App {
         }
         if registers_open {
             self.registers.open = true;
-            self.refresh_registers();
+            self.ensure_registers_loaded();
         }
         if debug_continue {
             self.debug_continue();
@@ -7592,7 +7690,7 @@ impl App {
                 }
                 Action::OpenRegisters => {
                     self.registers.open = true;
-                    self.refresh_registers();
+                    self.ensure_registers_loaded();
                 }
                 Action::OpenHex(path) => self.open_hex(&path),
                 Action::OpenArrayGenerator => self.open_array_generator(ctx),
@@ -8350,6 +8448,10 @@ impl eframe::App for App {
         }
         if self.lsp_rename.is_some() {
             self.show_lsp_rename(&ctx);
+            actions.clear();
+        }
+        if self.debug.peripheral_edit.is_some() {
+            self.show_peripheral_edit(&ctx);
             actions.clear();
         }
         let modal_open = self.has_modal();

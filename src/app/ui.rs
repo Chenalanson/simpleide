@@ -3133,6 +3133,193 @@ impl App {
         }
     }
 
+    pub(super) fn show_peripheral_edit(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.debug.peripheral_edit.take() else {
+            return;
+        };
+        let mut write = false;
+        let mut cancel = false;
+        let modal = egui::Modal::new(Id::new("simple_embedded_peripheral_edit_modal")).frame(
+            Frame::new()
+                .fill(theme::panel())
+                .stroke(Stroke::new(1.0_f32, theme::border()))
+                .corner_radius(10)
+                .inner_margin(Margin::symmetric(20, 16)),
+        );
+        modal.show(ctx, |ui| {
+            ui.set_width(440.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(if let Some(field) = &draft.field {
+                        format!(
+                            "修改位域 {}.{}.{}",
+                            draft.peripheral, draft.register.name, field.name
+                        )
+                    } else {
+                        format!("修改寄存器 {}.{}", draft.peripheral, draft.register.name)
+                    })
+                    .size(17.0)
+                    .strong()
+                    .color(theme::text()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if window_close_button(ui) {
+                        cancel = true;
+                    }
+                });
+            });
+            ui.add_space(5.0);
+            ui.label(
+                RichText::new(format!(
+                    "地址 0x{:08X} · {}{}",
+                    draft.address, draft.register.size, " 位"
+                ))
+                .monospace()
+                .size(11.0)
+                .color(theme::text_dim()),
+            );
+            if let Some(field) = &draft.field {
+                ui.label(
+                    RichText::new(format!(
+                        "位域 [{}:{}] · {} 位",
+                        field.offset + field.width - 1,
+                        field.offset,
+                        field.width
+                    ))
+                    .monospace()
+                    .size(10.5)
+                    .color(theme::text_faint()),
+                );
+            }
+            if let Some(value) = draft.register_value {
+                ui.label(
+                    RichText::new(format!("当前寄存器值 0x{value:08X}"))
+                        .monospace()
+                        .size(11.0)
+                        .color(theme::success()),
+                );
+            }
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(if draft.field.is_some() {
+                    "输入新的位域值："
+                } else {
+                    "输入新的寄存器值："
+                })
+                .size(11.0)
+                .color(theme::text_dim()),
+            );
+            let response = ui.add(
+                TextEdit::singleline(&mut draft.input)
+                    .desired_width(f32::INFINITY)
+                    .font(FontId::monospace(13.0))
+                    .hint_text("0x00000000 或十进制"),
+            );
+            response.request_focus();
+            if let Some(error) = &draft.error {
+                ui.label(RichText::new(error).size(10.5).color(theme::error()));
+            }
+            ui.add_space(10.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.add(theme::primary_button("写入")).clicked() {
+                    write = true;
+                }
+                if ui.add(theme::secondary_button("取消")).clicked() {
+                    cancel = true;
+                }
+            });
+            if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                write = true;
+            }
+            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            }
+        });
+        if cancel {
+            self.debug.peripheral_edit = None;
+            return;
+        }
+        if !write {
+            self.debug.peripheral_edit = Some(draft);
+            return;
+        }
+        let Some(value) = crate::memory::parse_number(&draft.input) else {
+            draft.error = Some("数值格式无效，请输入 0x 开头的十六进制或十进制".to_owned());
+            self.debug.peripheral_edit = Some(draft);
+            return;
+        };
+        if self.debug.running {
+            draft.error = Some("目标正在运行，请先暂停后再写入".to_owned());
+            self.debug.peripheral_edit = Some(draft);
+            return;
+        }
+        let width = draft
+            .field
+            .as_ref()
+            .map(|field| field.width)
+            .unwrap_or(draft.register.size)
+            .clamp(1, 64);
+        let mask = if width >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << width) - 1
+        };
+        let value = value & mask;
+        let write_value = if let Some(field) = &draft.field {
+            let Some(register_value) = draft.register_value else {
+                draft.error = Some("寄存器当前值尚未读取，请稍后重试".to_owned());
+                self.debug.peripheral_edit = Some(draft);
+                return;
+            };
+            let field_width = field.width.clamp(1, 64);
+            let field_mask = if field_width >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << field_width) - 1
+            };
+            let shift = field.offset.min(63);
+            (register_value & !(field_mask << shift)) | ((value & field_mask) << shift)
+        } else {
+            value
+        };
+        let type_name = match draft.register.size {
+            1..=8 => "unsigned char",
+            9..=16 => "unsigned short",
+            17..=32 => "unsigned int",
+            _ => "unsigned long long",
+        };
+        let digits = width.div_ceil(4).max(1) as usize;
+        let target = if let Some(field) = &draft.field {
+            format!(
+                "{}.{}.{}",
+                draft.peripheral, draft.register.name, field.name
+            )
+        } else {
+            format!("{}.{}", draft.peripheral, draft.register.name)
+        };
+        let Some(session) = self.debug.session.as_mut() else {
+            draft.error = Some("没有活动的调试会话".to_owned());
+            self.debug.peripheral_edit = Some(draft);
+            return;
+        };
+        session.send(&format!(
+            "set {{{type_name}}}0x{:08X} = 0x{write_value:0digits$X}",
+            draft.address
+        ));
+        self.debug
+            .peripheral_values
+            .insert(draft.address, format!("0x{write_value:08X}"));
+        self.debug.peripheral_refresh = None;
+        self.debug.peripheral_last_refresh = None;
+        self.refresh_debug_peripheral();
+        self.debug.peripheral_edit = None;
+        self.set_toast(
+            format!("已写入 {target} = 0x{write_value:0digits$X}"),
+            Severity::Success,
+        );
+        ctx.request_repaint();
+    }
+
     pub(super) fn show_lsp_rename(&mut self, ctx: &egui::Context) {
         let Some(mut dialog) = self.lsp_rename.take() else {
             return;
@@ -4722,9 +4909,7 @@ impl App {
                         self.debug.watch_tab == DebugSideTab::Peripherals,
                     ) {
                         self.debug.watch_tab = DebugSideTab::Peripherals;
-                        if self.registers.items.is_empty() {
-                            self.refresh_registers();
-                        }
+                        self.ensure_registers_loaded();
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let color = if pending {
@@ -5024,7 +5209,7 @@ impl App {
                                 .id(Id::new("simple_embedded_peripheral_filter"))
                                 .font(FontId::proportional(13.0))
                                 .desired_width(f32::INFINITY)
-                                .hint_text("搜索外设寄存器名、地址或说明"),
+                                .hint_text("搜索外设、寄存器名、地址或说明"),
                         );
                         if search.changed() {
                             self.debug.peripheral_last_refresh = None;
@@ -5036,32 +5221,65 @@ impl App {
                                 "未找到 SVD/寄存器定义；请把芯片支持包（.pack）放到工程根目录",
                             );
                             ui.label(RichText::new(message).size(11.5).color(theme::warning()));
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add(small_flat_button("导入 SVD", theme::text_dim()))
+                                    .on_hover_text("把芯片 SVD 复制到工程根目录并刷新外设/位域")
+                                    .clicked()
+                                {
+                                    self.import_svd();
+                                }
+                                if ui
+                                    .add(small_flat_button("重新扫描", theme::text_dim()))
+                                    .on_hover_text("重新扫描工程 SVD、芯片支持包和 Keil DFP")
+                                    .clicked()
+                                {
+                                    self.refresh_registers();
+                                    self.debug.peripheral_values.clear();
+                                    self.debug.peripheral_open.clear();
+                                    self.debug.peripheral_registers_open.clear();
+                                    self.debug.peripheral_initialized = false;
+                                    self.debug.peripheral_last_refresh = None;
+                                    if !self.registers.items.is_empty() {
+                                        self.refresh_debug_peripheral();
+                                    }
+                                }
+                            });
                             return;
                         }
                         let filter = self.debug.peripheral_filter.trim().to_lowercase();
                         let filter_active = !filter.is_empty();
+                        let structured = !self.registers.peripherals.is_empty();
                         let mut groups: BTreeMap<String, Vec<(String, u64, String)>> =
                             BTreeMap::new();
-                        for item in self.registers.items.iter().filter(|item| {
-                            filter.is_empty()
-                                || item.name.to_lowercase().contains(&filter)
-                                || item.description.to_lowercase().contains(&filter)
-                                || format!("0x{:08X}", item.address)
-                                    .to_lowercase()
-                                    .contains(&filter)
-                        }) {
-                            let group = item
-                                .name
-                                .split('.')
-                                .next()
-                                .unwrap_or(&item.name)
-                                .to_owned();
-                            groups.entry(group).or_default().push((
-                                item.name.clone(),
-                                item.address,
-                                item.description.clone(),
-                            ));
+                        if !structured {
+                            for item in self.registers.items.iter().filter(|item| {
+                                filter.is_empty()
+                                    || item.name.to_lowercase().contains(&filter)
+                                    || item.description.to_lowercase().contains(&filter)
+                                    || format!("0x{:08X}", item.address)
+                                        .to_lowercase()
+                                        .contains(&filter)
+                            }) {
+                                let group = item
+                                    .name
+                                    .split('.')
+                                    .next()
+                                    .unwrap_or(&item.name)
+                                    .to_owned();
+                                groups.entry(group).or_default().push((
+                                    item.name.clone(),
+                                    item.address,
+                                    item.description.clone(),
+                                ));
+                            }
                         }
+                        let group_count = if structured {
+                            self.registers.peripherals.len()
+                        } else {
+                            groups.len()
+                        };
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(&self.registers.source)
@@ -5071,7 +5289,7 @@ impl App {
                             ui.label(
                                 RichText::new(format!(
                                     "{} 组 · 每次读取前 160 个",
-                                    groups.len()
+                                    group_count
                                 ))
                                 .size(10.0)
                                 .color(theme::text_faint()),
@@ -5082,6 +5300,7 @@ impl App {
                                     .clicked()
                                 {
                                     self.debug.peripheral_open.clear();
+                                    self.debug.peripheral_registers_open.clear();
                                     self.debug.peripheral_initialized = true;
                                     self.debug.peripheral_values.clear();
                                     self.debug.peripheral_last_refresh = None;
@@ -5091,8 +5310,17 @@ impl App {
                                     .add(small_flat_button("展开全部", theme::text_dim()))
                                     .clicked()
                                 {
-                                    for group in groups.keys() {
-                                        self.debug.peripheral_open.insert(group.clone());
+                                    if structured {
+                                        self.debug.peripheral_open = self
+                                            .registers
+                                            .peripherals
+                                            .iter()
+                                            .map(|peripheral| peripheral.name.clone())
+                                            .collect();
+                                    } else {
+                                        for group in groups.keys() {
+                                            self.debug.peripheral_open.insert(group.clone());
+                                        }
                                     }
                                     self.debug.peripheral_initialized = true;
                                     self.debug.peripheral_last_refresh = None;
@@ -5101,137 +5329,442 @@ impl App {
                             });
                         });
                         ui.label(
-                            RichText::new("点击外设名称展开/折叠；搜索时自动展开匹配分组。")
-                                .size(9.5)
-                                .color(theme::text_faint()),
+                            RichText::new(if structured {
+                                "点击外设名称展开寄存器，点击寄存器名称或左侧箭头展开位域；点击“改”写入寄存器或位域。"
+                            } else {
+                                "未找到 SVD，当前使用头文件宏；把 .svd 放到工程根目录或导入包含 SVD 的 .pack 可显示完整外设和位域。"
+                            })
+                            .size(9.5)
+                            .color(theme::text_faint()),
                         );
+                        if !structured
+                            && ui
+                                .add(small_flat_button("导入 SVD", theme::text_dim()))
+                                .on_hover_text("把芯片 SVD 复制到工程根目录并刷新外设/位域")
+                                .clicked()
+                        {
+                            self.import_svd();
+                        }
                         ui.add_space(4.0);
                         let remaining = ui.available_height();
-                        let address_width = 92.0;
-                        let value_width = 84.0;
+                        let address_width = 82.0;
+                        let value_width = 76.0;
+                        let name_width = 112.0;
                         let mut toggle: Option<String> = None;
+                        let mut toggle_peripheral: Option<String> = None;
+                        let mut toggle_register: Option<String> = None;
+                        let mut edit_request: Option<PeripheralEditRequest> = None;
                         ScrollArea::vertical()
                             .id_salt("simple_embedded_peripheral_list")
                             .max_height(remaining)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                if groups.is_empty() {
-                                    ui.label(
-                                        RichText::new("没有匹配的外设寄存器")
-                                            .size(11.5)
-                                            .color(theme::text_faint()),
-                                    );
-                                    return;
-                                }
-                                let name_width = 168.0;
-                                ui.horizontal(|ui| {
-                                    for (label, size) in [
-                                        ("寄存器", name_width),
-                                        ("地址", address_width),
-                                        ("值", value_width),
-                                    ] {
-                                        ui.add_sized(
-                                            [size, 18.0],
-                                            Label::new(
-                                                RichText::new(label)
-                                                    .size(10.5)
-                                                    .color(theme::text_faint()),
-                                            ),
-                                        );
-                                    }
-                                });
-                                ui.add_space(2.0);
-                                for (group, items) in &groups {
-                                    let open = filter_active
-                                        || self.debug.peripheral_open.contains(group);
-                                    let arrow = if open { "v" } else { ">" };
-                                    let color = if open {
-                                        theme::accent()
-                                    } else {
-                                        theme::text()
-                                    };
-                                    let (header_rect, header_response) = ui.allocate_exact_size(
-                                        egui::vec2(ui.available_width(), 22.0),
-                                        Sense::click(),
-                                    );
-                                    if ui.is_rect_visible(header_rect) {
-                                        let painter = ui.painter();
-                                        painter.text(
-                                            egui::pos2(header_rect.left() + 4.0, header_rect.center().y),
-                                            Align2::LEFT_CENTER,
-                                            format!("{arrow}  {group}"),
-                                            FontId::proportional(12.5),
-                                            color,
-                                        );
-                                        painter.text(
-                                            egui::pos2(header_rect.right() - 4.0, header_rect.center().y),
-                                            Align2::RIGHT_CENTER,
-                                            format!("{} 个", items.len()),
-                                            FontId::proportional(9.5),
-                                            theme::text_faint(),
-                                        );
-                                    }
-                                    if header_response
-                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                        .clicked()
-                                    {
-                                        toggle = Some(group.clone());
-                                    }
-                                    if !open {
-                                        ui.add_space(4.0);
-                                        continue;
-                                    }
-                                    for (name, address, description) in items {
-                                        let value = self
-                                            .debug
-                                            .peripheral_values
-                                            .get(address)
-                                            .map(String::as_str)
-                                            .unwrap_or("—");
-                                        ui.horizontal(|ui| {
-                                            let label = ui.add_sized(
-                                                [name_width, 22.0],
-                                                Label::new(
-                                                    RichText::new(name)
-                                                        .monospace()
-                                                        .size(11.5)
-                                                        .color(theme::text()),
-                                                )
-                                                .truncate(),
-                                            );
-                                            label.on_hover_text(if description.is_empty() {
-                                                name
-                                            } else {
-                                                description
+                                if structured {
+                                    let mut visible_peripherals = 0usize;
+                                    for peripheral in &self.registers.peripherals {
+                                        let matched = filter.is_empty()
+                                            || peripheral.name.to_lowercase().contains(&filter)
+                                            || peripheral
+                                                .description
+                                                .to_lowercase()
+                                                .contains(&filter)
+                                            || peripheral.registers.iter().any(|register| {
+                                                register.name.to_lowercase().contains(&filter)
+                                                    || register
+                                                        .description
+                                                        .to_lowercase()
+                                                        .contains(&filter)
+                                                    || format!(
+                                                        "0x{:08X}",
+                                                        peripheral.base.wrapping_add(register.offset)
+                                                    )
+                                                    .to_lowercase()
+                                                    .contains(&filter)
                                             });
+                                        if !matched {
+                                            continue;
+                                        }
+                                        visible_peripherals += 1;
+                                        let open = filter_active
+                                            || self
+                                                .debug
+                                                .peripheral_open
+                                                .contains(&peripheral.name);
+                                        let (header_rect, header_response) = ui
+                                            .allocate_exact_size(
+                                                egui::vec2(ui.available_width(), 22.0),
+                                                Sense::click(),
+                                            );
+                                        if ui.is_rect_visible(header_rect) {
+                                            let painter = ui.painter();
+                                            paint_fold_chevron(
+                                                painter,
+                                                egui::pos2(
+                                                    header_rect.left() + 8.0,
+                                                    header_rect.center().y,
+                                                ),
+                                                open,
+                                            );
+                                            painter.text(
+                                                egui::pos2(
+                                                    header_rect.left() + 20.0,
+                                                    header_rect.center().y,
+                                                ),
+                                                Align2::LEFT_CENTER,
+                                                &peripheral.name,
+                                                FontId::monospace(12.5),
+                                                if open {
+                                                    theme::accent()
+                                                } else {
+                                                    theme::text()
+                                                },
+                                            );
+                                            painter.text(
+                                                egui::pos2(
+                                                    header_rect.right() - 4.0,
+                                                    header_rect.center().y,
+                                                ),
+                                                Align2::RIGHT_CENTER,
+                                                format!("{} 个", peripheral.registers.len()),
+                                                FontId::proportional(9.5),
+                                                theme::text_faint(),
+                                            );
+                                        }
+                                        if header_response
+                                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                            .clicked()
+                                        {
+                                            toggle_peripheral = Some(peripheral.name.clone());
+                                        }
+                                        if !open {
+                                            ui.add_space(4.0);
+                                            continue;
+                                        }
+                                        for register in &peripheral.registers {
+                                            let address =
+                                                peripheral.base.wrapping_add(register.offset);
+                                            let key =
+                                                format!("{}.{}", peripheral.name, register.name);
+                                            let register_open = self
+                                                .debug
+                                                .peripheral_registers_open
+                                                .contains(&key);
+                                            let raw = self
+                                                .debug
+                                                .peripheral_values
+                                                .get(&address)
+                                                .cloned();
+                                            let value = raw
+                                                .as_deref()
+                                                .and_then(crate::memory::parse_number);
+                                            let value_text =
+                                                peripheral_register_text(raw.as_deref(), register.size);
+                                            ui.horizontal(|ui| {
+                                                ui.add_space(14.0);
+                                                let arrow = if register_open { "v" } else { ">" };
+                                                if !register.fields.is_empty() {
+                                                    let response = ui
+                                                        .add(
+                                                            egui::Label::new(
+                                                                RichText::new(arrow)
+                                                                    .monospace()
+                                                                    .size(10.5)
+                                                                    .color(theme::text_faint()),
+                                                            )
+                                                            .sense(Sense::click()),
+                                                        )
+                                                        .on_hover_cursor(
+                                                            egui::CursorIcon::PointingHand,
+                                                        );
+                                                    if response.clicked() {
+                                                        toggle_register = Some(key.clone());
+                                                    }
+                                                } else {
+                                                    ui.add_space(10.0);
+                                                }
+                                                let name = ui.add_sized(
+                                                    [name_width, 22.0],
+                                                    Label::new(
+                                                        RichText::new(&register.name)
+                                                            .monospace()
+                                                            .size(11.5)
+                                                            .color(theme::text()),
+                                                    )
+                                                    .truncate()
+                                                    .sense(Sense::click()),
+                                                );
+                                                let name = if register.fields.is_empty() {
+                                                    name
+                                                } else {
+                                                    name.on_hover_cursor(
+                                                        egui::CursorIcon::PointingHand,
+                                                    )
+                                                };
+                                                if !register.fields.is_empty() && name.clicked() {
+                                                    toggle_register = Some(key.clone());
+                                                }
+                                                let tip = if register.description.is_empty() {
+                                                    register.name.clone()
+                                                } else {
+                                                    register.description.clone()
+                                                };
+                                                let tip = if register.access.is_empty() {
+                                                    tip
+                                                } else {
+                                                    format!("{tip} · 访问 {}", register.access)
+                                                };
+                                                name.on_hover_text(tip);
+                                                ui.add_sized(
+                                                    [address_width, 22.0],
+                                                    Label::new(
+                                                        RichText::new(format!("0x{address:08X}"))
+                                                            .monospace()
+                                                            .size(10.5)
+                                                            .color(theme::text_faint()),
+                                                    ),
+                                                );
+                                                let color = if value_text == "无法读取" {
+                                                    theme::error()
+                                                } else if value_text == "—" {
+                                                    theme::text_faint()
+                                                } else {
+                                                    theme::success()
+                                                };
+                                                ui.add_sized(
+                                                    [value_width, 22.0],
+                                                    Label::new(
+                                                        RichText::new(&value_text)
+                                                            .monospace()
+                                                            .size(11.0)
+                                                            .color(color),
+                                                    ),
+                                                );
+                                                if self.debug.session.is_some()
+                                                    && ui
+                                                        .add(small_flat_button("改", theme::text_dim()))
+                                                        .on_hover_text("修改寄存器")
+                                                        .clicked()
+                                                {
+                                                    edit_request = Some((
+                                                        peripheral.name.clone(),
+                                                        register.clone(),
+                                                        address,
+                                                        None,
+                                                        value,
+                                                    ));
+                                                }
+                                            });
+                                            if register_open && !register.fields.is_empty() {
+                                                for field in &register.fields {
+                                                    let field_text = peripheral_field_text(
+                                                        raw.as_deref(),
+                                                        field,
+                                                    );
+                                                    ui.horizontal(|ui| {
+                                                        ui.add_space(40.0);
+                                                        let name = ui.add_sized(
+                                                            [96.0, 20.0],
+                                                            Label::new(
+                                                                RichText::new(&field.name)
+                                                                    .monospace()
+                                                                    .size(10.5)
+                                                                    .color(theme::text_dim()),
+                                                            )
+                                                            .truncate(),
+                                                        );
+                                                        let tip = if field.description.is_empty() {
+                                                            field.name.clone()
+                                                        } else {
+                                                            field.description.clone()
+                                                        };
+                                                        let tip = if field.access.is_empty() {
+                                                            tip
+                                                        } else {
+                                                            format!("{tip} · 访问 {}", field.access)
+                                                        };
+                                                        name.on_hover_text(tip);
+                                                        ui.add_sized(
+                                                            [44.0, 20.0],
+                                                            Label::new(
+                                                                RichText::new(format!(
+                                                                    "[{}:{}]",
+                                                                    field.offset + field.width - 1,
+                                                                    field.offset
+                                                                ))
+                                                                .monospace()
+                                                                .size(10.0)
+                                                                .color(theme::text_faint()),
+                                                            ),
+                                                        );
+                                                        let color = if field_text == "—" {
+                                                            theme::text_faint()
+                                                        } else {
+                                                            theme::success()
+                                                        };
+                                                        ui.add_sized(
+                                                            [62.0, 20.0],
+                                                            Label::new(
+                                                                RichText::new(&field_text)
+                                                                    .monospace()
+                                                                    .size(10.0)
+                                                                    .color(color),
+                                                            ),
+                                                        );
+                                                        if self.debug.session.is_some()
+                                                            && ui
+                                                                .add(small_flat_button(
+                                                                    "改",
+                                                                    theme::text_faint(),
+                                                                ))
+                                                                .on_hover_text("修改位域")
+                                                                .clicked()
+                                                        {
+                                                            edit_request = Some((
+                                                                peripheral.name.clone(),
+                                                                register.clone(),
+                                                                address,
+                                                                Some(field.clone()),
+                                                                value,
+                                                            ));
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        ui.add_space(6.0);
+                                    }
+                                    if visible_peripherals == 0 {
+                                        ui.label(
+                                            RichText::new("没有匹配的外设")
+                                                .size(11.5)
+                                                .color(theme::text_faint()),
+                                        );
+                                    }
+                                } else {
+                                    if groups.is_empty() {
+                                        ui.label(
+                                            RichText::new("没有匹配的外设寄存器")
+                                                .size(11.5)
+                                                .color(theme::text_faint()),
+                                        );
+                                        return;
+                                    }
+                                    ui.horizontal(|ui| {
+                                        for (label, size) in [
+                                            ("寄存器", 168.0),
+                                            ("地址", 92.0),
+                                            ("值", 84.0),
+                                        ] {
                                             ui.add_sized(
-                                                [address_width, 22.0],
+                                                [size, 18.0],
                                                 Label::new(
-                                                    RichText::new(format!("0x{address:08X}"))
-                                                        .monospace()
+                                                    RichText::new(label)
                                                         .size(10.5)
                                                         .color(theme::text_faint()),
                                                 ),
                                             );
-                                            let color = if value == "无法读取" {
-                                                theme::error()
-                                            } else if value == "—" {
-                                                theme::text_faint()
-                                            } else {
-                                                theme::success()
-                                            };
-                                            ui.add_sized(
-                                                [value_width, 22.0],
-                                                Label::new(
-                                                    RichText::new(value)
-                                                        .monospace()
-                                                        .size(11.5)
-                                                        .color(color),
-                                                ),
+                                        }
+                                    });
+                                    ui.add_space(2.0);
+                                    for (group, items) in &groups {
+                                        let open = filter_active
+                                            || self.debug.peripheral_open.contains(group);
+                                        let arrow = if open { "v" } else { ">" };
+                                        let color = if open {
+                                            theme::accent()
+                                        } else {
+                                            theme::text()
+                                        };
+                                        let (header_rect, header_response) = ui
+                                            .allocate_exact_size(
+                                                egui::vec2(ui.available_width(), 22.0),
+                                                Sense::click(),
                                             );
-                                        });
+                                        if ui.is_rect_visible(header_rect) {
+                                            let painter = ui.painter();
+                                            painter.text(
+                                                egui::pos2(
+                                                    header_rect.left() + 4.0,
+                                                    header_rect.center().y,
+                                                ),
+                                                Align2::LEFT_CENTER,
+                                                format!("{arrow}  {group}"),
+                                                FontId::proportional(12.5),
+                                                color,
+                                            );
+                                            painter.text(
+                                                egui::pos2(
+                                                    header_rect.right() - 4.0,
+                                                    header_rect.center().y,
+                                                ),
+                                                Align2::RIGHT_CENTER,
+                                                format!("{} 个", items.len()),
+                                                FontId::proportional(9.5),
+                                                theme::text_faint(),
+                                            );
+                                        }
+                                        if header_response
+                                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                            .clicked()
+                                        {
+                                            toggle = Some(group.clone());
+                                        }
+                                        if !open {
+                                            ui.add_space(4.0);
+                                            continue;
+                                        }
+                                        for (name, address, description) in items {
+                                            let value = self
+                                                .debug
+                                                .peripheral_values
+                                                .get(address)
+                                                .map(String::as_str)
+                                                .unwrap_or("—");
+                                            ui.horizontal(|ui| {
+                                                let label = ui.add_sized(
+                                                    [name_width.max(150.0), 22.0],
+                                                    Label::new(
+                                                        RichText::new(name)
+                                                            .monospace()
+                                                            .size(11.5)
+                                                            .color(theme::text()),
+                                                    )
+                                                    .truncate(),
+                                                );
+                                                label.on_hover_text(if description.is_empty() {
+                                                    name
+                                                } else {
+                                                    description
+                                                });
+                                                ui.add_sized(
+                                                    [address_width, 22.0],
+                                                    Label::new(
+                                                        RichText::new(format!("0x{address:08X}"))
+                                                            .monospace()
+                                                            .size(10.5)
+                                                            .color(theme::text_faint()),
+                                                    ),
+                                                );
+                                                let color = if value == "无法读取" {
+                                                    theme::error()
+                                                } else if value == "—" {
+                                                    theme::text_faint()
+                                                } else {
+                                                    theme::success()
+                                                };
+                                                ui.add_sized(
+                                                    [value_width, 22.0],
+                                                    Label::new(
+                                                        RichText::new(value)
+                                                            .monospace()
+                                                            .size(11.5)
+                                                            .color(color),
+                                                    ),
+                                                );
+                                            });
+                                        }
+                                        ui.add_space(6.0);
                                     }
-                                    ui.add_space(6.0);
                                 }
                             });
                         if let Some(group) = toggle {
@@ -5243,6 +5776,48 @@ impl App {
                             self.debug.peripheral_initialized = true;
                             self.debug.peripheral_last_refresh = None;
                             refresh = true;
+                        }
+                        if let Some(peripheral) = toggle_peripheral {
+                            if self.debug.peripheral_open.contains(&peripheral) {
+                                self.debug.peripheral_open.remove(&peripheral);
+                            } else {
+                                self.debug.peripheral_open.insert(peripheral);
+                            }
+                            self.debug.peripheral_initialized = true;
+                            self.debug.peripheral_last_refresh = None;
+                            refresh = true;
+                        }
+                        if let Some(key) = toggle_register {
+                            if self.debug.peripheral_registers_open.contains(&key) {
+                                self.debug.peripheral_registers_open.remove(&key);
+                            } else {
+                                self.debug.peripheral_registers_open.insert(key);
+                            }
+                        }
+                        if let Some((peripheral, register, address, field, register_value)) =
+                            edit_request
+                        {
+                            let width = field
+                                .as_ref()
+                                .map(|field| field.width)
+                                .unwrap_or(register.size)
+                                .min(64);
+                            let digits = width.div_ceil(4).max(1) as usize;
+                            let current = field
+                                .as_ref()
+                                .map(|field| {
+                                    peripheral_field_number(register_value, field)
+                                })
+                                .unwrap_or_else(|| register_value.unwrap_or(0));
+                            self.debug.peripheral_edit = Some(PeripheralEditDraft {
+                                peripheral,
+                                register,
+                                address,
+                                field,
+                                input: format!("0x{current:0digits$X}"),
+                                register_value,
+                                error: None,
+                            });
                         }
                     }
                 }
@@ -10956,6 +11531,60 @@ fn debug_icon_button(
     } else {
         response.on_disabled_hover_text(tip)
     }
+}
+
+type PeripheralEditRequest = (
+    String,
+    crate::registers::SvdRegister,
+    u64,
+    Option<crate::registers::SvdField>,
+    Option<u64>,
+);
+
+fn peripheral_register_text(raw: Option<&str>, size: u32) -> String {
+    let Some(raw) = raw else {
+        return "—".to_owned();
+    };
+    if raw == "无法读取" {
+        return raw.to_owned();
+    }
+    let Some(value) = crate::memory::parse_number(raw) else {
+        return raw.to_owned();
+    };
+    match size {
+        1..=8 => format!("0x{value:02X}"),
+        9..=16 => format!("0x{value:04X}"),
+        _ => format!("0x{value:08X}"),
+    }
+}
+
+fn peripheral_field_number(value: Option<u64>, field: &crate::registers::SvdField) -> u64 {
+    let Some(value) = value else {
+        return 0;
+    };
+    let width = field.width.clamp(1, 64);
+    let mask = if width >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    };
+    (value >> field.offset.min(63)) & mask
+}
+
+fn peripheral_field_text(raw: Option<&str>, field: &crate::registers::SvdField) -> String {
+    let Some(raw) = raw else {
+        return "—".to_owned();
+    };
+    if raw == "无法读取" {
+        return "—".to_owned();
+    }
+    let Some(value) = crate::memory::parse_number(raw) else {
+        return "—".to_owned();
+    };
+    let width = field.width.clamp(1, 64);
+    let digits = width.div_ceil(4).max(1) as usize;
+    let value = peripheral_field_number(Some(value), field);
+    format!("0x{value:0digits$X}")
 }
 
 fn show_hover_info(ui: &mut egui::Ui, info: &crate::hover::HoverInfo) {
