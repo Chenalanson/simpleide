@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "context-mode": {
+        "type": "local",
+        "command": [
+          "node",
+          "tools/context-mode/node_modules/context-mode/cli.bundle.mjs"
+        ],
+        "cwd": ".",
+        "codemode": false,
+        "timeout": {
+          "startup": 60000,
+          "catalog": 60000
+        }
+      }
+    }
+  }
+}
