@@ -22,6 +22,7 @@ mod hover;
 mod icon_codec;
 mod ignore;
 mod indent;
+mod install;
 mod log;
 mod lsp;
 mod macro_check;
@@ -62,7 +63,47 @@ static ICON_FRAMES: AtomicU8 = AtomicU8::new(0);
 static ICON_FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 fn main() -> eframe::Result<()> {
-    let mut args = std::env::args_os().skip(1);
+    let raw_args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let do_uninstall = raw_args
+        .iter()
+        .any(|arg| arg.to_string_lossy() == "--uninstall-system");
+    let do_install = raw_args
+        .iter()
+        .any(|arg| arg.to_string_lossy() == "--install-system");
+    let silent = raw_args
+        .iter()
+        .any(|arg| arg.to_string_lossy() == "--silent");
+    if do_uninstall {
+        if let Err(err) = install::uninstall_system() {
+            if silent {
+                eprintln!("{err}");
+            } else {
+                install::show_error_dialog("Simple embedded 卸载", &err);
+            }
+        }
+        return Ok(());
+    }
+    if do_install {
+        match install::install_system() {
+            Ok(message) => {
+                if silent {
+                    eprintln!("{message}");
+                } else {
+                    install::show_info_dialog("Simple embedded 安装", &message);
+                }
+            }
+            Err(err) => {
+                if silent {
+                    eprintln!("{err}");
+                } else {
+                    install::show_error_dialog("Simple embedded 安装", &err);
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let mut args = raw_args.into_iter();
     let first = args.next().map(PathBuf::from).filter(|path| path.exists());
     let second = args.next().map(PathBuf::from).filter(|path| path.is_file());
     let (initial_project, initial_file) = match first {

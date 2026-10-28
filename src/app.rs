@@ -711,6 +711,11 @@ struct RelationState {
     dirty_at: Option<Instant>,
 }
 
+#[derive(Default)]
+struct InstallState {
+    receiver: Option<Receiver<Result<String, String>>>,
+}
+
 #[derive(Clone, Debug)]
 struct Diagnostic {
     path: PathBuf,
@@ -1030,6 +1035,7 @@ pub struct App {
     symbols: SymbolState,
     registers: RegisterState,
     relations: RelationState,
+    install: InstallState,
     hex: HexState,
     array: ArrayState,
     debug: DebugState,
@@ -1132,6 +1138,7 @@ impl App {
             symbols: SymbolState::default(),
             registers: RegisterState::default(),
             relations: RelationState::default(),
+            install: InstallState::default(),
             hex: HexState::default(),
             array: ArrayState::default(),
             debug: DebugState::default(),
@@ -4095,6 +4102,55 @@ impl App {
 
     fn hover_relations(&self, word: &str) -> Option<crate::relations::HoverRelations> {
         self.relations.index.as_ref()?.hover(word)
+    }
+
+    fn start_install_system(&mut self) {
+        if self.install.receiver.is_some() {
+            self.set_toast("正在安装到系统，请稍候", Severity::Info);
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.install.receiver = Some(receiver);
+        let spawned = std::thread::Builder::new()
+            .name("simple-embedded-install".to_owned())
+            .spawn(move || {
+                let _ = sender.send(crate::install::install_system());
+            });
+        if let Err(err) = spawned {
+            self.install.receiver = None;
+            self.set_toast(format!("无法启动安装任务：{err}"), Severity::Error);
+        } else {
+            self.set_toast("正在安装到系统，请稍候…", Severity::Info);
+        }
+    }
+
+    fn poll_install_system(&mut self, ctx: &egui::Context) {
+        let received = self
+            .install
+            .receiver
+            .as_ref()
+            .map(|receiver| receiver.try_recv());
+        match received {
+            Some(Ok(Ok(message))) => {
+                self.install.receiver = None;
+                self.set_toast(message, Severity::Success);
+                ctx.request_repaint();
+            }
+            Some(Ok(Err(err))) => {
+                self.install.receiver = None;
+                self.set_toast(err, Severity::Error);
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.install.receiver = None;
+                self.set_toast("安装任务已中断", Severity::Error);
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                ctx.request_repaint_after(Duration::from_millis(200));
+            }
+            None => {}
+        }
     }
 
     fn refresh_git_status(&mut self) {
@@ -8463,6 +8519,7 @@ impl eframe::App for App {
         }
         self.poll_lsp(&ctx);
         self.poll_relations(&ctx);
+        self.poll_install_system(&ctx);
         self.sync_lsp();
         self.poll_micropython();
         self.poll_debug_start();

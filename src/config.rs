@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::build::{RunSpec, TaskKind};
 use crate::flash::{FlashTool, OpenOcdConfig, PyOcdConfig};
 use crate::project_meta::ProjectMeta;
-use crate::util::{display_path, file_name, project_key, shell_quote_posix};
+use crate::util::{display_path, file_name, hide_console, project_key, shell_quote_posix};
 
 pub const APP_NAME: &str = "Simple embedded";
 pub const APP_AUTHOR: &str = "smallYYY_";
@@ -1032,7 +1032,17 @@ pub fn register_workspace_association() -> Result<PathBuf, String> {
         return Err("双击关联仅支持 Windows".to_owned());
     }
     let exe = std::env::current_exe().map_err(|err| format!("无法获取程序路径：{err}"))?;
-    let exe = display_path(&exe);
+    register_workspace_association_for(&exe)?;
+    Ok(exe)
+}
+
+/// Register `.se-workspace` for an installed executable without making the
+/// caller switch its current process path.
+pub fn register_workspace_association_for(exe: &Path) -> Result<(), String> {
+    if !cfg!(target_os = "windows") {
+        return Err("双击关联仅支持 Windows".to_owned());
+    }
+    let exe = display_path(exe);
     let extension_key = format!(r"HKCU\Software\Classes\.{WORKSPACE_EXTENSION}");
     let class_key = format!(r"HKCU\Software\Classes\{WORKSPACE_TYPE_NAME}");
     let icon_key = format!(r"HKCU\Software\Classes\{WORKSPACE_TYPE_NAME}\DefaultIcon");
@@ -1048,8 +1058,10 @@ pub fn register_workspace_association() -> Result<PathBuf, String> {
         (command_key, command),
     ];
     for (key, value) in &entries {
-        let status = std::process::Command::new("reg")
-            .args(["add", key, "/ve", "/d", value, "/f"])
+        let mut command = std::process::Command::new("reg");
+        command.args(["add", key, "/ve", "/d", value, "/f"]);
+        hide_console(&mut command);
+        let status = command
             .status()
             .map_err(|err| format!("无法调用 reg.exe：{err}"))?;
         if !status.success() {
@@ -1057,11 +1069,28 @@ pub fn register_workspace_association() -> Result<PathBuf, String> {
         }
     }
     notify_shell_association_changed();
-    Ok(PathBuf::from(exe))
+    Ok(())
+}
+
+/// Remove the `.se-workspace` file association. Used by the uninstaller.
+pub fn unregister_workspace_association() {
+    if !cfg!(target_os = "windows") {
+        return;
+    }
+    for key in [
+        format!(r"HKCU\Software\Classes\.{WORKSPACE_EXTENSION}"),
+        format!(r"HKCU\Software\Classes\{WORKSPACE_TYPE_NAME}"),
+    ] {
+        let mut command = std::process::Command::new("reg");
+        command.args(["delete", &key, "/f"]);
+        hide_console(&mut command);
+        let _ = command.status();
+    }
+    notify_shell_association_changed();
 }
 
 #[cfg(target_os = "windows")]
-fn notify_shell_association_changed() {
+pub(crate) fn notify_shell_association_changed() {
     #[link(name = "shell32")]
     unsafe extern "system" {
         fn SHChangeNotify(
@@ -1085,7 +1114,7 @@ fn notify_shell_association_changed() {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn notify_shell_association_changed() {}
+pub(crate) fn notify_shell_association_changed() {}
 
 pub fn autodetect(project_root: &Path) -> BuildConfig {
     let mut extra_paths = Vec::new();

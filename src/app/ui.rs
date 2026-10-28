@@ -8372,6 +8372,8 @@ impl App {
         let project_root = self.project.as_ref().map(|project| project.root.clone());
         let mut close = false;
         let mut save = false;
+        let mut install_system = false;
+        let mut remove_integration = false;
 
         let modal = egui::Modal::new(Id::new("simple_embedded_settings_modal"))
             .frame(
@@ -8954,6 +8956,95 @@ impl App {
                             .color(theme::text_faint()),
                         );
                         ui.add_space(8.0);
+                        settings_section(ui, "系统集成");
+                        ui.add_space(4.0);
+                        let installing = self.install.receiver.is_some();
+                        let installed = crate::install::is_installed();
+                        let current_installed = crate::install::current_is_installed();
+                        let install_location = crate::install::install_dir()
+                            .map(|path| util::display_path(&path))
+                            .unwrap_or_else(|err| err);
+                        ui.horizontal(|ui| {
+                            let label = if current_installed {
+                                "重新注册系统集成"
+                            } else if installed {
+                                "更新系统安装"
+                            } else {
+                                "安装到系统"
+                            };
+                            if ui
+                                .add_enabled(
+                                    !installing,
+                                    theme::secondary_button(label),
+                                )
+                                .on_hover_text(
+                                    "复制程序与自带工具链到用户目录，并添加开始菜单快捷方式、应用列表卸载项和文件夹右键菜单",
+                                )
+                                .clicked()
+                            {
+                                install_system = true;
+                            }
+                            if ui
+                                .add_enabled(
+                                    !installing,
+                                    theme::secondary_button("移除右键菜单与关联"),
+                                )
+                                .on_hover_text(
+                                    "移除文件夹右键菜单、开始菜单快捷方式和应用列表条目，保留安装文件",
+                                )
+                                .clicked()
+                            {
+                                remove_integration = true;
+                            }
+                            if installing {
+                                ui.spinner();
+                                ui.label(
+                                    RichText::new("正在安装…")
+                                        .size(10.0)
+                                        .color(theme::text_faint()),
+                                );
+                            }
+                        });
+                        ui.label(
+                            RichText::new(format!("安装位置：{install_location}"))
+                                .size(9.0)
+                                .color(theme::text_faint()),
+                        );
+                        if current_installed {
+                            ui.label(
+                                RichText::new("当前运行的是已安装版本")
+                                    .size(9.5)
+                                    .color(theme::success()),
+                            );
+                        } else if installed {
+                            ui.label(
+                                RichText::new("已存在安装版本，可重新安装以更新")
+                                    .size(9.5)
+                                    .color(theme::text_faint()),
+                            );
+                        }
+                        ui.label(
+                            RichText::new(
+                                "首次安装会复制或链接程序与自带工具链；工具链较大时需要一些时间。",
+                            )
+                            .size(9.0)
+                            .color(theme::text_faint()),
+                        );
+                        ui.label(
+                            RichText::new(
+                                "安装后可在资源管理器中右键文件夹，选择“用 Simple embedded 打开”；Windows 11 可能位于“显示更多选项”中。",
+                            )
+                            .size(9.0)
+                            .color(theme::text_faint()),
+                        );
+                        ui.label(
+                            RichText::new(
+                                "完整卸载：Windows 设置 → 应用 → Simple embedded，或运行 simple-embedded.exe --uninstall-system。",
+                            )
+                            .size(9.0)
+                            .color(theme::text_faint()),
+                        );
+                        ui.add_space(8.0);
                         settings_section(ui, "文件与输出");
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
@@ -9002,6 +9093,16 @@ impl App {
                 }
             });
         });
+
+        if install_system {
+            self.start_install_system();
+        }
+        if remove_integration {
+            match crate::install::remove_integration() {
+                Ok(message) => self.set_toast(message, Severity::Success),
+                Err(err) => self.set_toast(err, Severity::Error),
+            }
+        }
 
         if close {
             self.settings_draft = None;

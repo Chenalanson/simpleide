@@ -70,6 +70,7 @@ src/util.rs            路径、换行、系统集成辅助
 src/brackets.rs        注释/字符串感知的括号匹配
 src/indent.rs          缩进单元、行缩进/反缩进、回车和粘贴缩进
 src/ignore.rs          gitignore 风格匹配
+src/install.rs         Windows 用户级安装、卸载、开始菜单和文件夹右键菜单
 src/search.rs          全工程文本搜索
 src/support_pack.rs    Keil/CMSIS .pack/.pdsc 扫描、导入和元数据解析
 src/symbols.rs         C/C++/汇编符号索引
@@ -245,6 +246,14 @@ docs/                  README 截图和使用教程
 - 工作区文件：`<工程目录>\<工程名>.se-workspace`，内容是 VS Code 风格 JSON（`version`、`name`、`folders`、`settings`）。`config::write_workspace_file` 生成，`config::resolve_workspace_file` 解析；只使用第一个 folder。`register_workspace_association` 用 `reg.exe` 写入 HKCU 的 `.se-workspace` 关联，关联当前 exe。
 - 不要创建 `.eide`、`.mini-ide` 等专有工程格式，也不要修改 Keil `.uvprojx`。允许写入工程的场景：自动创建/保存 `.simple-embedded/settings.json`、用户主动生成 `.se-workspace`、保存 Makefile 工程的构建选项/C/C++ 属性时的差异同步、用户主动添加芯片支持包时复制 `.pack`/`.pdsc`。
 
+### 系统安装与 Explorer 集成
+
+- `install.rs` 提供用户级安装，不请求管理员权限。默认安装到 `%LOCALAPPDATA%\Programs\SimpleEmbedded`；可用环境变量 `SIMPLE_EMBEDDED_INSTALL_DIR` 覆盖（测试用）。安装时复制/硬链接当前 exe 和旁边的 `tools/`（跨盘时自动退回复制），跳过 `.compiler.tmp` / `.make.tmp` 打包临时目录。
+- 安装后写入 `HKCU\Software\Classes\Directory\shell\SimpleEmbedded` 和 `Directory\Background\shell\SimpleEmbedded` 的 `用 Simple embedded 打开` 菜单，命令指向安装后的 exe；开始菜单快捷方式写入 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Simple embedded.lnk`。
+- Windows 应用列表卸载项位于 `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\SimpleEmbedded`，`UninstallString` 为 `"<安装目录>\simple-embedded.exe" --uninstall-system`。卸载会删除右键菜单、快捷方式、`.se-workspace` 关联和安装目录；运行中的 exe 通过 `%TEMP%` 下的延迟 PowerShell 脚本在退出后删除，`%APPDATA%\SimpleEmbedded` 用户设置保留。
+- 配置 → 其他 → **系统集成** 提供“安装到系统 / 重新安装更新”和“移除右键菜单与关联”；安装任务在后台线程执行，状态通过 Toast 和设置页提示反馈。CLI `--install-system` / `--uninstall-system` 供脚本和 Windows 应用列表调用。
+- 右键菜单是 HKCU 用户级注册表；Windows 11 默认精简菜单中可能位于“显示更多选项”。不做 MSI、系统级 Program Files 安装或提权卸载。
+
 ## UI/产品约定
 
 - 用户界面使用中文；默认暗色主题，同时支持 50 套暗色 / 亮色主题，保持 `docs/` 截图的深色工程风格。
@@ -268,6 +277,7 @@ docs/                  README 截图和使用教程
 - SVD 外设树不展开 `dim` 数组、`cluster` 和 `enumeratedValues`；寄存器读取固定为 32 位 `x/1xw`，64 位寄存器只显示低 32 位。写入依赖 gdb `set {unsigned ...}`，目标必须暂停，只读位/外设是否真正接受写入由硬件决定。
 - 没有安装或启用 clangd 时，符号搜索、TODO、寄存器浏览器和补全/定义/引用仍是轻量索引；成员补全只解析常见的 struct/union 和变量声明，不处理宏展开、模板、继承或函数返回类型。clangd 启用后语义级定义/引用/悬停/补全/重命名以 clangd 为准；没有 clangd 诊断面板、语义高亮、代码操作或 inlay hints。
 - 悬停调用/引用索引是文本级预览，不是语义分析：同名 `static` 函数会合并，函数指针调用、宏展开、重载、继承和条件编译块无法准确解析；引用最多保留每个符号 24 处、全局 6 万条，悬停只展示前 3 个文件各 2 处。只索引已保存文件和常见 C/C++ 源码/头文件，跳过 `build` / `Debug` / `Release` / `out` / `target` / `Objects` / `Listings` 等生成目录；注释和字符串不参与。
+- 系统安装是 HKCU 用户级集成，不写 Program Files，不需要管理员权限；Windows 11 精简右键菜单可能需要点“显示更多选项”。卸载保留 `%APPDATA%\SimpleEmbedded` 用户设置、备份和最近工程；安装目录中的自带工具链较大，首次安装/更新可能需要等待后台复制或硬链接完成。
 - 内存布局的起始地址/大小只写入工程 `.simple-embedded/settings.json`，不会自动改写链接脚本；Flash/RAM 总量优先来自链接脚本，其次来自芯片支持包。`.bin` 使用内存布局里的下载起始地址。
 - 多光标支持 Alt+Click、Ctrl+Alt+Up/Down、Ctrl+D 和统一编辑；方向键只移动主光标并清除次级光标，不实现 VS Code 的多光标同时移动、Ctrl+U 回退光标和跨文件多光标。Ctrl+Alt+左键仍提供单一矩形列选择；分屏的两个窗格都可编辑，但同一个文件不能在两个窗格重复打开。
 - 代码折叠只识别 C 风格大括号块，不识别 `#if` / 函数式语言缩进块；折叠时隐藏起始行与结束行之间的块内行，保留结束行（右花括号），起始行仍可编辑，折叠状态不写入工程配置。
@@ -289,7 +299,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD 外设/寄存器/位域（含 peripheral 与 register 的 derivedFrom、bitRange/lsb-msb）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、大括号折叠范围/可编辑折叠缓冲/源行映射、Makefile 行级高亮、C_SOURCES 源文件同步/删除同步、clangd compile_commands/URI/UTF-16 位置/悬停清洗/C/C++ 文件过滤、undefined reference 符号提取、撤销深度默认值与上限、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、悬停调用/引用索引（函数调用、跨文件引用、注释/字符串过滤、多行签名、循环调用、生成目录跳过）、图标 ICO 条目与 exe 嵌入资源一致性。当前共 238 个测试。
+当前测试覆盖：配置检测、Make 命令识别与 POSIX 工具路径、SSH 命令构造、CRLF/GBK 往返、路径显示、文件树展开、高亮语言识别、ANSI 解析、日志位置与裁剪、后台命令执行、缩进/粘贴/括号、查找、gitignore/工程搜索、Git 状态与 diff、TODO、符号索引、补全替换、SVD 外设/寄存器/位域（含 peripheral 与 register 的 derivedFrom、bitRange/lsb-msb）、支持包 `.pdsc` 解析与 `.pack` 导入、OpenOCD / pyOCD 配置与命令构造、OpenOCD 接口预设与 USB VID 探针检测、OpenOCD / pyOCD GDB server 参数、并行构建环境注入、补全上下文与成员索引、十六进制、数组生成、列编辑、gdb 路径检测、ARM ELF 目标识别、ARM gdb 检测、空闲调试端口、gdb 停止位置与无代码断点解析、gdb watchpoint 行解析（含 `(gdb)` 前缀/软硬件与删除行）、OpenOCD SIGTRAP 的 print 值/探针标记解析、头文件父目录扫描与包含目录去重、ELF 全局变量/栈区/FreeRTOS 堆符号解析、二进制文件只读十六进制文档、工程配置往返、损坏工程配置检测、工作区文件解析、调试产物检测、文件复制命名和路径重映射、ELF/日志内存占用、链接脚本/PDSC 内存区域、.bin 烧录地址、C 数组越界/危险字符串函数/重复释放静态扫描、同名宏重复/宏族相同值、标识符悬停/文档注释/返回类型、设置默认值、Makefile newlib-nano 浮点开关同步、混合 CubeMX 工程按构建系统选择 Make/Keil 元数据、Makefile armclang/AC6、链接脚本芯片型号、ToolchainKind 自动解析、自动检测根目录优先并识别 Keil / MicroPython 工程、MicroPython 串口配置与端口排序/ESP32 桥接芯片识别、MicroPython base64 分块上传脚本/raw REPL 成功与错误响应解析、MicroPython 芯片文件列表解析/base64 解码、芯片文件树构建、芯片文件读取脚本缩进、芯片文件下载路径/副本命名、多光标插入/删除/选择替换/缩进/位置重映射、大括号折叠范围/可编辑折叠缓冲/源行映射、Makefile 行级高亮、C_SOURCES 源文件同步/删除同步、clangd compile_commands/URI/UTF-16 位置/悬停清洗/C/C++ 文件过滤、undefined reference 符号提取、撤销深度默认值与上限、MicroPython 固件芯片默认地址/配置校验、esptool 4/5 版本解析与命令参数、命令可用性检查、50 套主题名称/色板与暗亮分组、亮色/暗色应用调色板派生、悬停调用/引用索引（函数调用、跨文件引用、注释/字符串过滤、多行签名、循环调用、生成目录跳过）、系统安装目录复制/临时目录跳过/PowerShell 引号与快捷方式/安装路径判断、图标 ICO 条目与 exe 嵌入资源一致性。当前共 242 个测试。
 
 UI 改动后建议：
 
