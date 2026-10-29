@@ -1373,6 +1373,10 @@ pub struct App {
     /// Zoom factor to restore when leaving AI mode. Kept outside `AiState` so
     /// switching projects cannot lose the user's normal editor zoom.
     ai_zoom_before: Option<f32>,
+    /// Output/input split ratio in AI mode. The horizontal handle between the
+    /// two left panels updates it so long prompts can get more room.
+    ai_output_ratio: f32,
+    ai_split_drag: Option<(f32, f32)>,
     hex: HexState,
     array: ArrayState,
     debug: DebugState,
@@ -1483,6 +1487,8 @@ impl App {
             context_index: ContextIndexState::default(),
             ai_settings_draft: None,
             ai_zoom_before: None,
+            ai_output_ratio: 0.64,
+            ai_split_drag: None,
             hex: HexState::default(),
             array: ArrayState::default(),
             debug: DebugState::default(),
@@ -4858,6 +4864,45 @@ impl App {
         }
     }
 
+    fn export_ai_evolution(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程，再导出 evolution-user.md", Severity::Warning);
+            return;
+        };
+        let path = root.join("evolution-user.md");
+        if !path.is_file() {
+            let template = "# evolution-user.md — 项目级用户规则\n\n\
+> 本文件由 Simple embedded 在双击 AI 图标时创建，可以自由编辑。\n\
+> 每条规则建议写成“场景 / 做法 / 原因”，例如：\n\
+> - 场景：新增应用任务；做法：放在 APP/tasks/；原因：保持分层目录一致。\n\
+> 保存后，下次 AI 请求会自动读取本文件，并与全局用户规则一起注入系统提示词。\n\n\
+- 场景：<填写场景>；做法：<填写做法>；原因：<填写原因>\n";
+            if let Err(err) = crate::util::write_text_file(
+                &path,
+                template,
+                crate::util::LineEnding::Lf,
+                false,
+                crate::util::TextEncoding::Utf8,
+            ) {
+                self.set_toast(
+                    format!("创建 evolution-user.md 失败：{err}"),
+                    Severity::Error,
+                );
+                return;
+            }
+        }
+        self.ai.orb_clicks.clear();
+        self.exit_ai_mode();
+        self.open_file(path.clone());
+        self.set_toast(
+            format!(
+                "已打开 {}；编辑保存后下次 AI 请求生效",
+                util::display_path(&path)
+            ),
+            Severity::Success,
+        );
+    }
+
     fn export_ai_skill(&mut self) {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             self.set_toast("请先打开工程再导出 Skill", Severity::Warning);
@@ -5355,7 +5400,7 @@ impl App {
             .unwrap_or_default();
         let extra_skills = crate::ai::load_extra_skills();
         let references = crate::ai::load_references();
-        let evolution = crate::ai::load_user_evolution();
+        let evolution = crate::ai::load_user_evolution_for(&root);
         let use_index = !self.context_index.stale;
         self.ensure_context_index();
         let (system_prompt, context_stats) =

@@ -285,6 +285,28 @@ pub fn load_user_evolution() -> String {
     truncate_chars(&loaded.text, MAX_USER_EVOLUTION_BYTES)
 }
 
+/// Global evolution rules plus an optional project-local `evolution-user.md`.
+/// The project file is user-editable and is created by double-clicking the AI
+/// orb in AI mode.
+pub fn load_user_evolution_for(root: &Path) -> String {
+    let mut text = String::new();
+    let global = load_user_evolution();
+    if !global.trim().is_empty() {
+        text.push_str("## 全局用户规则\n\n");
+        text.push_str(global.trim());
+        text.push_str("\n\n");
+    }
+    let local = root.join("evolution-user.md");
+    if let Ok(loaded) = read_text_file(&local) {
+        if !loaded.text.trim().is_empty() {
+            text.push_str("## 项目用户规则（evolution-user.md）\n\n");
+            text.push_str(loaded.text.trim());
+            text.push('\n');
+        }
+    }
+    truncate_chars(&text, MAX_USER_EVOLUTION_BYTES)
+}
+
 pub fn append_user_evolution(rules: &[String]) -> Result<(PathBuf, usize), String> {
     let path = crate::config::ai_evolution_file();
     let added = append_evolution_rules(&path, rules)?;
@@ -340,7 +362,7 @@ pub fn export_skill_bundle(
     project_root: &Path,
     destination_parent: &Path,
 ) -> Result<PathBuf, String> {
-    let evolution = load_user_evolution();
+    let evolution = load_user_evolution_for(project_root);
     export_skill_bundle_with_evolution(project_root, destination_parent, &evolution)
 }
 
@@ -2483,6 +2505,18 @@ mod tests {
         assert!(!framework_referenced_paths(text)
             .iter()
             .any(|path| path.contains("1.2.3")));
+    }
+
+    #[test]
+    fn loads_project_evolution_user_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("evolution-user.md"),
+            "# 项目规则\n\n- 场景：示例；做法：写项目级规则；原因：共享给团队。\n",
+        );
+        let text = load_user_evolution_for(dir.path());
+        assert!(text.contains("项目用户规则"));
+        assert!(text.contains("写项目级规则"));
     }
 
     #[test]

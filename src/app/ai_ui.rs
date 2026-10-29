@@ -17,19 +17,21 @@ use crate::framework::{FrameworkDoc, GanttChart, GanttKind};
 use crate::log::Severity;
 use crate::theme;
 
-pub(super) const AI_EARLY_FOG_SECS: f32 = 0.50;
+pub(super) const AI_EARLY_FOG_SECS: f32 = 0.0;
 /// AI mode intentionally uses a larger UI scale because its panels contain a
 /// lot of dense architecture information; the normal editor keeps the user's
 /// own zoom factor.
 const AI_UI_ZOOM: f32 = 1.20;
-const TRANSITION_SECS: f32 = 3.05;
+/// Keep the enter transition short and cheap: no fog, meteor or layered-window
+/// alpha work. The four panels fade/scale in together within 200 ms.
+const TRANSITION_SECS: f32 = 0.20;
 const METEOR_RIGHT_START: f32 = 1.15;
 const METEOR_RIGHT_END: f32 = 1.95;
 const METEOR_OUTPUT_START: f32 = 1.35;
 const METEOR_OUTPUT_END: f32 = 2.25;
-const PANEL_START: f32 = 1.75;
-const PANEL_STAGGER: f32 = 0.12;
-const PANEL_DURATION: f32 = 0.82;
+const PANEL_START: f32 = 0.0;
+const PANEL_STAGGER: f32 = 0.0;
+const PANEL_DURATION: f32 = 0.18;
 const INPUT_ID: &str = "simple_embedded_ai_input";
 
 #[derive(Default)]
@@ -40,6 +42,7 @@ struct WorkbenchActions {
     rebuild_index: bool,
     refresh_skill: bool,
     orb_clicked: bool,
+    orb_double_clicked: bool,
 }
 
 #[derive(Default)]
@@ -93,14 +96,6 @@ impl App {
             .unwrap_or(TRANSITION_SECS);
         let progress = (elapsed / TRANSITION_SECS).clamp(0.0, 1.0);
 
-        if self.ai.transition.is_some() && self.ai.fog_texture.is_none() {
-            self.ai.fog_texture = Some(ui.ctx().load_texture(
-                "simple_embedded_ai_fog",
-                fog_image(256),
-                egui::TextureOptions::LINEAR_REPEAT,
-            ));
-        }
-
         let margin = 12.0_f32;
         let gap = 10.0_f32;
         let area = view.shrink(margin);
@@ -122,10 +117,55 @@ impl App {
         );
         let left_width = (architecture.left() - gap - area.left()).max(240.0);
         let left = Rect::from_min_size(area.min, egui::vec2(left_width, area.height()));
+        let available_height = (left.height() - gap).max(1.0);
+        let max_output = (available_height - 110.0).max(110.0);
         let output_height =
-            ((left.height() - gap) * 0.64).clamp(110.0, (left.height() - gap - 70.0).max(110.0));
+            (available_height * self.ai_output_ratio.clamp(0.20, 0.85)).clamp(110.0, max_output);
         let output = Rect::from_min_size(left.min, egui::vec2(left.width(), output_height));
         let input = Rect::from_min_max(egui::pos2(left.left(), output.bottom() + gap), left.max);
+
+        // Drag the bar between AI output and input to give long prompts more
+        // room. The ratio is kept on the app so it survives project switches
+        // and re-entering AI mode.
+        let split_rect = Rect::from_center_size(
+            egui::pos2(left.center().x, output.bottom() + gap * 0.5),
+            egui::vec2(left.width(), 8.0),
+        );
+        let split = ui.interact(
+            split_rect,
+            egui::Id::new("simple_embedded_ai_input_split"),
+            egui::Sense::drag(),
+        );
+        if split.drag_started() {
+            if let Some(position) = split.interact_pointer_pos() {
+                self.ai_split_drag = Some((position.y, self.ai_output_ratio));
+            }
+        }
+        if split.dragged() {
+            if let (Some((start_y, start_ratio)), Some(position)) =
+                (self.ai_split_drag, split.interact_pointer_pos())
+            {
+                self.ai_output_ratio =
+                    (start_ratio + (position.y - start_y) / available_height).clamp(0.20, 0.85);
+                ui.ctx().request_repaint();
+            }
+        }
+        if split.drag_stopped() {
+            self.ai_split_drag = None;
+        }
+        let split_color = if split.hovered() || split.dragged() {
+            theme::accent()
+        } else {
+            theme::border()
+        };
+        ui.painter().rect_filled(
+            Rect::from_center_size(split_rect.center(), egui::vec2(84.0, 3.0)),
+            2,
+            split_color,
+        );
+        if split.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
 
         let reveal_right = reveal_at(elapsed, 0);
         let reveal_output = reveal_at(elapsed, 1);
@@ -190,7 +230,9 @@ impl App {
             self.ai.input = prompt.to_owned();
             self.ai.focus_input = true;
         }
-        if workbench.orb_clicked {
+        if workbench.orb_double_clicked {
+            self.export_ai_evolution();
+        } else if workbench.orb_clicked {
             self.record_ai_orb_click();
         }
         if workbench.refresh_skill {
@@ -556,17 +598,12 @@ impl App {
                         Sense::click(),
                     );
                     let orb_center = orb_rect.center() - egui::vec2(0.0, 4.0);
-                    let pointer = ui.input(|input| input.pointer.hover_pos());
-                    let orb_hovered = orb_response.hovered()
-                        && pointer.is_some_and(|pos| pos.distance(orb_center) <= 48.0);
-                    if orb_hovered {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                    if orb_response.clicked()
-                        && orb_response
-                            .interact_pointer_pos()
-                            .is_some_and(|pos| pos.distance(orb_center) <= 48.0)
-                    {
+                    let inside_orb = orb_response
+                        .interact_pointer_pos()
+                        .is_some_and(|pos| pos.distance(orb_center) <= 48.0);
+                    if orb_response.double_clicked() && inside_orb {
+                        actions.orb_double_clicked = true;
+                    } else if orb_response.clicked() && inside_orb {
                         actions.orb_clicked = true;
                     }
                     paint_orb(
@@ -715,6 +752,13 @@ impl App {
                         self.ai.skill_builtin,
                         self.ai.skill_error.as_deref(),
                         &mut actions.refresh_skill,
+                    );
+                    ui.label(
+                        RichText::new(
+                            "双击 AI 图标：导出并编辑本项目 evolution-user.md",
+                        )
+                        .size(8.3)
+                        .color(theme::text_faint()),
                     );
 
                     ui.add_space(10.0);
@@ -1115,7 +1159,7 @@ impl App {
             );
             ui.label(
                 RichText::new(
-                    "技能自我进化：AI 会把长期偏好整理成规则，确认后写入用户目录；连续点击右侧 AI 图标 5 次（3 秒内）可导出当前 Skill。",
+                    "技能自我进化：AI 会把长期偏好整理成规则，确认后写入用户目录；双击 AI 图标可导出并编辑本项目 evolution-user.md。",
                 )
                 .size(10.0)
                 .color(theme::text_faint()),
@@ -1907,29 +1951,14 @@ fn reveal_at(elapsed: f32, index: usize) -> f32 {
     smoothstep(((elapsed - start) / PANEL_DURATION).clamp(0.0, 1.0))
 }
 
-/// Native window opacity during the transition. `0` makes the whole window
-/// (including its title bar) transparent, exposing the desktop behind it.
-pub(super) fn ai_window_alpha(elapsed: f32) -> u8 {
-    let value = if elapsed < 0.45 {
-        1.0
-    } else if elapsed < 1.20 {
-        1.0 - smoothstep((elapsed - 0.45) / 0.75)
-    } else if elapsed < 1.65 {
-        0.0
-    } else if elapsed < 2.15 {
-        smoothstep((elapsed - 1.65) / 0.50)
-    } else {
-        1.0
-    };
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+/// Native window opacity is kept opaque; the enter transition is a fast panel
+/// fade so we avoid layered-window/DWM calls every frame.
+pub(super) fn ai_window_alpha(_elapsed: f32) -> u8 {
+    255
 }
 
-fn fog_strength(elapsed: f32) -> f32 {
-    if elapsed < 0.45 {
-        1.0
-    } else {
-        (1.0 - (elapsed - 0.45) / 0.85).clamp(0.0, 1.0)
-    }
+fn fog_strength(_elapsed: f32) -> f32 {
+    0.0
 }
 
 fn smoothstep(t: f32) -> f32 {
@@ -3910,14 +3939,13 @@ mod tests {
     fn transition_duration_covers_all_panels() {
         let end = PANEL_START + 2.0 * PANEL_STAGGER + PANEL_DURATION;
         assert!(end < TRANSITION_SECS);
-        assert!(METEOR_RIGHT_END < end);
-        assert!(METEOR_OUTPUT_END < end);
+        const { assert!(TRANSITION_SECS <= 0.20) };
     }
 
     #[test]
-    fn window_alpha_exposes_desktop_and_restores() {
+    fn window_alpha_stays_opaque_during_quick_transition() {
         assert_eq!(ai_window_alpha(0.0), 255);
-        assert_eq!(ai_window_alpha(1.4), 0);
+        assert_eq!(ai_window_alpha(0.1), 255);
         assert_eq!(ai_window_alpha(2.4), 255);
     }
 
