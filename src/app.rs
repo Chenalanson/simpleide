@@ -785,6 +785,15 @@ struct AiBuildCheck {
 const MAX_AI_BUILD_ROUNDS: usize = 5;
 const MAX_AI_CLI_ROUNDS: usize = 5;
 const MAX_AI_FS_ROUNDS: usize = 6;
+/// Chat history sent with each request. The displayed answer is never
+/// truncated, but the model needs enough of previous turns to remember files,
+/// decisions and TODO state.
+const AI_HISTORY_MESSAGES: usize = 20;
+const AI_HISTORY_MESSAGE_CHARS: usize = 32_000;
+const AI_HISTORY_RETRIEVAL_CHARS: usize = 48_000;
+const AI_HISTORY_TOTAL_CHARS: usize = 128_000;
+const AI_STREAM_PREVIEW_BYTES: usize = 48_000;
+const AI_REASONING_PREVIEW_BYTES: usize = 24_000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum AiCliStatus {
@@ -5558,14 +5567,19 @@ impl App {
             .iter()
             .rev()
             .filter(|message| !message.error)
-            .take(12)
+            .take(AI_HISTORY_MESSAGES)
         {
+            let per_message = if message.model_content.is_some() {
+                AI_HISTORY_RETRIEVAL_CHARS
+            } else {
+                AI_HISTORY_MESSAGE_CHARS
+            };
             let content = crate::ai::truncate_chars(
                 message.model_content.as_deref().unwrap_or(&message.content),
-                12_000,
+                per_message,
             );
             let chars = content.chars().count();
-            if !history.is_empty() && history_chars + chars > 48_000 {
+            if !history.is_empty() && history_chars + chars > AI_HISTORY_TOTAL_CHARS {
                 break;
             }
             history_chars += chars;

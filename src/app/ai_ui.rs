@@ -12,7 +12,10 @@ use eframe::egui::{
     Rect, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, UiBuilder,
 };
 
-use super::{AiBuildStatus, AiChatMessage, AiCliStatus, AiEditStatus, AiFsStatus, App};
+use super::{
+    AiBuildStatus, AiChatMessage, AiCliStatus, AiEditStatus, AiFsStatus, App,
+    AI_REASONING_PREVIEW_BYTES, AI_STREAM_PREVIEW_BYTES,
+};
 use crate::framework::{FrameworkDoc, GanttChart, GanttKind};
 use crate::log::Severity;
 use crate::theme;
@@ -2290,8 +2293,9 @@ fn ai_message(
             }
             if message.streaming {
                 if !message.content.is_empty() {
-                    let live_tail = tail_preview(&message.content, 12_000);
+                    let live_tail = tail_preview(&message.content, AI_STREAM_PREVIEW_BYTES);
                     let live_text = live_tail.as_deref().unwrap_or(&message.content);
+                    let truncated_preview = live_tail.is_some();
                     Frame::new()
                         .fill(theme::with_alpha(theme::editor_bg(), 120))
                         .corner_radius(6)
@@ -2304,6 +2308,13 @@ fn ai_message(
                                 .wrap(),
                             );
                         });
+                    if truncated_preview {
+                        ui.label(
+                            RichText::new("生成中仅显示最近 48KB，完成后显示全文")
+                                .size(8.5)
+                                .color(theme::text_faint()),
+                        );
+                    }
                     ui.add_space(5.0);
                 }
                 ui.horizontal(|ui| {
@@ -2839,7 +2850,7 @@ fn ai_reasoning_block(ui: &mut Ui, message: &AiChatMessage, index: usize) {
             });
             if open {
                 let live_tail = if message.streaming {
-                    tail_preview(&message.reasoning, 12_000)
+                    tail_preview(&message.reasoning, AI_REASONING_PREVIEW_BYTES)
                 } else {
                     None
                 };
