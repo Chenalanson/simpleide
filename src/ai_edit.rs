@@ -52,6 +52,7 @@ pub struct AiEdit {
 pub struct ParsedEdits {
     pub text: String,
     pub edits: Vec<AiEdit>,
+    pub evolutions: Vec<String>,
 }
 
 impl AiEdit {
@@ -193,7 +194,7 @@ pub fn incomplete_edit_block(text: &str) -> bool {
         }
         let tag = trimmed[ticks..].trim_start();
         let tag = tag.split_whitespace().next().unwrap_or("");
-        if matches!(tag, "se-file" | "se-write" | "se-replace") {
+        if matches!(tag, "se-file" | "se-write" | "se-replace" | "se-evolve") {
             open_fence = Some(ticks);
         }
     }
@@ -203,6 +204,7 @@ pub fn incomplete_edit_block(text: &str) -> bool {
 pub fn parse_edits(text: &str) -> ParsedEdits {
     let mut cleaned = String::new();
     let mut edits = Vec::new();
+    let mut evolutions = Vec::new();
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let mut index = 0usize;
     while index < lines.len() {
@@ -213,7 +215,7 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
             index += 1;
             continue;
         };
-        if !matches!(tag, "se-file" | "se-write" | "se-replace") {
+        if !matches!(tag, "se-file" | "se-write" | "se-replace" | "se-evolve") {
             cleaned.push_str(line);
             index += 1;
             continue;
@@ -237,7 +239,9 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
             break;
         };
         let body = lines[index + 1..close].concat();
-        if tag == "se-replace" {
+        if tag == "se-evolve" {
+            evolutions.extend(parse_evolution_rules(&body));
+        } else if tag == "se-replace" {
             edits.push(AiEdit::replace(path, parse_pairs(&body)));
         } else {
             edits.push(AiEdit::write(path, body));
@@ -250,7 +254,18 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
     ParsedEdits {
         text: cleaned,
         edits,
+        evolutions,
     }
+}
+
+fn parse_evolution_rules(body: &str) -> Vec<String> {
+    body.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| line.trim_start_matches(['-', '*', '•']).trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .take(5)
+        .collect()
 }
 
 fn find_first_fence(lines: &[&str], start: usize, fence_len: usize) -> Option<usize> {
@@ -260,8 +275,9 @@ fn find_first_fence(lines: &[&str], start: usize, fence_len: usize) -> Option<us
 fn find_last_fence(lines: &[&str], start: usize, fence_len: usize) -> Option<usize> {
     let limit = (start..lines.len())
         .find(|index| {
-            fence_header(lines[*index].trim_start())
-                .is_some_and(|(_, tag, _)| matches!(tag, "se-file" | "se-write" | "se-replace"))
+            fence_header(lines[*index].trim_start()).is_some_and(|(_, tag, _)| {
+                matches!(tag, "se-file" | "se-write" | "se-replace" | "se-evolve")
+            })
         })
         .unwrap_or(lines.len());
     (start..limit)
@@ -567,6 +583,17 @@ mod tests {
         assert_eq!(parsed.edits.len(), 1);
         assert!(parsed.edits[0].content.contains("## 2. 软件架构"));
         assert!(parsed.edits[0].content.contains("```mermaid"));
+    }
+
+    #[test]
+    fn parses_evolution_block_without_file_edit() {
+        let reply = "已记录。\n````se-evolve\n- 目录：应用任务放 APP/tasks/\n- 命名：外设驱动统一 bsp_<外设>.c/.h\n````\n";
+        let parsed = parse_edits(reply);
+        assert!(parsed.edits.is_empty());
+        assert_eq!(parsed.evolutions.len(), 2);
+        assert!(parsed.evolutions[0].contains("APP/tasks"));
+        assert!(!parsed.text.contains("se-evolve"));
+        assert!(parsed.text.contains("已记录"));
     }
 
     #[test]

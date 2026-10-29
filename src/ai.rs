@@ -68,6 +68,10 @@ const EMBEDDED_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../.opencode/skills/stm32-embedded-dev/SKILL.md"),
     ),
     (
+        "evolution.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/evolution.md"),
+    ),
+    (
         "references/checklist.md",
         include_str!("../.opencode/skills/stm32-embedded-dev/references/checklist.md"),
     ),
@@ -250,6 +254,173 @@ pub fn load_extra_skills() -> ResourceBundle {
 
 pub fn load_references() -> ResourceBundle {
     load_resource_bundle(AiResourceKind::Reference, MAX_REFERENCE_BYTES)
+}
+
+const MAX_USER_EVOLUTION_BYTES: usize = 32_000;
+
+/// User-level rules learned from corrections. These are deliberately kept
+/// outside the project and the executable so the built-in skill can evolve
+/// without rebuilding the application.
+pub fn load_user_evolution() -> String {
+    let path = crate::config::ai_evolution_file();
+    let Ok(loaded) = read_text_file(&path) else {
+        return String::new();
+    };
+    truncate_chars(&loaded.text, MAX_USER_EVOLUTION_BYTES)
+}
+
+pub fn append_user_evolution(rules: &[String]) -> Result<(PathBuf, usize), String> {
+    let path = crate::config::ai_evolution_file();
+    let added = append_evolution_rules(&path, rules)?;
+    Ok((path, added))
+}
+
+fn append_evolution_rules(path: &Path, rules: &[String]) -> Result<usize, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("无法创建 {}：{err}", display_path(parent)))?;
+    }
+    let mut text = std::fs::read_to_string(path).unwrap_or_default();
+    if text.trim().is_empty() {
+        text.push_str("# stm32-embedded-dev 用户进化规则\n\n");
+        text.push_str("> 由 Simple embedded 的 AI 技能进化卡片追加；仅保存长期可复用偏好。\n\n");
+    }
+    let mut added = 0usize;
+    for rule in rules {
+        let rule = rule
+            .trim()
+            .trim_start_matches(['-', '*', '•'])
+            .trim()
+            .replace('\n', " ");
+        if rule.is_empty() || rule.chars().count() > 500 {
+            continue;
+        }
+        let line = format!("- {rule}");
+        if text.lines().any(|existing| existing.trim() == line) {
+            continue;
+        }
+        if text.len() + line.len() + 1 > MAX_USER_EVOLUTION_BYTES {
+            return Err("用户进化规则超过 32KB，请先清理旧规则".to_owned());
+        }
+        text.push_str(&line);
+        text.push('\n');
+        added += 1;
+    }
+    if added > 0 {
+        crate::util::write_text_file(
+            path,
+            &text,
+            crate::util::LineEnding::Lf,
+            false,
+            crate::util::TextEncoding::Utf8,
+        )?;
+    }
+    Ok(added)
+}
+
+/// Export the currently loaded skill (project/global if present, otherwise the
+/// embedded copy) plus the user evolution overlay into a new folder.
+pub fn export_skill_bundle(
+    project_root: &Path,
+    destination_parent: &Path,
+) -> Result<PathBuf, String> {
+    let evolution = load_user_evolution();
+    export_skill_bundle_with_evolution(project_root, destination_parent, &evolution)
+}
+
+fn export_skill_bundle_with_evolution(
+    project_root: &Path,
+    destination_parent: &Path,
+    evolution: &str,
+) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(destination_parent).map_err(|err| {
+        format!(
+            "无法创建导出目录 {}：{err}",
+            display_path(destination_parent)
+        )
+    })?;
+    let source = find_skill(project_root)
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .filter(|path| path.is_dir());
+    if let Some(source) = &source {
+        let src = source.canonicalize().unwrap_or_else(|_| source.clone());
+        let dst = destination_parent
+            .canonicalize()
+            .unwrap_or_else(|_| destination_parent.to_path_buf());
+        if dst.starts_with(&src) {
+            return Err("导出目录不能位于 Skill 目录内部，请选择其他位置".to_owned());
+        }
+    }
+    let target = unique_export_dir(destination_parent);
+    if let Some(source) = source {
+        copy_skill_tree(&source, &target)?;
+    } else {
+        std::fs::create_dir_all(target.join("references"))
+            .map_err(|err| format!("无法创建 {}：{err}", display_path(&target)))?;
+        for (name, body) in EMBEDDED_SKILL_FILES {
+            let path = target.join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|err| format!("无法创建 {}：{err}", display_path(parent)))?;
+            }
+            std::fs::write(&path, body)
+                .map_err(|err| format!("写入 {} 失败：{err}", display_path(&path)))?;
+        }
+    }
+    if !evolution.trim().is_empty() {
+        let evolution_path = target.join("references").join("evolution-user.md");
+        if let Some(parent) = evolution_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|err| format!("无法创建 {}：{err}", display_path(parent)))?;
+        }
+        crate::util::write_text_file(
+            &evolution_path,
+            &format!("> 从 Simple embedded 导出；导入后作为用户偏好参考。\n\n{evolution}"),
+            crate::util::LineEnding::Lf,
+            false,
+            crate::util::TextEncoding::Utf8,
+        )?;
+    }
+    Ok(target)
+}
+
+fn unique_export_dir(parent: &Path) -> PathBuf {
+    let base = "stm32-embedded-dev-export";
+    let first = parent.join(base);
+    if !first.exists() {
+        return first;
+    }
+    for index in 2..10_000 {
+        let candidate = parent.join(format!("{base}-{index}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    parent.join(format!("{base}-{}", std::process::id()))
+}
+
+fn copy_skill_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(destination)
+        .map_err(|err| format!("无法创建 {}：{err}", display_path(destination)))?;
+    let entries = std::fs::read_dir(source)
+        .map_err(|err| format!("读取 {} 失败：{err}", display_path(source)))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_skill_tree(&path, &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&path, &target)
+                .map_err(|err| format!("复制 {} 失败：{err}", display_path(&path)))?;
+        }
+    }
+    Ok(())
 }
 
 fn load_resource_bundle(kind: AiResourceKind, max_bytes: usize) -> ResourceBundle {
@@ -619,6 +790,7 @@ pub struct Context<'a> {
     pub skill: &'a SkillBundle,
     pub extra_skills: &'a ResourceBundle,
     pub references: &'a ResourceBundle,
+    pub evolution: &'a str,
 }
 
 /// Find `.opencode/skills/stm32-embedded-dev/SKILL.md` in the project, an
@@ -792,6 +964,13 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
         &context.references.text,
         MAX_REFERENCE_BYTES,
     );
+    if !context.evolution.trim().is_empty() {
+        prompt.push_str("\n\n## 用户技能进化规则（优先遵守）\n\n");
+        prompt.push_str(
+            "以下是用户通过历史纠正确认的长期规则，优先于 SKILL.md 默认写法；但仍以用户当前指令、工程现状和安全/硬件事实为准。\n\n",
+        );
+        prompt.push_str(context.evolution);
+    }
     prompt.push_str("\n\n## 工程上下文\n\n");
     let _ = writeln!(prompt, "- 工程名：{}", context.project_name);
     let _ = writeln!(prompt, "- 根目录：{}", display_path(context.root));
@@ -955,6 +1134,12 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
          <替换后的文本>\n\
          >>>>>>> REPLACE\n\
          ````\n\n\
+         当用户提出长期可复用的偏好或纠正（目录归属、命名、分层、调度、流程、代码风格等）时，在回答末尾追加一个四反引号的 se-evolve 块；IDE 会显示“AI 技能进化”卡片，用户确认后才写入用户级 evolution.md：\n\n\
+         ````se-evolve\n\
+         - 目录：应用任务放 APP/tasks/，不要在 Core/Src 新增业务文件。\n\
+         - 命名：外设驱动统一 bsp_<外设>.c/.h。\n\
+         ````\n\n\
+         se-evolve 只记录长期规则，不记录一次性需求、密钥、客户隐私或大段源码，一次最多 5 条；不确定是否长期有效时先询问用户。\n\n\
          规则：路径必须相对工程根目录，禁止绝对路径、`..`、`build` / `Debug` / `Release` / `out` / `target` 等生成目录；一次最多修改 20 个文件；SEARCH 必须能在当前文件中唯一匹配；不要修改 `.simple-embedded` 工程配置。IDE 会生成差异，只有用户点击“应用全部”后才会写入，写入前会备份到用户目录。skill 中要求输出代码块的步骤在 AI 模式下改用上述格式，解释文字照常输出。\n",
     );
     prompt.push_str(
@@ -967,7 +1152,11 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
     );
 
     if prompt.len() > MAX_SYSTEM_PROMPT_BYTES {
-        prompt.truncate(MAX_SYSTEM_PROMPT_BYTES);
+        let mut end = MAX_SYSTEM_PROMPT_BYTES;
+        while end > 0 && !prompt.is_char_boundary(end) {
+            end -= 1;
+        }
+        prompt.truncate(end);
         prompt.push_str("\n\n[工程上下文已截断，请向用户询问缺失文件]\n");
     }
     prompt
@@ -1653,7 +1842,8 @@ mod tests {
         assert!(bundle.text.contains("references/checklist.md"));
         assert!(bundle.text.contains("references/framework-template.md"));
         assert!(bundle.text.contains("references/software-arch.md"));
-        assert!(bundle.files.len() >= 10);
+        assert!(bundle.text.contains("evolution.md"));
+        assert!(bundle.files.len() >= 11);
     }
 
     #[test]
@@ -1860,6 +2050,7 @@ mod tests {
             skill: &bundle,
             extra_skills: &extra_skills,
             references: &references,
+            evolution: "user evolution marker",
         };
         let prompt = build_system_prompt(&context);
         assert!(prompt.contains("STM32G431CBTx"));
@@ -1873,6 +2064,8 @@ mod tests {
         assert!(prompt.contains("extra skill marker"));
         assert!(prompt.contains("用户导入的参考资料"));
         assert!(prompt.contains("reference marker"));
+        assert!(prompt.contains("用户技能进化规则"));
+        assert!(prompt.contains("user evolution marker"));
     }
 
     #[test]
@@ -1922,5 +2115,53 @@ mod tests {
         assert_eq!(outcome.imported, 2);
         assert!(destination.path().join("hal.md").is_file());
         assert!(destination.path().join("skill/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn evolution_rules_are_normalized_and_deduped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai/evolution/rules.md");
+        let rules = vec![
+            "- 目录：应用任务放 APP/tasks/".to_owned(),
+            "目录：应用任务放 APP/tasks/".to_owned(),
+            "命名：外设驱动统一 bsp_<外设>.c/.h".to_owned(),
+            "   ".to_owned(),
+        ];
+        assert_eq!(append_evolution_rules(&path, &rules).unwrap(), 2);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("目录：应用任务放 APP/tasks/").count(), 1);
+        assert!(text.contains("- 命名：外设驱动统一 bsp_<外设>.c/.h"));
+        assert_eq!(append_evolution_rules(&path, &rules).unwrap(), 0);
+    }
+
+    #[test]
+    fn exports_skill_tree_with_user_evolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join(".opencode/skills/stm32-embedded-dev");
+        write(&skill.join("SKILL.md"), "# Skill\n");
+        write(&skill.join("references/architecture.md"), "# Arch\n");
+        let exports = dir.path().join("exports");
+        let evolution_text = "# stm32-embedded-dev 用户进化规则\n\n- 目录：应用任务放 APP/tasks/\n";
+        let exported =
+            export_skill_bundle_with_evolution(dir.path(), &exports, evolution_text).unwrap();
+        assert_eq!(
+            exported.file_name().unwrap().to_string_lossy(),
+            "stm32-embedded-dev-export"
+        );
+        assert!(exported.join("SKILL.md").is_file());
+        assert!(exported.join("references/architecture.md").is_file());
+        let evolution =
+            std::fs::read_to_string(exported.join("references/evolution-user.md")).unwrap();
+        assert!(evolution.contains("APP/tasks/"));
+        assert!(evolution.contains("用户进化规则"));
+
+        let second = export_skill_bundle_with_evolution(dir.path(), &exports, "").unwrap();
+        assert_eq!(
+            second.file_name().unwrap().to_string_lossy(),
+            "stm32-embedded-dev-export-2"
+        );
+
+        let error = export_skill_bundle_with_evolution(dir.path(), &skill, "").unwrap_err();
+        assert!(error.contains("Skill 目录内部"));
     }
 }

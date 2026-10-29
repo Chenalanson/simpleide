@@ -741,6 +741,9 @@ struct AiChatMessage {
     edit_status: AiEditStatus,
     apply_error: Option<String>,
     backup_dir: Option<PathBuf>,
+    evolutions: Vec<String>,
+    evolution_status: AiEditStatus,
+    evolution_error: Option<String>,
 }
 
 impl AiChatMessage {
@@ -755,6 +758,9 @@ impl AiChatMessage {
             edit_status: AiEditStatus::Pending,
             apply_error: None,
             backup_dir: None,
+            evolutions: Vec::new(),
+            evolution_status: AiEditStatus::Pending,
+            evolution_error: None,
         }
     }
 }
@@ -792,6 +798,7 @@ struct AiState {
     import_kind: Option<crate::ai::AiResourceKind>,
     import_status: Option<String>,
     import_error: Option<String>,
+    orb_clicks: Vec<Instant>,
 }
 
 struct AiSettingsDraft {
@@ -4545,6 +4552,46 @@ impl App {
         util::open_in_file_manager(&directory);
     }
 
+    fn record_ai_orb_click(&mut self) {
+        let now = Instant::now();
+        if self
+            .ai
+            .orb_clicks
+            .first()
+            .is_some_and(|first| now.duration_since(*first) > Duration::from_secs(3))
+        {
+            self.ai.orb_clicks.clear();
+        }
+        self.ai.orb_clicks.push(now);
+        if self.ai.orb_clicks.len() >= 5 {
+            self.ai.orb_clicks.clear();
+            self.export_ai_skill();
+        }
+    }
+
+    fn export_ai_skill(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程再导出 Skill", Severity::Warning);
+            return;
+        };
+        let Some(parent) = rfd::FileDialog::new()
+            .set_title("导出进化后的 Skill")
+            .pick_folder()
+        else {
+            return;
+        };
+        match crate::ai::export_skill_bundle(&root, &parent) {
+            Ok(path) => {
+                self.set_toast(
+                    format!("Skill 已导出到 {}", util::display_path(&path)),
+                    Severity::Success,
+                );
+                util::open_in_file_manager(&path);
+            }
+            Err(err) => self.set_toast(format!("导出 Skill 失败：{err}"), Severity::Error),
+        }
+    }
+
     fn refresh_ai_framework(&mut self, force: bool) {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             self.ai.framework = None;
@@ -4685,6 +4732,7 @@ impl App {
             .unwrap_or_default();
         let extra_skills = crate::ai::load_extra_skills();
         let references = crate::ai::load_references();
+        let evolution = crate::ai::load_user_evolution();
         let system_prompt = crate::ai::build_system_prompt(&crate::ai::Context {
             root: &root,
             project_name: &project_name,
@@ -4699,6 +4747,7 @@ impl App {
             skill: &skill,
             extra_skills: &extra_skills,
             references: &references,
+            evolution: &evolution,
         });
         self.ai
             .messages
@@ -4743,6 +4792,9 @@ impl App {
             edit_status: AiEditStatus::Pending,
             apply_error: None,
             backup_dir: None,
+            evolutions: Vec::new(),
+            evolution_status: AiEditStatus::Pending,
+            evolution_error: None,
         });
         let spawned = std::thread::Builder::new()
             .name("simple-embedded-ai".to_owned())
@@ -4797,9 +4849,9 @@ impl App {
         let reasoning = self.ai.messages[index].reasoning.clone();
         if interrupted || truncated || crate::ai_edit::incomplete_edit_block(&raw) {
             let reason = if truncated {
-                "[AI 输出达到长度上限，已停止；未应用任何文件修改]"
+                "[AI 输出达到长度上限，已停止；未应用任何文件修改或技能规则]"
             } else if interrupted {
-                "[AI 输出中断；未应用任何文件修改]"
+                "[AI 输出中断；未应用任何文件修改或技能规则]"
             } else {
                 "[文件修改块不完整；为避免写入截断内容，未应用任何修改]"
             };
@@ -4817,6 +4869,7 @@ impl App {
         let parsed = crate::ai_edit::parse_edits(&raw);
         let text = parsed.text.trim().to_owned();
         let mut edits = crate::ai_edit::merge_edits(parsed.edits);
+        let evolutions = parsed.evolutions;
         if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
             for edit in &mut edits {
                 edit.prepare(&root);
@@ -4826,6 +4879,11 @@ impl App {
             format!(
                 "已准备 {} 个文件修改，请查看下方差异并点击“应用全部”。",
                 edits.len()
+            )
+        } else if text.is_empty() && !evolutions.is_empty() {
+            format!(
+                "已准备 {} 条技能进化规则，请确认后保存到用户 evolution.md。",
+                evolutions.len()
             )
         } else if text.is_empty() && !reasoning.trim().is_empty() {
             "（模型只返回了思考过程，没有正文）".to_owned()
@@ -4838,6 +4896,9 @@ impl App {
         message.edit_status = AiEditStatus::Pending;
         message.apply_error = None;
         message.backup_dir = None;
+        message.evolutions = evolutions;
+        message.evolution_status = AiEditStatus::Pending;
+        message.evolution_error = None;
         message.streaming = false;
         if message.content.trim().is_empty() {
             message.error = true;
@@ -4943,6 +5004,49 @@ impl App {
             if message.edit_status == AiEditStatus::Pending {
                 message.edit_status = AiEditStatus::Cancelled;
                 message.apply_error = None;
+            }
+        }
+    }
+
+    fn apply_ai_evolutions(&mut self, index: usize) {
+        let Some(message) = self.ai.messages.get(index) else {
+            return;
+        };
+        if message.evolution_status != AiEditStatus::Pending || message.evolutions.is_empty() {
+            return;
+        }
+        let rules = message.evolutions.clone();
+        match crate::ai::append_user_evolution(&rules) {
+            Ok((path, added)) => {
+                if let Some(message) = self.ai.messages.get_mut(index) {
+                    message.evolution_status = AiEditStatus::Applied;
+                    message.evolution_error = None;
+                }
+                self.set_toast(
+                    if added > 0 {
+                        format!(
+                            "已保存 {added} 条技能进化规则：{}",
+                            util::display_path(&path)
+                        )
+                    } else {
+                        "这些规则已存在，未重复写入".to_owned()
+                    },
+                    Severity::Success,
+                );
+            }
+            Err(err) => {
+                if let Some(message) = self.ai.messages.get_mut(index) {
+                    message.evolution_error = Some(err);
+                }
+            }
+        }
+    }
+
+    fn cancel_ai_evolutions(&mut self, index: usize) {
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            if message.evolution_status == AiEditStatus::Pending {
+                message.evolution_status = AiEditStatus::Cancelled;
+                message.evolution_error = None;
             }
         }
     }

@@ -37,6 +37,7 @@ struct WorkbenchActions {
     original_mode: bool,
     open_settings: bool,
     refresh_skill: bool,
+    orb_clicked: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -165,6 +166,9 @@ impl App {
             self.ai.input = prompt.to_owned();
             self.ai.focus_input = true;
         }
+        if workbench.orb_clicked {
+            self.record_ai_orb_click();
+        }
         if workbench.refresh_skill {
             self.refresh_ai_skill();
         }
@@ -242,6 +246,8 @@ impl App {
     ) {
         let mut apply_request = None;
         let mut cancel_request = None;
+        let mut evolution_apply_request = None;
+        let mut evolution_cancel_request = None;
         ai_panel(ui, rect, reveal, origin, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
@@ -251,7 +257,9 @@ impl App {
                         .color(theme::text()),
                 );
                 let pending = self.ai.messages.iter().any(|message| {
-                    message.edit_status == AiEditStatus::Pending && !message.edits.is_empty()
+                    (message.edit_status == AiEditStatus::Pending && !message.edits.is_empty())
+                        || (message.evolution_status == AiEditStatus::Pending
+                            && !message.evolutions.is_empty())
                 });
                 let (status, color) = if self.ai.sending {
                     ("生成中", theme::accent())
@@ -290,7 +298,15 @@ impl App {
                         ai_empty_state(ui, quick_prompt);
                     } else {
                         for (index, message) in self.ai.messages.iter().enumerate() {
-                            ai_message(ui, message, index, &mut apply_request, &mut cancel_request);
+                            ai_message(
+                                ui,
+                                message,
+                                index,
+                                &mut apply_request,
+                                &mut cancel_request,
+                                &mut evolution_apply_request,
+                                &mut evolution_cancel_request,
+                            );
                             ui.add_space(8.0);
                         }
                     }
@@ -303,6 +319,14 @@ impl App {
         }
         if let Some(index) = cancel_request {
             self.cancel_ai_edits(index);
+            ui.ctx().request_repaint();
+        }
+        if let Some(index) = evolution_apply_request {
+            self.apply_ai_evolutions(index);
+            ui.ctx().request_repaint();
+        }
+        if let Some(index) = evolution_cancel_request {
+            self.cancel_ai_evolutions(index);
             ui.ctx().request_repaint();
         }
     }
@@ -429,13 +453,27 @@ impl App {
                 .max_height(content_height)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    let (orb_rect, _) = ui.allocate_exact_size(
+                    let (orb_rect, orb_response) = ui.allocate_exact_size(
                         egui::vec2(ui.available_width(), 116.0),
-                        Sense::hover(),
+                        Sense::click(),
                     );
+                    let orb_center = orb_rect.center() - egui::vec2(0.0, 4.0);
+                    let pointer = ui.input(|input| input.pointer.hover_pos());
+                    let orb_hovered = orb_response.hovered()
+                        && pointer.is_some_and(|pos| pos.distance(orb_center) <= 48.0);
+                    if orb_hovered {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if orb_response.clicked()
+                        && orb_response
+                            .interact_pointer_pos()
+                            .is_some_and(|pos| pos.distance(orb_center) <= 48.0)
+                    {
+                        actions.orb_clicked = true;
+                    }
                     paint_orb(
                         ui,
-                        orb_rect.center() - egui::vec2(0.0, 4.0),
+                        orb_center,
                         40.0,
                         ui.input(|input| input.time),
                         self.ai.sending,
@@ -612,6 +650,13 @@ impl App {
                 )
                 .size(10.5)
                 .color(theme::text_dim()),
+            );
+            ui.label(
+                RichText::new(
+                    "技能自我进化：AI 会把长期偏好整理成规则，确认后写入用户目录；连续点击右侧 AI 图标 5 次（3 秒内）可导出当前 Skill。",
+                )
+                .size(10.0)
+                .color(theme::text_faint()),
             );
             ui.add_space(12.0);
 
@@ -1640,6 +1685,8 @@ fn ai_message(
     index: usize,
     apply_request: &mut Option<usize>,
     cancel_request: &mut Option<usize>,
+    evolution_apply_request: &mut Option<usize>,
+    evolution_cancel_request: &mut Option<usize>,
 ) {
     let user = message.role == "user";
     let (fill, border) = if message.error {
@@ -1723,6 +1770,89 @@ fn ai_message(
                     ui.add_space(7.0);
                     ai_edits_card(ui, message, index, apply_request, cancel_request);
                 }
+                if !message.evolutions.is_empty() {
+                    ui.add_space(7.0);
+                    ai_evolution_card(
+                        ui,
+                        message,
+                        index,
+                        evolution_apply_request,
+                        evolution_cancel_request,
+                    );
+                }
+            }
+        });
+}
+
+fn ai_evolution_card(
+    ui: &mut Ui,
+    message: &AiChatMessage,
+    index: usize,
+    apply: &mut Option<usize>,
+    cancel: &mut Option<usize>,
+) {
+    let color = match message.evolution_status {
+        AiEditStatus::Applied => theme::success(),
+        AiEditStatus::Cancelled => theme::text_faint(),
+        AiEditStatus::Pending => theme::accent(),
+    };
+    Frame::new()
+        .fill(theme::with_alpha(color, 12))
+        .stroke(Stroke::new(1.0_f32, theme::with_alpha(color, 80)))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(9, 7))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                paint_dot(ui, color);
+                ui.label(
+                    RichText::new("AI 技能进化")
+                        .size(10.0)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let status = match message.evolution_status {
+                        AiEditStatus::Applied => "已保存",
+                        AiEditStatus::Cancelled => "已忽略",
+                        AiEditStatus::Pending => "待确认",
+                    };
+                    ui.label(RichText::new(status).size(8.5).color(color));
+                });
+            });
+            ui.add(
+                Label::new(
+                    RichText::new("确认后追加到用户级 evolution.md，后续请求优先遵守。")
+                        .size(8.8)
+                        .color(theme::text_faint()),
+                )
+                .wrap(),
+            );
+            for rule in &message.evolutions {
+                ui.add_space(3.0);
+                ui.add(
+                    Label::new(
+                        RichText::new(format!("• {rule}"))
+                            .size(9.2)
+                            .color(theme::text()),
+                    )
+                    .wrap(),
+                );
+            }
+            if let Some(error) = &message.evolution_error {
+                ui.add_space(3.0);
+                ui.add(Label::new(RichText::new(error).size(8.8).color(theme::error())).wrap());
+            }
+            if message.evolution_status == AiEditStatus::Pending {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add(theme::primary_button("保存规则")).clicked() {
+                        *apply = Some(index);
+                    }
+                    if ai_ghost_button(ui, "忽略") {
+                        *cancel = Some(index);
+                    }
+                });
             }
         });
 }

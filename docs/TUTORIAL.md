@@ -694,6 +694,22 @@ AI 设置里已经包含专门写嵌入式代码的 `stm32-embedded-dev` Skill�
 - 导入在后台线程执行，弹窗会显示进度和警告；同名文件会自动加“副本”，不会覆盖已有资料。
 - 每次发送请求时，额外 Skill 和参考资料会附加到系统提示词；上限分别约 48KB 和 96KB，过长会截断，避免挤掉工程上下文。
 
+### Skill 自我进化与导出
+
+除了导入外部 Skill，内置的 `stm32-embedded-dev` 还可以从你的纠正中进化：
+
+- 当你指出长期可复用的做法，例如“应用任务应该放 `APP/tasks/`”“外设驱动统一叫 `bsp_usart`”“修改外设前先更新 `hardware.dts`”，AI 会在回答末尾提出 `se-evolve` 规则。
+- 聊天里会出现 **AI 技能进化** 卡片；点 **保存规则** 后写入 `%APPDATA%\SimpleEmbedded\ai\evolution\stm32-embedded-dev.md`，后续请求会自动加载并优先遵守。
+- 只保存长期规则，不保存一次性需求、密钥、客户隐私或大段源码；规则会去重，单条最多 500 字。
+- 内置的 `evolution.md` 定义了进化记录的格式、边界和优先级。
+
+导出进化后的 Skill：
+
+1. 进入 AI 模式。
+2. 在右侧 AI 工作台连续点击 AI 图标 **5 次**（3 秒内）。
+3. 选择导出目录。
+4. 程序会导出 `stm32-embedded-dev-export` 文件夹，包含当前加载的 Skill、内置副本（找不到目录 Skill 时）以及 `references/evolution-user.md`，并自动打开导出目录。
+
 ### Skill 与工程上下文
 
 每次发送请求时，程序会优先在以下位置查找 `stm32-embedded-dev` skill：

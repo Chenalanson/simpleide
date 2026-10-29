@@ -1575,6 +1575,14 @@ pub fn ai_references_dir() -> PathBuf {
     config_dir().join("ai").join("references")
 }
 
+/// User-level rules learned from corrections to the embedded STM32 skill.
+pub fn ai_evolution_file() -> PathBuf {
+    config_dir()
+        .join("ai")
+        .join("evolution")
+        .join("stm32-embedded-dev.md")
+}
+
 fn config_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
