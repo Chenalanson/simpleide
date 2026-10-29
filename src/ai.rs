@@ -111,6 +111,10 @@ const EMBEDDED_SKILL_FILES: &[(&str, &str)] = &[
         "references/other-operations.md",
         include_str!("../.opencode/skills/stm32-embedded-dev/references/other-operations.md"),
     ),
+    (
+        "references/serial-cli.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/serial-cli.md"),
+    ),
 ];
 
 /// Skill copy compiled into the executable. Used when the opened project (and
@@ -1055,6 +1059,17 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
             &mut appended,
         );
     }
+    let issue_log = crate::ai_issue::issue_path(context.root, context.project_name);
+    if issue_log.is_file() {
+        append_file(
+            &mut prompt,
+            context.root,
+            &issue_log,
+            40_000,
+            "markdown",
+            &mut appended,
+        );
+    }
     if let Some(active) = context.active_file {
         append_file(
             &mut prompt,
@@ -1169,6 +1184,26 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
          ````\n\n\
          IDE 会运行当前工程配置的 Build 命令，并把真实构建输出自动作为下一条消息发回。如果同一回复还包含 se-file / se-replace / se-delete，IDE 会等用户应用修改后再构建。\
          构建失败时必须根据真实错误继续修复，并再次输出 se-build，直到没有 error；构建通过后才能结束。禁止伪造“编译通过”，禁止只写“请用户自行构建”，也不要把 se-build 放进普通代码块。\n\n\
+         构建通过后，如果固件已实现串口 CLI 且开发板已连接，用 se-cli 让 IDE 通过串口执行命令并回传真实输出：\n\n\
+         ````se-cli\n\
+         help\n\
+         info\n\
+         adc read\n\
+         ````\n\n\
+         se-cli 每行一条命令（最多 32 条），IDE 按工程 CLI 配置的端口、波特率和行尾逐条发送，每条等待超时后把真实输出自动发回。串口未连接时 IDE 会提示用户打开 CLI 窗口选择端口。禁止编造串口输出；设备无响应时用 se-ask 询问端口/接线，或用 se-issue 记录。本轮修改过固件时，构建通过后先用 se-ask 请用户烧录并确认开发板已运行新固件，再发 se-cli。固件还没有 CLI 时，按 skill 的 references/serial-cli.md 生成 BSP/PERIPHERAL/bsp_cli.c/.h，并在主循环调用 cli_poll()。\n\n\
+         遇到编译错误、链接错误、HardFault、串口/外设调试问题时，用 se-issue 记录到工程根目录的 .ai-issues.md；问题未解决时 status=open，解决后用同一标题和 status=resolved 补充原因与解决方案：\n\n\
+         ````se-issue status=open\n\
+         标题：编译错误：bsp_usart_echo.c\n\
+         现象：unknown type name 'usart_echo_t'\n\
+         原因：头文件和源文件使用的类型名不一致\n\
+         相关文件：BSP/PERIPHERAL/bsp_usart_echo.c\n\
+         ````\n\n\
+         解决后：\n\n\
+         ````se-issue status=resolved\n\
+         标题：编译错误：bsp_usart_echo.c\n\
+         解决方案：统一改为 usart_echo_handle_t 并同步头文件\n\
+         ````\n\n\
+         同标题会更新已有记录；只记录真实遇到并解决/待解决的问题，不要编造。\n\n\
          当用户提出长期可复用的偏好或纠正（目录归属、命名、分层、调度、流程、代码风格等）时，在回答末尾追加一个四反引号的 se-evolve 块；IDE 会显示“AI 技能进化”卡片，用户确认后才写入用户级 evolution.md：\n\n\
          ````se-evolve\n\
          - 目录：应用任务放 APP/tasks/，不要在 Core/Src 新增业务文件。\n\
@@ -1180,9 +1215,9 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
     prompt.push_str(
         "\n\n## 输出要求（与 skill 固定模板的关系）\n\n\
          1. 正文结构以 skill 第 1 节任务判定和第 3 节对应模板为准：T1–T5 使用模板 A–E，T6 使用模板 F；保留模板的小节编号、标题、表格维度和 N/A 行，不得自创分点。\n\
-         2. skill 模板中的代码实现/代码修改节仍保留编号，但实际写入工程的内容用 se-file / se-replace 块承载，删除用 se-delete，确认问题用 se-ask，真实构建验证用 se-build；执行器会显示差异卡片、独立删除卡片、确认卡片和构建卡片，不要在普通代码块里重复同一份完整代码。\n\
+         2. skill 模板中的代码实现/代码修改节仍保留编号，但实际写入工程的内容用 se-file / se-replace 块承载，删除用 se-delete，确认问题用 se-ask，真实构建验证用 se-build，串口调试用 se-cli，问题/解决方案记录用 se-issue；执行器会显示差异卡片、独立删除卡片、确认卡片、构建卡片和串口调试卡片，并把问题写入 .ai-issues.md，不要在普通代码块里重复同一份完整代码。\n\
          3. 涉及硬件资源变化时，先按模板输出 hardware.dts 台账；手册级事实不确定时放在待核对表/TODO 中。\n\
-         4. S4 核对表和 S5 构建/排查是 T1–T5 的必输出项；S5 必须用 se-build 实际构建并引用 IDE 回传输出，不能只给命令或伪造结果；T6 按模板 F 给出影响分析、执行预览、结果、验证与回退。\n\
+         4. S4 核对表、S5 构建/排查和 S7 串口 Debug 是 T1–T5 的必输出项；S5 必须用 se-build 实际构建并引用 IDE 回传输出，串口可用时 S7 必须用 se-cli 实际收发，不能只给命令或伪造结果；T6 按模板 F 给出影响分析、执行预览、结果、验证与回退。\n\
          5. 若模型无法完整遵循模板，至少给出任务判定、台账/无变更说明、代码修改或删除预览、核对表和验证步骤，并明确缺失项。\n",
     );
 
@@ -1878,6 +1913,8 @@ mod tests {
         assert!(bundle.text.contains("references/framework-template.md"));
         assert!(bundle.text.contains("references/software-arch.md"));
         assert!(bundle.text.contains("references/other-operations.md"));
+        assert!(bundle.text.contains("references/serial-cli.md"));
+        assert!(bundle.text.contains("se-cli"));
         assert!(bundle.text.contains("evolution.md"));
         assert!(bundle.files.len() >= 12);
     }
@@ -2096,6 +2133,7 @@ mod tests {
         assert!(prompt.contains("gpio_marker"));
         assert!(prompt.contains("se-file"));
         assert!(prompt.contains("se-replace"));
+        assert!(prompt.contains("se-cli"));
         assert!(prompt.contains("用户导入的额外 Skill"));
         assert!(prompt.contains("extra skill marker"));
         assert!(prompt.contains("用户导入的参考资料"));

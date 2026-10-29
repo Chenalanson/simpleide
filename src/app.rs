@@ -763,6 +763,41 @@ struct AiBuildCheck {
 }
 
 const MAX_AI_BUILD_ROUNDS: usize = 5;
+const MAX_AI_CLI_ROUNDS: usize = 5;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AiCliStatus {
+    #[default]
+    Waiting,
+    Running,
+    Done,
+    Cancelled,
+    Error,
+}
+
+impl AiCliStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Waiting => "等待串口",
+            Self::Running => "执行中",
+            Self::Done => "已完成",
+            Self::Cancelled => "已停止",
+            Self::Error => "无法执行",
+        }
+    }
+}
+
+struct AiCliCheck {
+    message_index: usize,
+    started: bool,
+    commands: Vec<String>,
+    next: usize,
+    sent_at: Option<Instant>,
+    capture_started: bool,
+    results: Vec<(String, String)>,
+    rounds: usize,
+    pending_report: Option<String>,
+}
 
 #[derive(Clone, Debug)]
 struct AiChatMessage {
@@ -788,6 +823,12 @@ struct AiChatMessage {
     build_status: AiBuildStatus,
     build_summary: Option<String>,
     build_output: Option<String>,
+    cli_requested: bool,
+    cli_commands: Vec<String>,
+    cli_status: AiCliStatus,
+    cli_summary: Option<String>,
+    cli_output: Option<String>,
+    issues: Vec<crate::ai_issue::AiIssue>,
     evolutions: Vec<String>,
     evolution_status: AiEditStatus,
     evolution_error: Option<String>,
@@ -818,6 +859,12 @@ impl AiChatMessage {
             build_status: AiBuildStatus::Waiting,
             build_summary: None,
             build_output: None,
+            cli_requested: false,
+            cli_commands: Vec::new(),
+            cli_status: AiCliStatus::Waiting,
+            cli_summary: None,
+            cli_output: None,
+            issues: Vec::new(),
             evolutions: Vec::new(),
             evolution_status: AiEditStatus::Pending,
             evolution_error: None,
@@ -853,6 +900,31 @@ impl AiChatMessage {
             if let Some(summary) = &self.build_summary {
                 content.push_str(summary);
                 content.push('\n');
+            }
+        }
+        if self.cli_requested {
+            content.push_str("\n\n### AI 串口 Debug（历史记录）\n\n");
+            content.push_str(&format!("结果：{}\n", self.cli_status.label()));
+            for command in &self.cli_commands {
+                content.push_str(&format!("- {command}\n"));
+            }
+            if let Some(summary) = &self.cli_summary {
+                content.push_str(summary);
+                content.push('\n');
+            }
+        }
+        if !self.issues.is_empty() {
+            content.push_str("\n\n### AI 问题记录（历史记录）\n\n");
+            for issue in &self.issues {
+                content.push_str(&format!(
+                    "- [{}] {}\n",
+                    if issue.resolved {
+                        "已解决"
+                    } else {
+                        "未解决"
+                    },
+                    issue.title
+                ));
             }
         }
         if !self.edits.is_empty() {
@@ -899,6 +971,17 @@ struct AiTransition {
 }
 
 #[derive(Default)]
+struct CliState {
+    open: bool,
+    session: Option<crate::serial_cli::CliSession>,
+    input: String,
+    output: String,
+    capture: Option<String>,
+    status: String,
+    auto_scroll: bool,
+}
+
+#[derive(Default)]
 struct AiState {
     enabled: bool,
     messages: Vec<AiChatMessage>,
@@ -931,6 +1014,8 @@ struct AiState {
     chat_error: Option<String>,
     build_check: Option<AiBuildCheck>,
     build_rounds: usize,
+    cli_check: Option<AiCliCheck>,
+    cli_rounds: usize,
 }
 
 struct AiSettingsDraft {
@@ -1248,6 +1333,7 @@ pub struct App {
     build: BuildController,
     build_config: BuildConfig,
     project_debug: crate::config::ProjectDebugSettings,
+    project_cli: crate::serial_cli::CliConfig,
     settings_draft: Option<SettingsDraft>,
     theme_settings: Option<ThemeSettingsDraft>,
     firmware_confirm: bool,
@@ -1265,6 +1351,7 @@ pub struct App {
     install: InstallState,
     report: ReportState,
     ai: AiState,
+    cli: CliState,
     ai_settings_draft: Option<AiSettingsDraft>,
     /// Zoom factor to restore when leaving AI mode. Kept outside `AiState` so
     /// switching projects cannot lose the user's normal editor zoom.
@@ -1357,6 +1444,7 @@ impl App {
             support_packs: Vec::new(),
             build_config: BuildConfig::default(),
             project_debug: crate::config::ProjectDebugSettings::default(),
+            project_cli: crate::serial_cli::CliConfig::default(),
             settings_draft: None,
             theme_settings: None,
             firmware_confirm: false,
@@ -1374,6 +1462,7 @@ impl App {
             install: InstallState::default(),
             report: ReportState::default(),
             ai: AiState::default(),
+            cli: CliState::default(),
             ai_settings_draft: None,
             ai_zoom_before: None,
             hex: HexState::default(),
@@ -1516,15 +1605,18 @@ impl App {
             self.save_ai_chat();
         }
         self.ai = AiState::default();
+        self.cli = CliState::default();
         self.ai_settings_draft = None;
         self.output_view = OutputView::Build;
 
         let mut config_error = None;
         let mut created_config = false;
         let mut project_file_debug = None;
+        self.project_cli = crate::serial_cli::CliConfig::default();
         let (mut config, from_project) = match crate::config::ProjectSettings::load(&root) {
             Ok(Some(settings)) => {
                 project_file_debug = Some(settings.debug);
+                self.project_cli = settings.cli;
                 (settings.build, true)
             }
             Ok(None) => (self.settings.build_config_for(&root), false),
@@ -1580,7 +1672,12 @@ impl App {
         self.debug.peripheral_last_refresh = None;
         let mut config_in_project = from_project;
         if !from_project && config_error.is_none() {
-            match crate::config::ProjectSettings::save(&root, &config, &self.project_debug) {
+            match crate::config::ProjectSettings::save(
+                &root,
+                &config,
+                &self.project_debug,
+                &self.project_cli,
+            ) {
                 Ok(_) => {
                     created_config = true;
                     config_in_project = true;
@@ -1590,9 +1687,12 @@ impl App {
         } else if from_project && debug_needs_save && config_error.is_none() {
             // Backfill debug settings into project files created by an older
             // version that only stored the build configuration.
-            if let Err(err) =
-                crate::config::ProjectSettings::save(&root, &config, &self.project_debug)
-            {
+            if let Err(err) = crate::config::ProjectSettings::save(
+                &root,
+                &config,
+                &self.project_debug,
+                &self.project_cli,
+            ) {
                 config_error = Some(err);
             }
         }
@@ -2908,6 +3008,7 @@ impl App {
             || self.lsp_rename.is_some()
             || self.debug.peripheral_edit.is_some()
             || self.ai_settings_draft.is_some()
+            || self.cli.open
     }
 
     fn handle_completion_keys(&mut self, ctx: &egui::Context) {
@@ -4494,6 +4595,11 @@ impl App {
         self.refresh_ai_skill();
         self.refresh_ai_framework(true);
         self.load_ai_chat();
+        if let Some(project) = &self.project {
+            if let Err(err) = crate::ai_issue::ensure_file(&project.root, &project.name) {
+                self.set_toast(format!("创建 AI 问题记录失败：{err}"), Severity::Warning);
+            }
+        }
         self.ai.transition = Some(AiTransition {
             started: Instant::now(),
             from: self.last_editor_rect.unwrap_or(egui::Rect::NOTHING),
@@ -4512,11 +4618,16 @@ impl App {
                 "已退出 AI 模式；构建继续在后台运行，验证结果不会自动回传",
             );
         }
+        if let Some(index) = self.ai.cli_check.as_ref().map(|check| check.message_index) {
+            self.detach_ai_cli_check(index, "已退出 AI 模式；串口调试已停止");
+        }
         self.abort_ai_stream("已退出 AI 模式，本次输出中断");
         self.save_ai_chat();
         self.ai.enabled = false;
         self.ai.transition = None;
         self.ai_settings_draft = None;
+        self.cli.open = false;
+        self.cli.session = None;
         self.focus_editor = true;
     }
 
@@ -4823,6 +4934,153 @@ impl App {
         self.focus_editor = true;
     }
 
+    fn open_cli(&mut self) {
+        if self.has_modal() {
+            return;
+        }
+        self.cli.open = true;
+        self.cli.auto_scroll = true;
+        self.scan_cli_ports();
+        if self.cli.status.is_empty() {
+            self.cli.status = "未连接".to_owned();
+        }
+    }
+
+    fn scan_cli_ports(&mut self) {
+        match crate::serial::scan() {
+            Ok(ports) => {
+                let mut filled = false;
+                if self.project_cli.port.trim().is_empty() {
+                    if let Some(best) = crate::serial::preferred_port(&ports) {
+                        self.project_cli.port = best.port.clone();
+                        filled = true;
+                    }
+                }
+                self.cli.status = if ports.is_empty() {
+                    "未检测到串口，可手动输入端口".to_owned()
+                } else {
+                    format!("检测到 {} 个串口", ports.len())
+                };
+                if filled {
+                    self.persist_build_config();
+                }
+            }
+            Err(err) => self.cli.status = err,
+        }
+    }
+
+    fn toggle_cli_connection(&mut self) {
+        if self.cli.session.is_some() {
+            self.cli.session = None;
+            self.cli.status = "已断开".to_owned();
+            return;
+        }
+        if !self.project_cli.is_ready() {
+            self.cli.status = "请填写串口端口的 1200–4000000 波特率".to_owned();
+            return;
+        }
+        if let Err(err) = self.project_cli.validate() {
+            self.cli.status = err;
+            return;
+        }
+        match crate::serial_cli::CliSession::open(&self.project_cli) {
+            Ok(session) => {
+                self.cli.session = Some(session);
+                self.cli.status = format!("已连接 {}", self.project_cli.summary());
+                self.append_cli_output(format!("--- 已连接 {} ---", self.project_cli.summary()));
+                self.persist_build_config();
+            }
+            Err(err) => self.cli.status = err,
+        }
+    }
+
+    fn send_cli_command(&mut self) {
+        let command = self.cli.input.trim().to_owned();
+        if command.is_empty() {
+            return;
+        }
+        let Some(session) = &self.cli.session else {
+            self.cli.status = "请先连接串口".to_owned();
+            return;
+        };
+        match session.send(&command, self.project_cli.ending_bytes()) {
+            Ok(()) => {
+                self.append_cli_output(format!("> {command}"));
+                self.cli.input.clear();
+                self.cli.status = "已发送".to_owned();
+            }
+            Err(err) => {
+                self.cli.status = err;
+                self.cli.session = None;
+            }
+        }
+    }
+
+    fn append_cli_output(&mut self, text: impl AsRef<str>) {
+        const MAX_CLI_OUTPUT: usize = 512 * 1024;
+        const MAX_CAPTURE: usize = 64 * 1024;
+        let text = text.as_ref();
+        self.cli.output.push_str(text);
+        self.cli.output.push('\n');
+        if let Some(capture) = &mut self.cli.capture {
+            capture.push_str(text);
+            capture.push('\n');
+            if capture.len() > MAX_CAPTURE {
+                let excess = capture.len() - MAX_CAPTURE;
+                let mut cut = excess;
+                while cut < capture.len() && !capture.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                capture.drain(..cut);
+            }
+        }
+        if self.cli.output.len() > MAX_CLI_OUTPUT {
+            let excess = self.cli.output.len() - MAX_CLI_OUTPUT;
+            let mut cut = excess;
+            while cut < self.cli.output.len() && !self.cli.output.is_char_boundary(cut) {
+                cut += 1;
+            }
+            self.cli.output.drain(..cut);
+        }
+    }
+
+    fn poll_cli(&mut self, ctx: &egui::Context) {
+        let events = self
+            .cli
+            .session
+            .as_ref()
+            .map(|session| session.poll())
+            .unwrap_or_default();
+        if self.cli.session.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
+        if events.is_empty() {
+            return;
+        }
+        let mut closed = false;
+        for event in events {
+            match event {
+                crate::serial_cli::CliEvent::Line(line) => {
+                    self.append_cli_output(line);
+                    self.cli.auto_scroll = true;
+                }
+                crate::serial_cli::CliEvent::Error(err) => {
+                    self.cli.status = err.clone();
+                    self.append_cli_output(format!("[错误] {err}"));
+                    closed = true;
+                }
+                crate::serial_cli::CliEvent::Closed => {
+                    self.cli.status = "串口已关闭".to_owned();
+                    closed = true;
+                }
+            }
+        }
+        if closed {
+            self.cli.session = None;
+        }
+        ctx.request_repaint();
+    }
+
     fn open_ai_settings(&mut self) {
         if self.has_modal() && self.ai_settings_draft.is_none() {
             return;
@@ -4846,6 +5104,9 @@ impl App {
             .map(|check| check.message_index)
         {
             self.cancel_ai_build_check(index, "对话已清空，构建验证已停止");
+        }
+        if let Some(index) = self.ai.cli_check.as_ref().map(|check| check.message_index) {
+            self.cancel_ai_cli_check(index, "对话已清空，串口 Debug 已停止");
         }
         self.ai.messages.clear();
         self.ai.input.clear();
@@ -4983,7 +5244,11 @@ impl App {
             {
                 self.cancel_ai_build_check(index, "新的用户消息已取代构建验证");
             }
+            if let Some(index) = self.ai.cli_check.as_ref().map(|check| check.message_index) {
+                self.cancel_ai_cli_check(index, "新的用户消息已取代串口 Debug");
+            }
             self.ai.build_rounds = 0;
+            self.ai.cli_rounds = 0;
         }
         // Prefer the skill checked out in the project (or a global skills
         // folder), then fall back to the copy compiled into the executable.
@@ -5080,6 +5345,12 @@ impl App {
             build_status: AiBuildStatus::Waiting,
             build_summary: None,
             build_output: None,
+            cli_requested: false,
+            cli_commands: Vec::new(),
+            cli_status: AiCliStatus::Waiting,
+            cli_summary: None,
+            cli_output: None,
+            issues: Vec::new(),
             evolutions: Vec::new(),
             evolution_status: AiEditStatus::Pending,
             evolution_error: None,
@@ -5163,6 +5434,8 @@ impl App {
         let mut deletes = parsed.deletes;
         let mut asks = parsed.asks;
         let build = parsed.build;
+        let cli_commands = parsed.cli_commands;
+        let issues = parsed.issues;
         let evolutions = parsed.evolutions;
         if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
             for edit in &mut edits {
@@ -5205,14 +5478,41 @@ impl App {
             }
         }
         let content = if text.is_empty()
+            && !issues.is_empty()
+            && edits.is_empty()
+            && deletes.is_empty()
+            && asks.is_empty()
+            && !build
+            && cli_commands.is_empty()
+        {
+            format!(
+                "已记录 {} 个问题到工程根目录的 .ai-issues.md。",
+                issues.len()
+            )
+        } else if text.is_empty()
             && build
             && edits.is_empty()
             && deletes.is_empty()
             && asks.is_empty()
+            && cli_commands.is_empty()
         {
             "已请求构建验证；IDE 会运行当前工程的构建命令，并把真实输出自动发送给 AI。".to_owned()
         } else if text.is_empty()
-            && (!edits.is_empty() || !deletes.is_empty() || !asks.is_empty() || build)
+            && !cli_commands.is_empty()
+            && edits.is_empty()
+            && deletes.is_empty()
+            && asks.is_empty()
+            && issues.is_empty()
+            && !build
+        {
+            "已请求串口 Debug。".to_owned()
+        } else if text.is_empty()
+            && (!edits.is_empty()
+                || !deletes.is_empty()
+                || !asks.is_empty()
+                || !issues.is_empty()
+                || build
+                || !cli_commands.is_empty())
         {
             let mut parts = Vec::new();
             if !edits.is_empty() {
@@ -5224,8 +5524,14 @@ impl App {
             if !asks.is_empty() {
                 parts.push(format!("{} 个确认问题", asks.len()));
             }
+            if !issues.is_empty() {
+                parts.push(format!("{} 个问题记录", issues.len()));
+            }
             if build {
                 parts.push("构建验证".to_owned());
+            }
+            if !cli_commands.is_empty() {
+                parts.push(format!("串口 Debug（{} 条命令）", cli_commands.len()));
             }
             format!("已准备 {}，请查看下方卡片并分别确认。", parts.join("、"))
         } else if text.is_empty() && !evolutions.is_empty() {
@@ -5239,6 +5545,7 @@ impl App {
             text
         };
         let build_waiting = build && (!edits.is_empty() || !deletes.is_empty() || !asks.is_empty());
+        let issues_for_record = issues.clone();
         let ask_drafts = asks
             .iter()
             .map(crate::ai_ask::AiAskDraft::new)
@@ -5268,6 +5575,18 @@ impl App {
             }
         });
         message.build_output = None;
+        message.cli_requested = !cli_commands.is_empty();
+        message.cli_commands = cli_commands.clone();
+        message.cli_status = AiCliStatus::Waiting;
+        message.cli_summary = (!cli_commands.is_empty()).then(|| {
+            if cli_commands.is_empty() {
+                "准备执行".to_owned()
+            } else {
+                "等待连接串口".to_owned()
+            }
+        });
+        message.cli_output = None;
+        message.issues = issues;
         message.evolutions = evolutions;
         message.evolution_status = AiEditStatus::Pending;
         message.evolution_error = None;
@@ -5275,6 +5594,27 @@ impl App {
         if message.content.trim().is_empty() {
             message.error = true;
             message.content = "模型返回了空内容".to_owned();
+        }
+        if !issues_for_record.is_empty() {
+            if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
+                let project_name = self
+                    .project
+                    .as_ref()
+                    .map(|project| project.name.clone())
+                    .unwrap_or_default();
+                match crate::ai_issue::record(&root, &project_name, &issues_for_record) {
+                    Ok((path, count)) => self.set_toast(
+                        format!(
+                            "已更新 {count} 个 AI 问题记录：{}",
+                            util::display_path(&path)
+                        ),
+                        Severity::Success,
+                    ),
+                    Err(err) => {
+                        self.set_toast(format!("写入 AI 问题记录失败：{err}"), Severity::Warning)
+                    }
+                }
+            }
         }
         if build {
             let build_rounds = self.ai.build_rounds;
@@ -5293,6 +5633,27 @@ impl App {
                     pending_report: None,
                 });
             }
+        }
+        if !cli_commands.is_empty() {
+            let cli_rounds = self.ai.cli_rounds;
+            if let Some(old) = self.ai.cli_check.take() {
+                if let Some(message) = self.ai.messages.get_mut(old.message_index) {
+                    message.cli_status = AiCliStatus::Cancelled;
+                    message.cli_summary = Some("新的串口 Debug 请求已取代".to_owned());
+                }
+                self.cli.capture = None;
+            }
+            self.ai.cli_check = Some(AiCliCheck {
+                message_index: index,
+                started: false,
+                commands: cli_commands,
+                next: 0,
+                sent_at: None,
+                capture_started: false,
+                results: Vec::new(),
+                rounds: cli_rounds,
+                pending_report: None,
+            });
         }
         self.save_ai_chat();
     }
@@ -5466,6 +5827,255 @@ impl App {
         }
     }
 
+    fn ensure_cli_session(&mut self) -> Result<(), String> {
+        if self.cli.session.is_some() {
+            return Ok(());
+        }
+        if self.project_cli.port.trim().is_empty() {
+            if let Ok(ports) = crate::serial::scan() {
+                if let Some(best) = crate::serial::preferred_port(&ports) {
+                    self.project_cli.port = best.port.clone();
+                    self.persist_build_config();
+                }
+            }
+        }
+        self.project_cli.validate()?;
+        let session = crate::serial_cli::CliSession::open(&self.project_cli)?;
+        self.cli.session = Some(session);
+        self.cli.status = format!("已连接 {}", self.project_cli.summary());
+        self.append_cli_output(format!("--- AI 已连接 {} ---", self.project_cli.summary()));
+        Ok(())
+    }
+
+    fn cli_ai_report(&self, check: &AiCliCheck) -> String {
+        let mut report = String::new();
+        report.push_str("[IDE 串口 CLI 执行报告]\n");
+        report.push_str(&format!("串口：{}\n", self.project_cli.summary()));
+        report.push_str(&format!("行尾：{}\n", self.project_cli.line_ending));
+        if check.results.is_empty() {
+            report.push_str("没有执行任何命令。\n");
+        }
+        for (command, output) in &check.results {
+            report.push_str(&format!("\n$ {command}\n"));
+            let trimmed = output.trim_end_matches(['\r', '\n']);
+            if trimmed.trim().is_empty() {
+                report.push_str("（无输出）\n");
+            } else {
+                let total = trimmed.chars().count();
+                let capped = trimmed.chars().take(8_000).collect::<String>();
+                report.push_str(&capped);
+                if total > 8_000 {
+                    report.push_str("\n…（单条输出已截断）");
+                }
+                report.push('\n');
+            }
+        }
+        let mut report = report.chars().take(32_000).collect::<String>();
+        if report.chars().count() >= 32_000 {
+            report.push_str("\n…（报告已截断）");
+        }
+        report.push_str(
+            "\n请根据真实串口输出分析。设备无响应时先确认固件已烧录、CLI 已在 main 循环中轮询、串口参数与固件一致；不要编造输出。\n",
+        );
+        report
+    }
+
+    fn poll_ai_cli(&mut self, ctx: &egui::Context) {
+        let Some(mut check) = self.ai.cli_check.take() else {
+            return;
+        };
+        if !self.ai.enabled {
+            self.ai.cli_check = Some(check);
+            return;
+        }
+        if self.ai.messages.get(check.message_index).is_none() {
+            return;
+        }
+        if !check.started && check.pending_report.is_none() {
+            let waiting = self.ai.messages.iter().enumerate().any(|(index, message)| {
+                index >= check.message_index
+                    && ((message.edit_status == AiEditStatus::Pending && !message.edits.is_empty())
+                        || (message.delete_status == AiEditStatus::Pending
+                            && !message.deletes.is_empty())
+                        || (message.ask_status == AiEditStatus::Pending
+                            && !message.asks.is_empty()))
+            });
+            if waiting {
+                if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                    message.cli_status = AiCliStatus::Waiting;
+                    message.cli_summary = Some("等待应用修改或回答确认问题后执行".to_owned());
+                }
+                self.ai.cli_check = Some(check);
+                return;
+            }
+            if self.ai.build_check.is_some() || self.build.is_running() {
+                if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                    message.cli_status = AiCliStatus::Waiting;
+                    message.cli_summary = Some("等待构建验证完成后执行串口 Debug".to_owned());
+                }
+                self.ai.cli_check = Some(check);
+                return;
+            }
+            if self.ai.sending {
+                if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                    message.cli_status = AiCliStatus::Waiting;
+                    message.cli_summary = Some("等待 AI 回复完成后执行串口 Debug".to_owned());
+                }
+                self.ai.cli_check = Some(check);
+                return;
+            }
+            match self.ensure_cli_session() {
+                Ok(()) => {
+                    check.started = true;
+                    if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                        message.cli_status = AiCliStatus::Running;
+                        message.cli_summary = Some("执行中…".to_owned());
+                    }
+                }
+                Err(err) => {
+                    let report = format!(
+                        "[IDE 串口 CLI 执行报告]\n结果：无法连接串口\n原因：{err}\n请提示用户检查端口、波特率和开发板连接；可以用 se-ask 询问端口，再重新执行 se-cli。\n"
+                    );
+                    if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                        message.cli_status = AiCliStatus::Error;
+                        message.cli_summary = Some(format!("无法连接串口：{err}"));
+                        message.cli_output = Some(report.clone());
+                    }
+                    check.pending_report = Some(report);
+                }
+            }
+        }
+        if check.started {
+            if check.sent_at.is_none() {
+                if check.next >= check.commands.len() {
+                    let report = self.cli_ai_report(&check);
+                    if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                        message.cli_status = AiCliStatus::Done;
+                        message.cli_summary = Some(format!("{} 条命令已执行", check.results.len()));
+                        message.cli_output = Some(report.clone());
+                    }
+                    check.pending_report = Some(report);
+                } else {
+                    let command = check.commands[check.next].clone();
+                    self.cli.capture = Some(String::new());
+                    let ending = self.project_cli.ending_bytes();
+                    let result = self
+                        .cli
+                        .session
+                        .as_ref()
+                        .map(|session| session.send(&command, ending));
+                    match result {
+                        Some(Ok(())) => {
+                            check.next += 1;
+                            check.sent_at = Some(Instant::now());
+                            check.capture_started = true;
+                            if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                                message.cli_status = AiCliStatus::Running;
+                                message.cli_summary = Some(format!(
+                                    "执行 {}/{}：{}",
+                                    check.next,
+                                    check.commands.len(),
+                                    command
+                                ));
+                            }
+                            ctx.request_repaint_after(Duration::from_millis(30));
+                        }
+                        other => {
+                            let err = match other {
+                                Some(Err(err)) => err,
+                                _ => "串口会话已关闭".to_owned(),
+                            };
+                            self.cli.session = None;
+                            let report = format!(
+                                "[IDE 串口 CLI 执行报告]\n结果：发送失败\n原因：{err}\n请提示用户检查串口连接后重试。\n"
+                            );
+                            if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                                message.cli_status = AiCliStatus::Error;
+                                message.cli_summary = Some(format!("发送失败：{err}"));
+                                message.cli_output = Some(report.clone());
+                            }
+                            check.pending_report = Some(report);
+                        }
+                    }
+                }
+            } else if check.sent_at.is_some_and(|sent| {
+                sent.elapsed() >= Duration::from_millis(self.project_cli.timeout_ms)
+            }) {
+                if check.capture_started {
+                    let output = self.cli.capture.take().unwrap_or_default();
+                    let command = check.commands.get(check.next.saturating_sub(1)).cloned();
+                    if let Some(command) = command {
+                        check.results.push((command, output));
+                    }
+                    check.capture_started = false;
+                }
+                check.sent_at = None;
+                ctx.request_repaint();
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(30));
+            }
+        }
+        let Some(report) = check.pending_report.take() else {
+            self.ai.cli_check = Some(check);
+            return;
+        };
+        if self.ai.sending {
+            check.pending_report = Some(report);
+            self.ai.cli_check = Some(check);
+            return;
+        }
+        let can_send = check.rounds < MAX_AI_CLI_ROUNDS;
+        self.ai
+            .messages
+            .push(AiChatMessage::text("user", report.clone(), false));
+        if can_send {
+            if self.start_ai_request(report, false, true) {
+                check.rounds += 1;
+                self.ai.cli_rounds = self.ai.cli_rounds.saturating_add(1);
+            } else if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                message.cli_summary = Some("串口输出已生成，但自动发送失败，请手动继续".to_owned());
+            }
+        } else if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+            message.cli_summary =
+                Some("串口输出已生成；已达到自动 Debug 轮次上限，请手动继续".to_owned());
+        }
+        self.save_ai_chat();
+    }
+
+    fn cancel_ai_cli_check(&mut self, index: usize, reason: &str) {
+        let Some(check) = self.ai.cli_check.take() else {
+            return;
+        };
+        if check.message_index != index {
+            self.ai.cli_check = Some(check);
+            return;
+        }
+        self.cli.capture = None;
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            message.cli_status = AiCliStatus::Cancelled;
+            message.cli_summary = Some(reason.to_owned());
+        }
+    }
+
+    fn stop_ai_cli(&mut self, index: usize) {
+        self.cancel_ai_cli_check(index, "串口 Debug 已停止");
+    }
+
+    fn detach_ai_cli_check(&mut self, index: usize, reason: &str) {
+        let Some(check) = self.ai.cli_check.take() else {
+            return;
+        };
+        if check.message_index != index {
+            self.ai.cli_check = Some(check);
+            return;
+        }
+        self.cli.capture = None;
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            message.cli_status = AiCliStatus::Cancelled;
+            message.cli_summary = Some(reason.to_owned());
+        }
+    }
+
     fn poll_ai(&mut self, ctx: &egui::Context) {
         self.poll_ai_import(ctx);
         let mut events = Vec::new();
@@ -5567,6 +6177,7 @@ impl App {
             }
         }
         self.cancel_ai_build_check(index, "前置文件修改已取消，构建验证已停止");
+        self.cancel_ai_cli_check(index, "前置文件修改已取消，串口 Debug 已停止");
     }
 
     fn cancel_ai_deletes(&mut self, index: usize) {
@@ -5577,6 +6188,7 @@ impl App {
             }
         }
         self.cancel_ai_build_check(index, "前置文件删除已取消，构建验证已停止");
+        self.cancel_ai_cli_check(index, "前置文件删除已取消，串口 Debug 已停止");
     }
 
     fn submit_ai_answers(&mut self, index: usize) {
@@ -5620,6 +6232,7 @@ impl App {
             }
         }
         self.cancel_ai_build_check(index, "前置确认问题已取消，构建验证已停止");
+        self.cancel_ai_cli_check(index, "前置确认问题已取消，串口 Debug 已停止");
     }
 
     fn apply_ai_evolutions(&mut self, index: usize) {
@@ -7861,7 +8474,12 @@ impl App {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             return;
         };
-        match crate::config::ProjectSettings::save(&root, &self.build_config, &self.project_debug) {
+        match crate::config::ProjectSettings::save(
+            &root,
+            &self.build_config,
+            &self.project_debug,
+            &self.project_cli,
+        ) {
             Ok(_) => {
                 // The project file is authoritative once it can be written.
                 self.settings.build_configs.remove(&project_key(&root));
@@ -8805,6 +9423,7 @@ impl App {
                 self.delete_entry = None;
                 self.memory_draft = None;
                 self.ai_settings_draft = None;
+                self.cli.open = false;
             }
             return;
         }
@@ -9347,9 +9966,12 @@ impl App {
             self.set_toast("请先打开工程", Severity::Warning);
             return;
         };
-        if let Err(err) =
-            crate::config::ProjectSettings::save(&root, &self.build_config, &self.project_debug)
-        {
+        if let Err(err) = crate::config::ProjectSettings::save(
+            &root,
+            &self.build_config,
+            &self.project_debug,
+            &self.project_cli,
+        ) {
             self.set_toast(format!("工程配置保存失败：{err}"), Severity::Error);
             return;
         }
@@ -9381,9 +10003,12 @@ impl App {
         };
         let path = crate::config::ProjectSettings::path(&root);
         if !crate::config::ProjectSettings::exists(&root) {
-            if let Err(err) =
-                crate::config::ProjectSettings::save(&root, &self.build_config, &self.project_debug)
-            {
+            if let Err(err) = crate::config::ProjectSettings::save(
+                &root,
+                &self.build_config,
+                &self.project_debug,
+                &self.project_cli,
+            ) {
                 self.set_toast(format!("工程配置保存失败：{err}"), Severity::Error);
                 return;
             }
@@ -10637,6 +11262,8 @@ impl eframe::App for App {
             self.report_link_problem();
         }
         self.poll_ai_build();
+        self.poll_cli(&ctx);
+        self.poll_ai_cli(&ctx);
         self.poll_lsp(&ctx);
         self.poll_relations(&ctx);
         self.poll_install_system(&ctx);
@@ -10719,6 +11346,9 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(40));
         }
 
+        if self.cli.open {
+            self.show_cli_window(&ctx);
+        }
         if self.settings_draft.is_some() {
             self.show_settings_modal(&ctx);
             actions.clear();
@@ -10869,6 +11499,9 @@ impl eframe::App for App {
                 .map(|check| check.message_index)
             {
                 self.cancel_ai_build_check(index, "应用退出，构建验证已停止");
+            }
+            if let Some(index) = self.ai.cli_check.as_ref().map(|check| check.message_index) {
+                self.cancel_ai_cli_check(index, "应用退出，串口 Debug 已停止");
             }
             self.abort_ai_stream("应用退出，本次输出中断");
             self.save_ai_chat();

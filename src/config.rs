@@ -843,6 +843,7 @@ pub struct ProjectSettings {
     pub version: u32,
     pub build: BuildConfig,
     pub debug: ProjectDebugSettings,
+    pub cli: crate::serial_cli::CliConfig,
 }
 
 impl Default for ProjectSettings {
@@ -851,6 +852,7 @@ impl Default for ProjectSettings {
             version: 1,
             build: BuildConfig::default(),
             debug: ProjectDebugSettings::default(),
+            cli: crate::serial_cli::CliConfig::default(),
         }
     }
 }
@@ -913,6 +915,7 @@ impl ProjectSettings {
         project_root: &Path,
         build: &BuildConfig,
         debug: &ProjectDebugSettings,
+        cli: &crate::serial_cli::CliConfig,
     ) -> Result<PathBuf, String> {
         let path = Self::path(project_root);
         let Some(parent) = path.parent() else {
@@ -924,6 +927,7 @@ impl ProjectSettings {
             version: 1,
             build: build.clone(),
             debug: debug.clone(),
+            cli: cli.clone(),
         };
         let mut bytes = serde_json::to_vec_pretty(&settings)
             .map_err(|err| format!("无法序列化工程配置：{err}"))?;
@@ -2050,7 +2054,13 @@ mod tests {
             auto_refresh: true,
             watches: vec!["counter".into(), "state".into()],
         };
-        let path = ProjectSettings::save(dir.path(), &config, &debug).unwrap();
+        let cli = crate::serial_cli::CliConfig {
+            port: "COM7".to_owned(),
+            baud: 921_600,
+            line_ending: "LF".to_owned(),
+            timeout_ms: 1_200,
+        };
+        let path = ProjectSettings::save(dir.path(), &config, &debug, &cli).unwrap();
         assert!(path.ends_with("settings.json"));
         assert!(path.parent().unwrap().ends_with(".simple-embedded"));
         let loaded = ProjectSettings::load(dir.path()).unwrap().unwrap();
@@ -2067,6 +2077,10 @@ mod tests {
         assert_eq!(loaded.debug.program, "build/demo.axf");
         assert_eq!(loaded.debug.gdb_path, "C:/tools/arm-none-eabi-gdb.exe");
         assert!(loaded.debug.auto_refresh);
+        assert_eq!(loaded.cli.port, "COM7");
+        assert_eq!(loaded.cli.baud, 921_600);
+        assert_eq!(loaded.cli.line_ending, "LF");
+        assert_eq!(loaded.cli.timeout_ms, 1_200);
         assert_eq!(loaded.debug.watches, vec!["counter", "state"]);
     }
 

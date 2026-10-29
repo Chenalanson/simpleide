@@ -56,6 +56,8 @@ pub struct ParsedEdits {
     pub deletes: Vec<AiDelete>,
     pub asks: Vec<crate::ai_ask::AiAsk>,
     pub build: bool,
+    pub cli_commands: Vec<String>,
+    pub issues: Vec<crate::ai_issue::AiIssue>,
     pub evolutions: Vec<String>,
 }
 
@@ -279,6 +281,8 @@ pub fn incomplete_edit_block(text: &str) -> bool {
                 | "se-delete"
                 | "se-ask"
                 | "se-build"
+                | "se-cli"
+                | "se-issue"
                 | "se-evolve"
         ) {
             open_fence = Some(ticks);
@@ -293,6 +297,8 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
     let mut deletes = Vec::new();
     let mut asks = Vec::new();
     let mut build = false;
+    let mut cli_commands = Vec::new();
+    let mut issues = Vec::new();
     let mut evolutions = Vec::new();
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let mut index = 0usize;
@@ -312,6 +318,8 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
                 | "se-delete"
                 | "se-ask"
                 | "se-build"
+                | "se-cli"
+                | "se-issue"
                 | "se-evolve"
         ) {
             cleaned.push_str(line);
@@ -341,6 +349,10 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
             evolutions.extend(parse_evolution_rules(&body));
         } else if tag == "se-build" {
             build = true;
+        } else if tag == "se-cli" {
+            cli_commands.extend(parse_cli_commands(&body));
+        } else if tag == "se-issue" {
+            issues.push(crate::ai_issue::parse_issue(attrs, &body));
         } else if tag == "se-ask" {
             asks.push(crate::ai_ask::parse_ask(attrs, &body));
         } else if tag == "se-delete" {
@@ -362,8 +374,23 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
         deletes,
         asks,
         build,
+        cli_commands,
+        issues,
         evolutions,
     }
+}
+
+/// `se-cli` bodies hold one command per line. Markdown bullets and `>` prompts
+/// are accepted because models copy them from terminal transcripts.
+fn parse_cli_commands(body: &str) -> Vec<String> {
+    body.lines()
+        .map(str::trim)
+        .map(|line| line.trim_start_matches('>').trim())
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| line.trim_start_matches(['$', '#']).trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .take(32)
+        .collect()
 }
 
 fn parse_evolution_rules(body: &str) -> Vec<String> {
@@ -392,6 +419,8 @@ fn find_last_fence(lines: &[&str], start: usize, fence_len: usize) -> Option<usi
                         | "se-delete"
                         | "se-ask"
                         | "se-build"
+                        | "se-cli"
+                        | "se-issue"
                         | "se-evolve"
                 )
             })
@@ -509,6 +538,9 @@ pub fn normalize_rel_path(path: &str) -> Result<String, String> {
     if lower.ends_with(crate::ai_chat::CHAT_SUFFIX) {
         return Err(format!("AI 对话记录由 IDE 维护，不能修改：{path}"));
     }
+    if lower.ends_with(crate::ai_issue::ISSUE_SUFFIX) {
+        return Err(format!("AI 问题记录由 IDE 维护，不能修改：{path}"));
+    }
     if [
         ".bin", ".elf", ".axf", ".o", ".a", ".lib", ".exe", ".pack", ".png", ".jpg", ".jpeg",
         ".gif", ".bmp", ".ico", ".zip", ".pdf",
@@ -573,6 +605,9 @@ fn normalize_delete_path(path: &str) -> Result<String, String> {
     }
     if lower.ends_with(crate::ai_chat::CHAT_SUFFIX) {
         return Err(format!("AI 对话记录由 IDE 维护，不能删除：{path}"));
+    }
+    if lower.ends_with(crate::ai_issue::ISSUE_SUFFIX) {
+        return Err(format!("AI 问题记录由 IDE 维护，不能删除：{path}"));
     }
     Ok(parts.join("/"))
 }
@@ -763,6 +798,31 @@ mod tests {
         assert!(parsed.edits[0].content.contains("```mermaid"));
         assert!(parsed.edits[0].content.contains("gantt"));
         assert!(!incomplete_edit_block(reply));
+    }
+
+    #[test]
+    fn parses_cli_commands() {
+        let reply = "开始调试。\n````se-cli\nhelp\ninfo\n> adc read\n````\n";
+        let parsed = parse_edits(reply);
+        assert_eq!(
+            parsed.cli_commands,
+            vec!["help".to_owned(), "info".to_owned(), "adc read".to_owned()]
+        );
+        assert!(!parsed.text.contains("se-cli"));
+        assert!(parsed.text.contains("开始调试"));
+        assert!(incomplete_edit_block("````se-cli\nhelp\n"));
+    }
+
+    #[test]
+    fn parses_issue_block() {
+        let reply = "已记录。\n````se-issue status=open\n标题：串口乱码\n现象：收到字节顺序错误\n原因：波特率不匹配\n````\n";
+        let parsed = parse_edits(reply);
+        assert_eq!(parsed.issues.len(), 1);
+        assert_eq!(parsed.issues[0].title, "串口乱码");
+        assert!(!parsed.issues[0].resolved);
+        assert!(!parsed.text.contains("se-issue"));
+        assert!(parsed.text.contains("已记录"));
+        assert!(incomplete_edit_block("````se-issue\n标题：未闭合\n"));
     }
 
     #[test]

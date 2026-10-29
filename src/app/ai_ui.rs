@@ -12,7 +12,7 @@ use eframe::egui::{
     Rect, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, UiBuilder,
 };
 
-use super::{AiBuildStatus, AiChatMessage, AiEditStatus, App};
+use super::{AiBuildStatus, AiChatMessage, AiCliStatus, AiEditStatus, App};
 use crate::framework::{FrameworkDoc, GanttChart, GanttKind};
 use crate::log::Severity;
 use crate::theme;
@@ -36,6 +36,7 @@ const INPUT_ID: &str = "simple_embedded_ai_input";
 struct WorkbenchActions {
     original_mode: bool,
     open_settings: bool,
+    open_cli: bool,
     refresh_skill: bool,
     orb_clicked: bool,
 }
@@ -49,6 +50,8 @@ struct AiCardRequests {
     submit_answers: Option<usize>,
     cancel_asks: Option<usize>,
     stop_build: Option<usize>,
+    stop_cli: Option<usize>,
+    open_cli: bool,
     apply_evolutions: Option<usize>,
     cancel_evolutions: Option<usize>,
 }
@@ -129,6 +132,7 @@ impl App {
         let arch_origin = egui::pos2(architecture.center().x, architecture.top() + 100.0);
 
         let mut send = false;
+        let mut open_cli = false;
         let mut clear = false;
         let mut quick_prompt = None;
         let mut workbench = WorkbenchActions::default();
@@ -145,7 +149,7 @@ impl App {
             &mut clear,
             &mut quick_prompt,
         );
-        self.ai_input_panel(ui, input, reveal_input, &mut send);
+        self.ai_input_panel(ui, input, reveal_input, &mut send, &mut open_cli);
         ai_architecture_panel(
             ui,
             architecture,
@@ -175,6 +179,9 @@ impl App {
         if clear {
             self.clear_ai_chat();
         }
+        if open_cli {
+            self.open_cli();
+        }
         if let Some(prompt) = quick_prompt {
             self.ai.input = prompt.to_owned();
             self.ai.focus_input = true;
@@ -190,6 +197,9 @@ impl App {
         }
         if workbench.original_mode {
             self.exit_ai_mode();
+        }
+        if workbench.open_cli {
+            self.open_cli();
         }
         if send {
             self.send_ai_message();
@@ -359,6 +369,13 @@ impl App {
             self.stop_ai_build(index);
             ui.ctx().request_repaint();
         }
+        if let Some(index) = requests.stop_cli {
+            self.stop_ai_cli(index);
+            ui.ctx().request_repaint();
+        }
+        if requests.open_cli {
+            self.open_cli();
+        }
         if let Some(index) = requests.apply_evolutions {
             self.apply_ai_evolutions(index);
             ui.ctx().request_repaint();
@@ -369,7 +386,14 @@ impl App {
         }
     }
 
-    fn ai_input_panel(&mut self, ui: &mut egui::Ui, rect: Rect, reveal: f32, send: &mut bool) {
+    fn ai_input_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        reveal: f32,
+        send: &mut bool,
+        open_cli: &mut bool,
+    ) {
         let input_id = Id::new(INPUT_ID);
         let enter_pressed = ui.memory(|memory| memory.has_focus(input_id))
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter))
@@ -458,6 +482,9 @@ impl App {
                         .clicked()
                     {
                         *send = true;
+                    }
+                    if ui.add(theme::secondary_button("CLI")).clicked() {
+                        *open_cli = true;
                     }
                     if self.ai.sending {
                         ui.spinner();
@@ -556,6 +583,27 @@ impl App {
                     }
 
                     ui.add_space(10.0);
+                    ai_section(ui, "串口 CLI");
+                    let cli_port = if self.project_cli.port.trim().is_empty() {
+                        "未选择".to_owned()
+                    } else {
+                        self.project_cli.summary()
+                    };
+                    ai_kv(ui, "端口", &cli_port);
+                    ai_kv(
+                        ui,
+                        "状态",
+                        if self.cli.session.is_some() {
+                            "已连接"
+                        } else {
+                            "未连接"
+                        },
+                    );
+                    if ui.add(theme::secondary_button("打开 CLI")).clicked() {
+                        actions.open_cli = true;
+                    }
+
+                    ui.add_space(10.0);
                     ai_section(ui, "已加载 Skill");
                     ai_skill_card(
                         ui,
@@ -603,6 +651,36 @@ impl App {
                         ui.add(
                             Label::new(RichText::new(error).size(9.0).color(theme::error()))
                                 .wrap(),
+                        );
+                    }
+
+                    ui.add_space(10.0);
+                    ai_section(ui, "问题记录");
+                    if let Some(project) = &self.project {
+                        let path = crate::ai_issue::issue_path(&project.root, &project.name);
+                        ui.add(
+                            Label::new(
+                                RichText::new(crate::util::display_path(&path))
+                                    .size(9.5)
+                                    .color(theme::text_dim()),
+                            )
+                            .wrap(),
+                        );
+                        ui.add(
+                            Label::new(
+                                RichText::new(
+                                    "AI 遇到并解决编译/运行问题时自动补充；同标题会更新原因和解决方案。",
+                                )
+                                .size(8.8)
+                                .color(theme::text_faint()),
+                            )
+                            .wrap(),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("打开工程并进入 AI 模式后自动创建。")
+                                .size(9.0)
+                                .color(theme::text_faint()),
                         );
                     }
 
@@ -681,6 +759,209 @@ impl App {
                 }
             });
         });
+    }
+
+    pub(super) fn show_cli_window(&mut self, ctx: &egui::Context) {
+        if !self.cli.open {
+            return;
+        }
+        let mut open = self.cli.open;
+        let mut changed = false;
+        let connected = self.cli.session.is_some();
+        egui::Window::new("串口 CLI")
+            .id(Id::new("simple_embedded_cli_window"))
+            .open(&mut open)
+            .default_pos(egui::pos2(140.0, 110.0))
+            .default_width(680.0)
+            .default_height(480.0)
+            .resizable(true)
+            .collapsible(false)
+            .frame(
+                Frame::window(&ctx.global_style())
+                    .fill(theme::panel())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(14, 12)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("用于 AI 串口调试和手动命令")
+                            .size(9.5)
+                            .color(theme::text_faint()),
+                    );
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("端口").size(9.5).color(theme::text_dim()));
+                    let port = ui.add_enabled(
+                        !connected,
+                        TextEdit::singleline(&mut self.project_cli.port)
+                            .desired_width(110.0)
+                            .hint_text("COM3"),
+                    );
+                    if port.changed() {
+                        changed = true;
+                    }
+                    if ui.add(theme::secondary_button("自动检测")).clicked() {
+                        self.scan_cli_ports();
+                    }
+                    ui.label(RichText::new("波特率").size(9.5).color(theme::text_dim()));
+                    egui::ComboBox::from_id_salt("simple_embedded_cli_baud")
+                        .selected_text(self.project_cli.baud.to_string())
+                        .width(86.0)
+                        .show_ui(ui, |ui| {
+                            for baud in [
+                                9600, 19200, 38400, 57600, 115_200, 230_400, 460_800, 921_600,
+                                1_500_000, 2_000_000,
+                            ] {
+                                if ui
+                                    .selectable_value(
+                                        &mut self.project_cli.baud,
+                                        baud,
+                                        baud.to_string(),
+                                    )
+                                    .clicked()
+                                {
+                                    changed = true;
+                                }
+                            }
+                        });
+                    if ui
+                        .add(if connected {
+                            theme::secondary_button("断开")
+                        } else {
+                            theme::primary_button("连接")
+                        })
+                        .clicked()
+                    {
+                        self.toggle_cli_connection();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("行尾").size(9.5).color(theme::text_dim()));
+                    egui::ComboBox::from_id_salt("simple_embedded_cli_line_ending")
+                        .selected_text(self.project_cli.line_ending.clone())
+                        .width(74.0)
+                        .show_ui(ui, |ui| {
+                            for ending in ["CRLF", "LF", "CR"] {
+                                if ui
+                                    .selectable_value(
+                                        &mut self.project_cli.line_ending,
+                                        ending.to_owned(),
+                                        ending,
+                                    )
+                                    .clicked()
+                                {
+                                    changed = true;
+                                }
+                            }
+                        });
+                    ui.label(RichText::new("等待").size(9.5).color(theme::text_dim()));
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut self.project_cli.timeout_ms)
+                                .range(100..=10_000)
+                                .speed(20.0)
+                                .suffix(" ms"),
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                    ui.label(
+                        RichText::new(if connected {
+                            "已连接；端口/波特率修改后需重新连接"
+                        } else {
+                            "先连接串口，再发送命令"
+                        })
+                        .size(9.0)
+                        .color(theme::text_faint()),
+                    );
+                });
+                ui.add_space(4.0);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("输出")
+                            .size(9.5)
+                            .strong()
+                            .color(theme::text_dim()),
+                    );
+                    if ai_ghost_button(ui, "清空") {
+                        self.cli.output.clear();
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(&self.cli.status)
+                                .size(9.0)
+                                .color(if connected {
+                                    theme::success()
+                                } else {
+                                    theme::text_faint()
+                                }),
+                        );
+                    });
+                });
+                Frame::new()
+                    .fill(theme::editor_bg())
+                    .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+                    .corner_radius(7)
+                    .inner_margin(Margin::symmetric(7, 5))
+                    .show(ui, |ui| {
+                        ScrollArea::vertical()
+                            .id_salt("simple_embedded_cli_output")
+                            .auto_shrink([false, false])
+                            .max_height(250.0)
+                            .stick_to_bottom(self.cli.auto_scroll)
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                if self.cli.output.is_empty() {
+                                    ui.label(
+                                        RichText::new("连接串口后，命令输出会显示在这里。")
+                                            .size(9.5)
+                                            .color(theme::text_faint()),
+                                    );
+                                } else {
+                                    ui.add(
+                                        Label::new(
+                                            RichText::new(&self.cli.output)
+                                                .monospace()
+                                                .size(9.2)
+                                                .color(theme::text()),
+                                        )
+                                        .wrap(),
+                                    );
+                                }
+                            });
+                    });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let response = ui.add_sized(
+                        [ui.available_width() - 80.0, 28.0],
+                        TextEdit::singleline(&mut self.cli.input)
+                            .frame(Frame::new().fill(theme::editor_bg()).corner_radius(6))
+                            .font(FontId::monospace(10.5))
+                            .text_color(theme::text())
+                            .hint_text("输入 CLI 命令，例如 help / info / adc read"),
+                    );
+                    let enter = response.lost_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    if enter || ui.add(theme::primary_button("发送")).clicked() {
+                        self.send_cli_command();
+                    }
+                });
+            });
+        self.cli.open = open;
+        if !open {
+            if self.cli.session.is_some() {
+                self.cli.session = None;
+                self.cli.status = "已断开".to_owned();
+            }
+            if changed {
+                self.persist_build_config();
+            }
+        }
     }
 
     pub(super) fn show_ai_settings_modal(&mut self, ctx: &egui::Context) {
@@ -1885,6 +2166,20 @@ fn ai_message(
                     ui.add_space(7.0);
                     ai_build_card(ui, &*message, index, &mut requests.stop_build);
                 }
+                if message.cli_requested {
+                    ui.add_space(7.0);
+                    ai_cli_card(
+                        ui,
+                        &*message,
+                        index,
+                        &mut requests.stop_cli,
+                        &mut requests.open_cli,
+                    );
+                }
+                if !message.issues.is_empty() {
+                    ui.add_space(7.0);
+                    ai_issues_card(ui, &*message);
+                }
                 if !message.evolutions.is_empty() {
                     ui.add_space(7.0);
                     ai_evolution_card(
@@ -1894,6 +2189,184 @@ fn ai_message(
                         &mut requests.apply_evolutions,
                         &mut requests.cancel_evolutions,
                     );
+                }
+            }
+        });
+}
+
+fn ai_issues_card(ui: &mut Ui, message: &AiChatMessage) {
+    Frame::new()
+        .fill(theme::with_alpha(theme::info(), 9))
+        .stroke(Stroke::new(1.0_f32, theme::with_alpha(theme::info(), 70)))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                paint_dot(ui, theme::info());
+                ui.label(
+                    RichText::new("AI 问题记录")
+                        .size(10.5)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.label(
+                    RichText::new(format!("{} 条", message.issues.len()))
+                        .size(9.5)
+                        .color(theme::text_faint()),
+                );
+            });
+            for issue in &message.issues {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let color = if issue.resolved {
+                        theme::success()
+                    } else {
+                        theme::warning()
+                    };
+                    ui.label(
+                        RichText::new(if issue.resolved {
+                            "已解决"
+                        } else {
+                            "未解决"
+                        })
+                        .size(8.8)
+                        .strong()
+                        .color(color),
+                    );
+                    ui.add(
+                        Label::new(RichText::new(&issue.title).size(9.2).color(theme::text()))
+                            .wrap(),
+                    );
+                });
+                if !issue.solution.is_empty() {
+                    ui.add(
+                        Label::new(
+                            RichText::new(format!("解决：{}", issue.solution.replace('\n', " ")))
+                                .size(8.6)
+                                .color(theme::text_dim()),
+                        )
+                        .wrap(),
+                    );
+                }
+            }
+            ui.add_space(4.0);
+            ui.add(
+                Label::new(
+                    RichText::new("已写入工程根目录 .ai-issues.md；同标题问题会更新解决方案。")
+                        .size(8.5)
+                        .color(theme::text_faint()),
+                )
+                .wrap(),
+            );
+        });
+}
+
+fn ai_cli_card(
+    ui: &mut Ui,
+    message: &AiChatMessage,
+    message_index: usize,
+    stop: &mut Option<usize>,
+    open_cli: &mut bool,
+) {
+    let color = match message.cli_status {
+        AiCliStatus::Waiting => theme::warning(),
+        AiCliStatus::Running => theme::accent(),
+        AiCliStatus::Done => theme::success(),
+        AiCliStatus::Error => theme::error(),
+        AiCliStatus::Cancelled => theme::text_faint(),
+    };
+    Frame::new()
+        .fill(theme::with_alpha(color, 9))
+        .stroke(Stroke::new(1.0_f32, theme::with_alpha(color, 85)))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                paint_dot(ui, color);
+                ui.label(
+                    RichText::new("AI 串口 Debug")
+                        .size(10.5)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.label(
+                    RichText::new(message.cli_status.label())
+                        .size(9.5)
+                        .color(color),
+                );
+                if matches!(
+                    message.cli_status,
+                    AiCliStatus::Running | AiCliStatus::Waiting
+                ) {
+                    ui.spinner();
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(theme::secondary_button("停止")).clicked() {
+                            *stop = Some(message_index);
+                        }
+                    });
+                }
+            });
+            if let Some(summary) = &message.cli_summary {
+                ui.add_space(2.0);
+                ui.add(
+                    Label::new(RichText::new(summary).size(9.0).color(theme::text_dim())).wrap(),
+                );
+            }
+            if !message.cli_commands.is_empty() {
+                ui.add_space(3.0);
+                for command in &message.cli_commands {
+                    ui.add(
+                        Label::new(
+                            RichText::new(format!("$ {command}"))
+                                .monospace()
+                                .size(8.8)
+                                .color(theme::text_dim()),
+                        )
+                        .wrap(),
+                    );
+                }
+            }
+            if let Some(output) = &message.cli_output {
+                let id = ui.make_persistent_id(("simple_embedded_ai_cli_output", message_index));
+                let mut open = ui
+                    .data_mut(|data| data.get_persisted::<bool>(id))
+                    .unwrap_or(false);
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ai_ghost_button(ui, if open { "收起输出" } else { "串口输出" }) {
+                        open = !open;
+                        ui.data_mut(|data| data.insert_persisted(id, open));
+                    }
+                    if ai_ghost_button(ui, "打开 CLI") {
+                        *open_cli = true;
+                    }
+                });
+                if open {
+                    Frame::new()
+                        .fill(theme::editor_bg())
+                        .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+                        .corner_radius(6)
+                        .inner_margin(Margin::symmetric(7, 5))
+                        .show(ui, |ui| {
+                            ScrollArea::vertical()
+                                .id_salt(("simple_embedded_ai_cli_output_scroll", message_index))
+                                .auto_shrink([false, true])
+                                .max_height(220.0)
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.add(
+                                        Label::new(
+                                            RichText::new(output)
+                                                .monospace()
+                                                .size(8.8)
+                                                .color(theme::text_dim()),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                        });
                 }
             }
         });
