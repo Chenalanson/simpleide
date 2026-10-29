@@ -1090,6 +1090,7 @@ struct AiState {
     cli_check: Option<AiCliCheck>,
     cli_rounds: usize,
     fs_rounds: usize,
+    fs_intent_retries: usize,
     pending_retrieval: Option<String>,
     pending_user_model_content: Option<String>,
     context_stats: Option<crate::ai::ContextBuildStats>,
@@ -5357,6 +5358,7 @@ impl App {
         self.ai.sending = false;
         self.ai.receiver = None;
         self.ai.fs_rounds = 0;
+        self.ai.fs_intent_retries = 0;
         self.ai.pending_retrieval = None;
         self.ai.pending_user_model_content = None;
         self.save_ai_chat();
@@ -5453,11 +5455,13 @@ impl App {
 
     fn send_ai_text(&mut self, text: String) -> bool {
         self.ai.fs_rounds = 0;
+        self.ai.fs_intent_retries = 0;
         self.start_ai_request(text, true, false)
     }
 
     fn send_ai_answer(&mut self, text: String) -> bool {
         self.ai.fs_rounds = 0;
+        self.ai.fs_intent_retries = 0;
         self.start_ai_request(text, true, true)
     }
 
@@ -5733,6 +5737,15 @@ impl App {
                 asks.push(ask);
             }
         }
+        let fs_intent_without_request = asks.is_empty()
+            && fs_requests.is_empty()
+            && edits.is_empty()
+            && deletes.is_empty()
+            && issues.is_empty()
+            && evolutions.is_empty()
+            && !build
+            && cli_commands.is_empty()
+            && crate::ai::looks_like_fs_intent(&text);
         if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
             for edit in &mut edits {
                 edit.prepare(&root);
@@ -5980,6 +5993,28 @@ impl App {
         self.save_ai_chat();
         if !fs_requests.is_empty() {
             self.run_ai_fs_requests(index, fs_requests);
+        } else if fs_intent_without_request {
+            self.retry_fs_intent(index);
+        }
+    }
+
+    fn retry_fs_intent(&mut self, index: usize) {
+        if self.ai.fs_intent_retries >= 2 {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message.content.push_str(
+                    "\n\n[已自动要求输出 se-read / se-list 块 2 次，模型仍未输出可执行请求；请手动打开需要的文件，或直接说明缺哪个文件。]",
+                );
+            }
+            return;
+        }
+        self.ai.fs_intent_retries += 1;
+        let prompt = "你刚才只写了读取计划/表格，没有输出可执行的 se-read / se-list 块（或把它放进了普通代码块），IDE 无法读取。请立即只输出四反引号的 se-read / se-list 块和一句简短说明；不要再写计划，不要再重复思考过程。拿到正文后再输出修改。";
+        if !self.start_ai_request(prompt.to_owned(), true, true) {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message
+                    .content
+                    .push_str("\n\n[自动请求读取失败；请检查 AI 设置或手动打开需要读取的文件。]");
+            }
         }
     }
 

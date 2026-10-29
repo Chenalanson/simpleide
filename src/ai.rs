@@ -1419,6 +1419,7 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
          se-list：列出目录，path=. 表示工程根目录，depth 为 1–3，默认 1；只列真实文件和目录。\n\
          se-read：读取一个文本文件，lines 可省略；一次最多 24KB，单文件上限 2MB；需要后续内容时用 lines 继续读。\n\
          se-list / se-read 是只读操作，不需要用户授权；缺文件时直接读取，禁止在正文问“请允许我读取”。只有写文件、删除、重构、烧录、串口连接等有副作用的动作才用 se-ask 确认。\n\
+         只写“本轮读取/读取目标/下一轮读取”的计划或表格不算请求；必须实际输出四反引号的 se-read / se-list 块，且不要放进普通代码块。只写计划时 IDE 不会读取，会自动要求你重写；连续两次仍不输出可执行块就停止自动检索并提示用户。\n\
          一次最多 12 个检索请求，IDE 最多自动继续 6 轮；路径必须相对工程根目录，禁止绝对路径、`..`、build/Debug/Release/out/target、`.simple-embedded`、`.git`、`.opencode` 等生成或配置目录，禁止符号链接和二进制文件。\n\
          检索回复只输出 se-list / se-read 和简短说明，不要在同一回复里输出 se-file / se-replace / se-delete；拿到正文后再生成修改。优先按 framework.md 的文件表定位，再 list 目录、read 关键文件，不要重复读取已经出现过的全文。\n\n\
          ## 文件修改协议（重要）\n\n\
@@ -2460,6 +2461,35 @@ fn api_error_message(body: &str) -> String {
         .unwrap_or_else(|| truncate_chars(body.trim(), 800))
 }
 
+/// Detect an assistant reply that only *describes* a file-read plan instead of
+/// emitting an executable `se-read` / `se-list` fence. Models sometimes put the
+/// request in a plain code block or only in reasoning; the IDE then sees no
+/// request and the user gets stuck in a retrieve loop.
+pub(crate) fn looks_like_fs_intent(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() || text.contains("已读取") {
+        return false;
+    }
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("se-read") || lower.contains("se-list") {
+        return true;
+    }
+    let mentions_file = text.contains("文件") || text.contains("正文") || text.contains("源码");
+    mentions_file
+        && [
+            "读取目标",
+            "本轮取",
+            "本轮读取",
+            "下一轮读取",
+            "读取以下",
+            "需要读取",
+            "接下来读取",
+            "只读不写",
+        ]
+        .iter()
+        .any(|marker| text.contains(marker))
+}
+
 pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_owned();
@@ -2565,6 +2595,23 @@ mod tests {
         assert!(style_requested("按 code_style.md 优化"));
         assert!(style_requested("code style review"));
         assert!(!style_requested("配置 USART1 引脚"));
+    }
+
+    #[test]
+    fn detects_read_plan_without_a_real_request() {
+        assert!(looks_like_fs_intent(
+            "本轮取三个文件的正文。\n\n| 读取目标 | 用途 |\n|---|---|\n| `app_echo.h` | 接口 |"
+        ));
+        assert!(looks_like_fs_intent(
+            "请执行 se-read path=Core/Src/main.c lines=1-80"
+        ));
+        assert!(!looks_like_fs_intent(
+            "已读取 2 个文件、列出 0 个目录（约 4 KB）"
+        ));
+        assert!(!looks_like_fs_intent(
+            "修改已完成，编译通过；下一步可以烧录验证。"
+        ));
+        assert!(!looks_like_fs_intent("先读取寄存器状态，再判断故障。"));
     }
 
     #[test]
