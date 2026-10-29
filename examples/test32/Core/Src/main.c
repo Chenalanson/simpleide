@@ -44,7 +44,7 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static uint32_t s_led_last_tick = 0U;   /* LED 非阻塞节拍时间戳 */
+/* LED 闪烁节拍状态已移入 app_led.c 的 static s_last_tick，此处不再保留第二条节拍变量 */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -111,15 +111,10 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* 翻转 PC13：亮 1000ms / 灭 1000ms（完整翻转周期 2s），非阻塞节拍
-     * （原 HAL_Delay 会阻塞 500ms，导致串口回显滞后且接收缓冲溢出） */
-    uint32_t now_tick = HAL_GetTick();
-    if ((now_tick - s_led_last_tick) >= LED_BLINK_INTERVAL_MS)
-    {
-      s_led_last_tick = now_tick;
-      HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_GPIO_PIN);
-    }
-
+    /* LED 状态统一由 MODULES 层 app_led 模块管理：
+     * 常亮 / 常灭 / 周期闪烁分别由串口命令 LED_ON / LED_OFF / BLINK:<ms> 控制，
+     * 闪烁节拍在 app_led_poll() 内用 HAL_GetTick 差值推进。
+     * 本处不再保留第二条 PC13 节拍（否则与命令互相覆盖，且周期宏已随台账收敛）。 */
     /* USART1 回显：把中断收到的字节原样发回 PC */
     app_echo_poll();
  //ABCDEFG

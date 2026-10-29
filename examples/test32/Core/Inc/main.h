@@ -60,11 +60,16 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 
-/* ---- LED 闪烁参数（与 hardware.dts 台账 pin_led_pc13 节点同源） ---- */
+/* ---- LED 引脚（与 hardware.dts 台账 pin_led_pc13 / led_status 节点同源） ----
+ * 闪烁周期、闪烁使能与极性映射统一由 MODULES 层 app_led 模块管理
+ * （参数宏见 Core/Inc/app_led.h）；main.c 不再定义闪烁周期宏，也不保留第二条节拍。
+ * 此处仅保留「上电初始熄灭」所需的引脚与极性定义。
+ */
 #define LED_GPIO_PORT              GPIOC
 #define LED_GPIO_PIN               GPIO_PIN_13
-#define LED_BLINK_INTERVAL_MS      1000U  /* 半周期：亮/灭各 1000ms，完整翻转周期 2000ms */
-#define LED_ACTIVE_LOW             1      /* TODO: 按原理图核对 PC13 板载 LED 极性 */
+#define LED_ACTIVE_LOW             0      /* 与台账 led_status.polarity="active-high" 同源；
+                                           * 若实测点亮/熄灭相反，须同时改台账 polarity、
+                                           * app_led.c 的 led_write() 映射与本宏，不可只改一处 */
 
 /* USER CODE END Private defines */
 
