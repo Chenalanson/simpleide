@@ -47,6 +47,9 @@ pub struct AiEdit {
     pub base_hash: Option<u64>,
     pub resolved: Option<String>,
     pub error: Option<String>,
+    /// Set after the user applies this file. Other edits in the same reply can
+    /// still be applied individually.
+    pub applied: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -145,6 +148,7 @@ impl AiEdit {
             base_hash: None,
             resolved: None,
             error: None,
+            applied: false,
         }
     }
 
@@ -158,6 +162,7 @@ impl AiEdit {
             base_hash: None,
             resolved: None,
             error: None,
+            applied: false,
         }
     }
 
@@ -202,8 +207,13 @@ impl AiEdit {
                 for (search, replacement) in &self.pairs {
                     let count = text.matches(search).count();
                     if count != 1 {
+                        let hint = if count == 0 {
+                            "文件可能已变化，或 SEARCH 与当前文件的空白/缩进/换行不一致；可点“分析原因”让 AI 按当前文件重新生成这一处"
+                        } else {
+                            "片段在文件中出现多次，需要更长的上下文才能唯一定位；可点“分析原因”让 AI 重新生成"
+                        };
                         self.error = Some(format!(
-                            "SEARCH 片段匹配到 {count} 处（需要恰好 1 处）：{}",
+                            "SEARCH 片段匹配到 {count} 处（需要恰好 1 处）：{}。{hint}",
                             preview(search)
                         ));
                         return;
@@ -223,6 +233,154 @@ impl AiEdit {
         };
         self.resolved = Some(new_text);
     }
+}
+
+/// Build a focused retry prompt for one edit that could not be prepared.
+///
+/// The model gets the original SEARCH/REPLACE pairs, the current file content
+/// and an explicit hash-mismatch hint. This avoids re-sending the whole
+/// conversation or guessing why a snippet no longer matches.
+pub fn edit_failure_report(edit: &AiEdit, current: Option<&str>) -> String {
+    edit_failure_report_with_limit(edit, current, 7_000)
+}
+
+/// Same as [`edit_failure_report`] but with a smaller current-file excerpt for
+/// batch analysis, so one user message stays inside the chat-history budget.
+pub fn edit_failure_report_with_limit(
+    edit: &AiEdit,
+    current: Option<&str>,
+    content_limit: usize,
+) -> String {
+    let kind = match edit.kind {
+        AiEditKind::Write => "新建/覆盖",
+        AiEditKind::Replace => "局部替换",
+    };
+    let mut text = String::new();
+    text.push_str("[IDE 文件修改失败分析]\n");
+    text.push_str(&format!("文件：{}\n操作：{kind}\n", edit.path));
+    if let Some(err) = &edit.error {
+        text.push_str(&format!("IDE 失败原因：{err}\n"));
+    }
+    match current {
+        Some(current) => {
+            let current_hash = hash_text(current);
+            if edit.base_hash.is_some_and(|base| base != current_hash) {
+                text.push_str(
+                    "文件在 AI 生成后已经变化（哈希不一致），原 SEARCH 片段可能已经过时。\n",
+                );
+            }
+        }
+        None => text.push_str("当前磁盘上找不到这个文件，或无法按文本读取。\n"),
+    }
+    if edit.kind == AiEditKind::Replace {
+        text.push_str("\nAI 原来的 SEARCH/REPLACE：\n");
+        for (index, (search, replacement)) in edit.pairs.iter().enumerate() {
+            text.push_str(&format!("\n--- 片段 {} ---\n<<<<<<< SEARCH\n", index + 1));
+            text.push_str(search);
+            if !search.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str("=======\n");
+            text.push_str(replacement);
+            if !replacement.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str(">>>>>>> REPLACE\n");
+        }
+    } else if !edit.content.is_empty() {
+        text.push_str("\nAI 原来要写入的内容（最多显示 4000 字）：\n````text\n");
+        text.push_str(&clip(&edit.content, 4_000));
+        text.push_str("\n````\n");
+    }
+    if let Some(current) = current {
+        text.push_str(&format!(
+            "\n当前磁盘文件片段（行号只用于定位，SEARCH 不要包含行号；最多 {content_limit} 字）：\n````text\n"
+        ));
+        text.push_str(&current_excerpt(current, edit, content_limit));
+        text.push_str("\n````\n");
+    }
+    text.push_str(
+        "\n请分析无法匹配的真实原因（文件已变化、空白/缩进/换行差异、片段不存在、路径错误、片段出现多次等），并只针对这个文件重新输出一个能唯一匹配的 se-replace。SEARCH 必须逐字符复制上面的当前文件片段；如果无法安全局部修改，请说明原因，不要用空文件或整文件覆盖代替。\n",
+    );
+    text
+}
+
+/// Keep the report focused: for long files, show numbered windows around the
+/// lines most similar to each SEARCH first line instead of the whole file.
+fn current_excerpt(current: &str, edit: &AiEdit, limit: usize) -> String {
+    if current.chars().count() <= limit {
+        return current.to_owned();
+    }
+    let lines = current.lines().collect::<Vec<_>>();
+    let mut hits = Vec::new();
+    if edit.kind == AiEditKind::Replace {
+        for (search, _) in &edit.pairs {
+            let needle = search
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or("");
+            if needle.is_empty() {
+                continue;
+            }
+            if let Some((index, ratio)) = lines
+                .iter()
+                .enumerate()
+                .map(|(index, line)| {
+                    (
+                        index,
+                        similar::TextDiff::from_chars(line.trim(), needle).ratio(),
+                    )
+                })
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            {
+                if ratio > 0.35 {
+                    hits.push(index);
+                }
+            }
+        }
+    }
+    if hits.is_empty() {
+        hits.push(0);
+    }
+    hits.sort_unstable();
+    hits.dedup();
+
+    let mut chosen = Vec::<usize>::new();
+    for hit in hits {
+        let start = hit.saturating_sub(10);
+        let end = (hit + 11).min(lines.len());
+        for index in start..end {
+            if !chosen.contains(&index) {
+                chosen.push(index);
+            }
+        }
+    }
+    let mut text = String::new();
+    let mut last = None;
+    for index in chosen {
+        if let Some(previous) = last {
+            if index > previous + 1 {
+                text.push_str("...\n");
+            }
+        }
+        text.push_str(&format!("{:>4} | {}\n", index + 1, lines[index]));
+        last = Some(index);
+        if text.chars().count() >= limit {
+            text.push_str("...（片段已截断）\n");
+            break;
+        }
+    }
+    text
+}
+
+fn clip(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
+    }
+    let mut clipped = text.chars().take(max_chars).collect::<String>();
+    clipped.push_str("\n…（已截断）");
+    clipped
 }
 
 /// Parse `se-file` and `se-replace` fences out of an assistant reply.
@@ -798,6 +956,62 @@ mod tests {
         assert!(parsed.edits[0].content.contains("```mermaid"));
         assert!(parsed.edits[0].content.contains("gantt"));
         assert!(!incomplete_edit_block(reply));
+    }
+
+    #[test]
+    fn failure_report_contains_current_content_and_search() {
+        let mut edit = AiEdit::replace(
+            "Core/Src/usart.c".to_owned(),
+            vec![(
+                "HAL_UART_Init(&huart1);".to_owned(),
+                "HAL_UART_Init(&huart2);".to_owned(),
+            )],
+        );
+        edit.prepare(Path::new("."));
+        edit.base_hash = Some(0);
+        edit.error = Some("SEARCH 片段匹配到 0 处（需要恰好 1 处）".to_owned());
+        let report = edit_failure_report(&edit, Some("void uart_init(void) {\n}\n"));
+        assert!(report.contains("Core/Src/usart.c"));
+        assert!(report.contains("SEARCH"));
+        assert!(report.contains("HAL_UART_Init"));
+        assert!(report.contains("void uart_init"));
+        assert!(report.contains("当前磁盘文件片段"));
+        assert!(report.contains("哈希不一致"));
+        assert!(report.contains("唯一匹配"));
+    }
+
+    #[test]
+    fn failure_report_excerpts_long_file_around_match() {
+        let mut current = String::new();
+        for index in 0..400 {
+            current.push_str(&format!("int unrelated_line_{index} = {index};\n"));
+        }
+        current.push_str("void TARGET_UNIQUE_LINE_42(void) { }\n");
+        let edit = AiEdit::replace(
+            "Core/Src/target.c".to_owned(),
+            vec![(
+                "void TARGET_UNIQUE_LINE_42(void) { }".to_owned(),
+                "void TARGET_UNIQUE_LINE_42(void) { work(); }".to_owned(),
+            )],
+        );
+        let report = edit_failure_report_with_limit(&edit, Some(&current), 800);
+        assert!(report.contains("TARGET_UNIQUE_LINE_42"));
+        assert!(report.chars().count() < 4_000);
+    }
+
+    #[test]
+    fn failure_report_handles_missing_file() {
+        let mut edit = AiEdit::replace(
+            "BSP/PERIPHERAL/bsp_rs485.h".to_owned(),
+            vec![(
+                "#define RS485_DE_SETTLE_US 100".to_owned(),
+                "#define RS485_DE_SETTLE_US 200".to_owned(),
+            )],
+        );
+        edit.error = Some("SEARCH 片段匹配到 0 处".to_owned());
+        let report = edit_failure_report(&edit, None);
+        assert!(report.contains("找不到这个文件"));
+        assert!(report.contains("bsp_rs485.h"));
     }
 
     #[test]

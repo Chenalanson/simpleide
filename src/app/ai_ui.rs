@@ -44,6 +44,9 @@ struct WorkbenchActions {
 #[derive(Default)]
 struct AiCardRequests {
     apply_edits: Option<usize>,
+    apply_single_edit: Option<(usize, usize)>,
+    analyze_edit: Option<(usize, usize)>,
+    analyze_errors: Option<usize>,
     cancel_edits: Option<usize>,
     apply_deletes: Option<usize>,
     cancel_deletes: Option<usize>,
@@ -343,6 +346,18 @@ impl App {
         });
         if let Some(index) = requests.apply_edits {
             self.apply_ai_edits(index);
+            ui.ctx().request_repaint();
+        }
+        if let Some((index, edit_index)) = requests.apply_single_edit {
+            self.apply_ai_single_edit(index, edit_index);
+            ui.ctx().request_repaint();
+        }
+        if let Some((index, edit_index)) = requests.analyze_edit {
+            self.analyze_ai_edit(index, edit_index);
+            ui.ctx().request_repaint();
+        }
+        if let Some(index) = requests.analyze_errors {
+            self.analyze_ai_edits(index);
             ui.ctx().request_repaint();
         }
         if let Some(index) = requests.cancel_edits {
@@ -2144,13 +2159,7 @@ fn ai_message(
                 }
                 if !message.edits.is_empty() {
                     ui.add_space(7.0);
-                    ai_edits_card(
-                        ui,
-                        &*message,
-                        index,
-                        &mut requests.apply_edits,
-                        &mut requests.cancel_edits,
-                    );
+                    ai_edits_card(ui, &*message, index, &mut *requests);
                 }
                 if !message.deletes.is_empty() {
                     ui.add_space(7.0);
@@ -2977,10 +2986,13 @@ fn ai_edits_card(
     ui: &mut Ui,
     message: &AiChatMessage,
     message_index: usize,
-    apply_request: &mut Option<usize>,
-    cancel_request: &mut Option<usize>,
+    requests: &mut AiCardRequests,
 ) {
-    let has_errors = message.edits.iter().any(|edit| edit.error.is_some());
+    let applied_count = message.edits.iter().filter(|edit| edit.applied).count();
+    let has_errors = message
+        .edits
+        .iter()
+        .any(|edit| !edit.applied && edit.error.is_some());
     Frame::new()
         .fill(theme::with_alpha(theme::accent(), 10))
         .stroke(Stroke::new(1.0_f32, theme::with_alpha(theme::accent(), 75)))
@@ -2996,21 +3008,42 @@ fn ai_edits_card(
                         .color(theme::text()),
                 );
                 ui.label(
-                    RichText::new(format!("{} 个文件", message.edits.len()))
-                        .size(9.5)
-                        .color(theme::text_faint()),
+                    RichText::new(if applied_count > 0 {
+                        format!("{applied_count}/{} 个文件", message.edits.len())
+                    } else {
+                        format!("{} 个文件", message.edits.len())
+                    })
+                    .size(9.5)
+                    .color(theme::text_faint()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     match message.edit_status {
                         AiEditStatus::Pending => {
                             if has_errors {
-                                ui.add_enabled(false, theme::primary_button("应用全部"));
+                                ui.add_enabled(false, theme::primary_button("应用全部"))
+                                    .on_disabled_hover_text(
+                                        "还有无法匹配的文件：可以单独应用可用文件，或点“分析失败原因”让 AI 修复",
+                                    );
+                                ui.add_space(4.0);
+                                if ui
+                                    .add(theme::secondary_button("分析失败原因"))
+                                    .clicked()
+                                {
+                                    requests.analyze_errors = Some(message_index);
+                                }
                             } else if ui.add(theme::primary_button("应用全部")).clicked() {
-                                *apply_request = Some(message_index);
+                                requests.apply_edits = Some(message_index);
                             }
                             ui.add_space(4.0);
-                            if ui.add(theme::secondary_button("取消")).clicked() {
-                                *cancel_request = Some(message_index);
+                            if ui
+                                .add(theme::secondary_button(if applied_count > 0 {
+                                    "取消剩余"
+                                } else {
+                                    "取消"
+                                }))
+                                .clicked()
+                            {
+                                requests.cancel_edits = Some(message_index);
                             }
                         }
                         AiEditStatus::Applied => {
@@ -3068,11 +3101,39 @@ fn ai_edits_card(
                             open = !open;
                             ui.data_mut(|data| data.insert_persisted(id, open));
                         }
+                        if message.edit_status == AiEditStatus::Pending {
+                            if edit.applied {
+                                ui.label(
+                                    RichText::new("已应用")
+                                        .size(9.0)
+                                        .strong()
+                                        .color(theme::success()),
+                                );
+                            } else if edit.error.is_some() {
+                                if ai_ghost_button(ui, "分析原因") {
+                                    requests.analyze_edit = Some((message_index, edit_index));
+                                }
+                            } else if ai_ghost_button(ui, "应用此文件") {
+                                requests.apply_single_edit = Some((message_index, edit_index));
+                            }
+                        }
                     });
                 });
                 if let Some(error) = &edit.error {
                     ui.add_space(2.0);
                     ui.add(Label::new(RichText::new(error).size(9.0).color(theme::error())).wrap());
+                    if message.edit_status == AiEditStatus::Pending && !edit.applied {
+                        ui.add(
+                            Label::new(
+                                RichText::new(
+                                    "可点右侧“分析原因”，让 AI 按当前文件重新生成这一处。",
+                                )
+                                .size(8.5)
+                                .color(theme::text_faint()),
+                            )
+                            .wrap(),
+                        );
+                    }
                 } else if open {
                     render_ai_diff(ui, edit, message_index, edit_index);
                 }

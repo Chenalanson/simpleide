@@ -935,7 +935,12 @@ impl AiChatMessage {
                     crate::ai_edit::AiEditKind::Write => "新建",
                     crate::ai_edit::AiEditKind::Replace => "替换",
                 };
-                content.push_str(&format!("- {}（{}）\n", edit.path, kind));
+                content.push_str(&format!(
+                    "- {}（{}）{}\n",
+                    edit.path,
+                    kind,
+                    if edit.applied { " 已应用" } else { "" }
+                ));
             }
         }
         if !self.deletes.is_empty() {
@@ -4621,7 +4626,16 @@ impl App {
         if let Some(index) = self.ai.cli_check.as_ref().map(|check| check.message_index) {
             self.detach_ai_cli_check(index, "已退出 AI 模式；串口调试已停止");
         }
-        self.abort_ai_stream("已退出 AI 模式，本次输出中断");
+        // Keep the in-flight request alive: the user often goes back to the
+        // editor to confirm a detail while the model is still answering. The
+        // receiver is polled every frame even outside AI mode, so the answer
+        // and any se-ask card are ready when AI mode is opened again.
+        if self.ai.sending {
+            self.set_toast(
+                "AI 仍在后台生成；重新进入 AI 模式可继续查看和回答",
+                Severity::Info,
+            );
+        }
         self.save_ai_chat();
         self.ai.enabled = false;
         self.ai.transition = None;
@@ -6282,13 +6296,38 @@ impl App {
     /// Everything is checked before the first write; modified files are copied
     /// to `%APPDATA%\SimpleEmbedded\backups\...` first.
     fn apply_ai_edits(&mut self, index: usize) {
+        self.apply_ai_edits_inner(index, None);
+    }
+
+    fn apply_ai_single_edit(&mut self, index: usize, edit_index: usize) {
+        self.apply_ai_edits_inner(index, Some(edit_index));
+    }
+
+    fn apply_ai_edits_inner(&mut self, index: usize, selected: Option<usize>) {
         let Some(message) = self.ai.messages.get(index) else {
             return;
         };
         if message.edit_status != AiEditStatus::Pending || message.edits.is_empty() {
             return;
         }
-        let edits = message.edits.clone();
+        let targets = message
+            .edits
+            .iter()
+            .enumerate()
+            .filter(|(edit_index, edit)| {
+                !edit.applied && selected.is_none_or(|wanted| wanted == *edit_index)
+            })
+            .map(|(edit_index, edit)| (edit_index, edit.clone()))
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            if selected.is_some() {
+                self.set_toast("这个文件已经应用过了", Severity::Info);
+            }
+            return;
+        }
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            message.apply_error = None;
+        }
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             if let Some(message) = self.ai.messages.get_mut(index) {
                 message.apply_error = Some("请先打开工程".to_owned());
@@ -6297,6 +6336,7 @@ impl App {
         };
 
         struct Plan {
+            edit_index: usize,
             edit: crate::ai_edit::AiEdit,
             absolute: PathBuf,
             loaded: Option<util::LoadedText>,
@@ -6314,7 +6354,7 @@ impl App {
         }
 
         let mut plans = Vec::new();
-        for edit in edits {
+        for (edit_index, edit) in targets {
             if let Some(err) = edit.error.clone() {
                 fail!(err);
             }
@@ -6364,6 +6404,7 @@ impl App {
                 fail!(format!("同一文件出现了多次修改：{}", edit.path));
             }
             plans.push(Plan {
+                edit_index,
                 edit,
                 absolute,
                 loaded,
@@ -6441,11 +6482,22 @@ impl App {
         }
 
         let count = plans.len();
-        if let Some(message) = self.ai.messages.get_mut(index) {
-            message.edit_status = AiEditStatus::Applied;
-            message.apply_error = None;
+        let remaining = if let Some(message) = self.ai.messages.get_mut(index) {
+            for plan in &plans {
+                if let Some(edit) = message.edits.get_mut(plan.edit_index) {
+                    edit.applied = true;
+                }
+            }
             message.backup_dir = Some(backup_dir.clone());
-        }
+            message.apply_error = None;
+            let remaining = message.edits.iter().filter(|edit| !edit.applied).count();
+            if remaining == 0 {
+                message.edit_status = AiEditStatus::Applied;
+            }
+            remaining
+        } else {
+            0
+        };
         if let Some(tree) = &mut self.tree {
             tree.refresh();
         }
@@ -6454,13 +6506,128 @@ impl App {
         self.start_relations_scan();
         self.refresh_ai_framework(true);
         self.find.dirty = true;
+        let suffix = if remaining == 0 {
+            String::new()
+        } else {
+            format!("，还剩 {remaining} 个未应用")
+        };
         self.set_toast(
             format!(
-                "AI 已应用 {count} 个文件修改，备份：{}",
+                "AI 已应用 {count} 个文件修改{suffix}，备份：{}",
                 util::display_path(&backup_dir)
             ),
             Severity::Success,
         );
+    }
+
+    /// Ask the model to diagnose all unmatched edits in one message. Each file
+    /// is still requested separately so the reply cannot silently merge them.
+    fn analyze_ai_edits(&mut self, index: usize) {
+        if self.ai.sending {
+            self.set_toast("AI 正在生成回复，请稍后再分析", Severity::Info);
+            return;
+        }
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Warning);
+            return;
+        };
+        let Some(message) = self.ai.messages.get(index) else {
+            return;
+        };
+        if message.edit_status != AiEditStatus::Pending {
+            return;
+        }
+        let failing = message
+            .edits
+            .iter()
+            .filter(|edit| !edit.applied && edit.error.is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+        if failing.is_empty() {
+            return;
+        }
+        let mut prompt = String::new();
+        prompt.push_str(
+            "[IDE 批量文件修改失败分析]\n以下文件无法按原 SEARCH 片段应用。请逐个分析真实原因，并分别重新生成能唯一匹配的 se-replace：\n",
+        );
+        let batch = failing.iter().take(2).collect::<Vec<_>>();
+        for edit in &batch {
+            let absolute = root.join(&edit.path);
+            let current = if absolute.is_file() {
+                crate::util::read_text_file(&absolute)
+                    .ok()
+                    .map(|loaded| loaded.text)
+            } else {
+                None
+            };
+            prompt.push_str("\n\n");
+            prompt.push_str(&crate::ai_edit::edit_failure_report_with_limit(
+                edit,
+                current.as_deref(),
+                4_000,
+            ));
+        }
+        if failing.len() > batch.len() {
+            prompt.push_str(&format!(
+                "\n本次先分析前 {} 个文件；其余 {} 个请让用户逐个点击“分析原因”。\n",
+                batch.len(),
+                failing.len() - batch.len()
+            ));
+        }
+        prompt.push_str(
+            "\n请为每个文件分别输出 se-replace，不要把不同文件合并；如果某个文件不需要修改或无法安全修改，请说明原因。\n",
+        );
+        if self.send_ai_text(prompt) {
+            self.set_toast(
+                if failing.len() > batch.len() {
+                    format!(
+                        "已请求 AI 分析前 {} 个失败文件；其余请逐个分析",
+                        batch.len()
+                    )
+                } else {
+                    format!("已请求 AI 分析 {} 个失败文件", failing.len())
+                },
+                Severity::Info,
+            );
+        }
+    }
+
+    /// Ask the model to diagnose one unmatched edit and regenerate only that
+    /// file. The prompt includes the current disk content so the next SEARCH
+    /// can be copied from the real file instead of the stale reply.
+    fn analyze_ai_edit(&mut self, index: usize, edit_index: usize) {
+        if self.ai.sending {
+            self.set_toast("AI 正在生成回复，请稍后再分析", Severity::Info);
+            return;
+        }
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Warning);
+            return;
+        };
+        let Some(message) = self.ai.messages.get(index) else {
+            return;
+        };
+        if message.edit_status != AiEditStatus::Pending {
+            return;
+        }
+        let Some(edit) = message.edits.get(edit_index).cloned() else {
+            return;
+        };
+        let absolute = root.join(&edit.path);
+        let current = if absolute.is_file() {
+            crate::util::read_text_file(&absolute)
+                .ok()
+                .map(|loaded| loaded.text)
+        } else {
+            None
+        };
+        let prompt = crate::ai_edit::edit_failure_report(&edit, current.as_deref());
+        if self.send_ai_text(prompt) {
+            self.set_toast(
+                format!("已请求 AI 分析并重新生成：{}", edit.path),
+                Severity::Info,
+            );
+        }
     }
 
     /// Validate and delete the files proposed in an assistant message. This is
