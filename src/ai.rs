@@ -1583,7 +1583,7 @@ fn source_candidates(root: &Path) -> Vec<PathBuf> {
     }
     files.sort();
     files.dedup();
-    files.truncate(30);
+    files.truncate(48);
     files
 }
 
