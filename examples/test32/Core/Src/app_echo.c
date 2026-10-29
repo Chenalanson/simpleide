@@ -98,6 +98,10 @@ HAL_StatusTypeDef app_echo_init(void)
   s_rx_overflow = 0U;
   s_tx_busy     = 0U;
 
+  /* 把 IDLE 中断处理注册到 PERIPHERAL 层（usart.c），由 USART1_IRQHandler 经
+   * usart1_idle_dispatch() 调用，避免 it.c(PERIPHERAL) 直接依赖 MODULES（D1） */
+  usart1_set_idle_callback(app_echo_idle_isr);
+
   /* 启动 DMA 循环接收（circular 模式不会自动停止，由 IDLE 中断分段搬运） */
   st = HAL_UART_Receive_DMA(&huart1, s_dma_rx_buf, APP_ECHO_DMA_RX_SIZE);
   if (st != HAL_OK)

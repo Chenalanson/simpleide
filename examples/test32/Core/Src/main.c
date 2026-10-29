@@ -96,7 +96,7 @@ int main(void)
   HAL_GPIO_WritePin(LED_GPIO_PORT, LED_GPIO_PIN, GPIO_PIN_RESET);
 #endif
 
-  /* 启动 USART1 回显通道（单字节中断接收），失败进入错误处理 */
+  /* 启动 USART1 回显通道（DMA 循环接收 + IDLE 中断分段），失败进入错误处理 */
   if (app_echo_init() != HAL_OK)
   {
     Error_Handler();

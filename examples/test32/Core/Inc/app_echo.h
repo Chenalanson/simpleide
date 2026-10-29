@@ -37,8 +37,9 @@ void app_echo_poll(void);
 
 /**
   * @brief  USART1 空闲中断服务：把 DMA 缓冲中新增的区间搬进主环形缓冲。
-  * @note   由 USART1_IRQHandler 在调用 HAL_UART_IRQHandler() 之前调用；
-  *         函数内部自行判断并清除 IDLE 标志，非 IDLE 触发时立即返回。
+  * @note   通过 usart1_set_idle_callback() 注册到 PERIPHERAL 层；由
+  *         USART1_IRQHandler → usart1_idle_dispatch() 在 HAL_UART_IRQHandler()
+  *         之前调用；函数内部自行判断并清除 IDLE 标志，非 IDLE 触发时立即返回。
   */
 void app_echo_idle_isr(void);
 

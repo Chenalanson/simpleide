@@ -22,7 +22,7 @@
 #include "stm32f1xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "app_echo.h"    /* app_echo_idle_isr()：USART1 空闲中断分段搬运 */
+#include "usart.h"       /* usart1_idle_dispatch()：PERIPHERAL 内部 IDLE 分发，不反向依赖 MODULES */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -205,8 +205,9 @@ void SysTick_Handler(void)
 void USART1_IRQHandler(void)
 {
   /* USER CODE BEGIN USART1_IRQn 0 */
-  /* IDLE 中断 HAL 不处理：先自行清标志并搬运，再交给 HAL 处理错误/TC */
-  app_echo_idle_isr();
+  /* IDLE 中断 HAL 不处理：由 PERIPHERAL 层分发到已注册回调（MODULES），
+     避免 stm32f1xx_it.c 反向依赖 MODULES（architecture.md D1） */
+  usart1_idle_dispatch();
   /* USER CODE END USART1_IRQn 0 */
   HAL_UART_IRQHandler(&huart1);
   /* USER CODE BEGIN USART1_IRQn 1 */

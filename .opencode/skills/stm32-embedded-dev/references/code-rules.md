@@ -51,6 +51,7 @@
 - MODULES：`bsp_<器件缩写>.c/.h`（`bsp_st7789v.c`、`bsp_sc8701.c`），接口 `<器件>_<动作>`（`st7789v_init`）。
 - MID：`task_sched`、`dev_manager`、`service_<域>`；APP 固定 `app.c/app.h`。
 - 依赖方向：APP → MID → MODULES → PERIPHERAL → LL/HAL；禁止反向包含与循环依赖。
+- 目录落点红线：文件路径写全相对目录（`BSP/MODULES/bsp_sc8701.c`）；业务 `.c/.h` 禁止放工程根目录；根目录仅 `hardware.dts`、`framework.md` 与构建工程；骨架缺失时先列入新建清单（architecture.md 3.3），不把文件随手丢进根目录或只读库目录。
 
 ## 4. 通用编码规范（编号规则，违反即返工）
 

@@ -162,6 +162,21 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 }
 
 /* USER CODE BEGIN 1 */
+/* USART1 IDLE 回调与分发实现（PERIPHERAL 层内部，避免 stm32f1xx_it.c 反向依赖 MODULES） */
+static usart1_idle_cb_t s_idle_cb = NULL;
+
+void usart1_set_idle_callback(usart1_idle_cb_t cb)
+{
+  s_idle_cb = cb;
+}
+
+void usart1_idle_dispatch(void)
+{
+  if (s_idle_cb != NULL)
+  {
+    s_idle_cb();
+  }
+}
 
 /* USER CODE END 1 */
 
