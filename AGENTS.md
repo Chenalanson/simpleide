@@ -386,8 +386,9 @@ UI 改动后建议：
 
 ## Git / 工作流
 
-- 远端：`origin` = https://gitee.com/chen_alanson/embedd.git
-- 主分支：`master`（跟踪 `origin/master`）
+- 远端：`origin` = https://github.com/Chenalanson/simpleide.git，`gitee` = https://gitee.com/chen_alanson/embedd.git
+- 推送要求：每次推送必须同时推送到 `origin` 和 `gitee` 的当前分支（例如 `git push origin xiug` + `git push gitee xiug`）；只推一个远端视为未完成。
+- 主分支：`master`（跟踪 `origin/master`）；当前开发分支 `xiug`（跟踪 `origin/xiug`）。
 - 本仓库开发时不要提交 `target/`、`examples/blink/build/`、`*.log`、`.simple-embedded/` 或 `*.se-workspace`；这些已写入 `.gitignore`。`.opencode/skills/` 随工程跟踪，包含当前可用的技能说明和参考资料。普通用户工程是否提交 `.simple-embedded/settings.json` / `.se-workspace` 由用户决定。
 - `dist/` 只追踪 `*.exe`：`.gitignore` 使用 `/dist/**/*` + `!/dist/**/` + `!/dist/**/*.exe`，并显式忽略 `.compiler.tmp` / `.make.tmp`。不要用 `git add -f` 把 DLL、工具链数据或 `tools.zip` 加进仓库。
 - 除非用户明确要求，不要自动 commit 或 push。
