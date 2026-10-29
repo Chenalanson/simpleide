@@ -987,6 +987,16 @@ struct CliState {
 }
 
 #[derive(Default)]
+struct ContextIndexState {
+    index: Option<crate::context_index::ContextIndex>,
+    receiver: Option<Receiver<crate::context_index::ContextIndex>>,
+    building: bool,
+    stale: bool,
+    error: Option<String>,
+    built_at: Option<Instant>,
+}
+
+#[derive(Default)]
 struct AiState {
     enabled: bool,
     messages: Vec<AiChatMessage>,
@@ -1021,6 +1031,7 @@ struct AiState {
     build_rounds: usize,
     cli_check: Option<AiCliCheck>,
     cli_rounds: usize,
+    context_stats: Option<crate::ai::ContextBuildStats>,
 }
 
 struct AiSettingsDraft {
@@ -1357,6 +1368,7 @@ pub struct App {
     report: ReportState,
     ai: AiState,
     cli: CliState,
+    context_index: ContextIndexState,
     ai_settings_draft: Option<AiSettingsDraft>,
     /// Zoom factor to restore when leaving AI mode. Kept outside `AiState` so
     /// switching projects cannot lose the user's normal editor zoom.
@@ -1468,6 +1480,7 @@ impl App {
             report: ReportState::default(),
             ai: AiState::default(),
             cli: CliState::default(),
+            context_index: ContextIndexState::default(),
             ai_settings_draft: None,
             ai_zoom_before: None,
             hex: HexState::default(),
@@ -1611,6 +1624,7 @@ impl App {
         }
         self.ai = AiState::default();
         self.cli = CliState::default();
+        self.context_index = ContextIndexState::default();
         self.ai_settings_draft = None;
         self.output_view = OutputView::Build;
 
@@ -1747,6 +1761,7 @@ impl App {
         self.settings.remember_project(&root);
         self.settings.save();
         self.start_relations_scan();
+        self.start_context_index_scan();
 
         if let Some(err) = config_error {
             self.set_toast(err, Severity::Warning);
@@ -4596,6 +4611,7 @@ impl App {
         }
         self.ai.enabled = true;
         self.ai.context_file = self.active_document().map(|doc| doc.path.clone());
+        self.ensure_context_index();
         self.ai.focus_input = true;
         self.refresh_ai_skill();
         self.refresh_ai_framework(true);
@@ -4948,6 +4964,69 @@ impl App {
         self.focus_editor = true;
     }
 
+    fn start_context_index_scan(&mut self) {
+        if self.context_index.building {
+            return;
+        }
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.context_index.receiver = Some(receiver);
+        self.context_index.building = true;
+        self.context_index.stale = false;
+        self.context_index.error = None;
+        let spawned = std::thread::Builder::new()
+            .name("simple-embedded-context-index".to_owned())
+            .spawn(move || {
+                let index = crate::context_index::ContextIndex::build(&root);
+                let _ = sender.send(index);
+            });
+        if let Err(err) = spawned {
+            self.context_index.building = false;
+            self.context_index.receiver = None;
+            self.context_index.error = Some(format!("无法启动上下文索引：{err}"));
+        }
+    }
+
+    fn poll_context_index(&mut self, ctx: &egui::Context) {
+        if self.context_index.building {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
+        let Some(receiver) = &self.context_index.receiver else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(index) => {
+                self.context_index.index = Some(index);
+                self.context_index.building = false;
+                self.context_index.receiver = None;
+                self.context_index.built_at = Some(Instant::now());
+                self.context_index.error = None;
+                ctx.request_repaint();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.context_index.building = false;
+                self.context_index.receiver = None;
+                self.context_index.error = Some("上下文索引线程意外退出".to_owned());
+            }
+        }
+    }
+
+    fn ensure_context_index(&mut self) {
+        if self.context_index.building {
+            return;
+        }
+        if self.context_index.index.is_none() || self.context_index.stale {
+            self.start_context_index_scan();
+        }
+    }
+
+    fn mark_context_index_stale(&mut self) {
+        self.context_index.stale = true;
+    }
+
     fn open_cli(&mut self) {
         if self.has_modal() {
             return;
@@ -5277,22 +5356,32 @@ impl App {
         let extra_skills = crate::ai::load_extra_skills();
         let references = crate::ai::load_references();
         let evolution = crate::ai::load_user_evolution();
-        let system_prompt = crate::ai::build_system_prompt(&crate::ai::Context {
-            root: &root,
-            project_name: &project_name,
-            meta: &self.project_meta,
-            build: &self.build_config,
-            debug: &self.project_debug,
-            memory_layout: self.memory_layout.as_ref(),
-            active_file: self.ai.context_file.as_deref(),
-            include_dirs: self.effective_includes(),
-            library_dirs: self.effective_library_dirs(),
-            defines: self.effective_defines(),
-            skill: &skill,
-            extra_skills: &extra_skills,
-            references: &references,
-            evolution: &evolution,
-        });
+        let use_index = !self.context_index.stale;
+        self.ensure_context_index();
+        let (system_prompt, context_stats) =
+            crate::ai::build_system_prompt_with_stats(&crate::ai::Context {
+                root: &root,
+                project_name: &project_name,
+                meta: &self.project_meta,
+                build: &self.build_config,
+                debug: &self.project_debug,
+                memory_layout: self.memory_layout.as_ref(),
+                active_file: self.ai.context_file.as_deref(),
+                include_dirs: self.effective_includes(),
+                library_dirs: self.effective_library_dirs(),
+                defines: self.effective_defines(),
+                skill: &skill,
+                extra_skills: &extra_skills,
+                references: &references,
+                evolution: &evolution,
+                query: &text,
+                index: if use_index {
+                    self.context_index.index.as_ref()
+                } else {
+                    None
+                },
+            });
+        self.ai.context_stats = Some(context_stats);
         // A new user message supersedes any still-unanswered question cards
         // from earlier replies. The answer path marks its own card Applied
         // after this function returns.
@@ -5875,11 +5964,10 @@ impl App {
             if trimmed.trim().is_empty() {
                 report.push_str("（无输出）\n");
             } else {
-                let total = trimmed.chars().count();
-                let capped = trimmed.chars().take(8_000).collect::<String>();
-                report.push_str(&capped);
-                if total > 8_000 {
-                    report.push_str("\n…（单条输出已截断）");
+                let (compressed, saved) = crate::context_index::compress_output(trimmed, 6_000);
+                report.push_str(&compressed);
+                if saved > 0 {
+                    report.push_str(&format!("\n…（串口输出已压缩，省略 {saved} 字符）"));
                 }
                 report.push('\n');
             }
@@ -6504,6 +6592,7 @@ impl App {
         self.symbols.scanned = false;
         self.relations = RelationState::default();
         self.start_relations_scan();
+        self.mark_context_index_stale();
         self.refresh_ai_framework(true);
         self.find.dirty = true;
         let suffix = if remaining == 0 {
@@ -6814,6 +6903,7 @@ impl App {
             self.symbols.scanned = false;
             self.relations = RelationState::default();
             self.start_relations_scan();
+            self.mark_context_index_stale();
             self.refresh_ai_framework(true);
             self.refresh_support_packs();
             self.refresh_git_status();
@@ -6972,6 +7062,7 @@ impl App {
             self.member_index = None;
             self.git_line_key = None;
             self.refresh_git_status();
+            self.mark_context_index_stale();
             if affects_relations {
                 self.mark_relations_dirty();
             }
@@ -7081,6 +7172,7 @@ impl App {
         if saved > 0 {
             self.member_index = None;
             self.refresh_git_status();
+            self.mark_context_index_stale();
             if affects_relations {
                 self.mark_relations_dirty();
             }
@@ -11436,6 +11528,7 @@ impl eframe::App for App {
         self.poll_install_system(&ctx);
         self.poll_resource_report(&ctx);
         self.poll_ai(&ctx);
+        self.poll_context_index(&ctx);
         self.sync_lsp();
         self.poll_micropython();
         self.poll_debug_start();
@@ -11752,7 +11845,11 @@ fn build_ai_report_from(
     } else {
         report.push_str("\n构建已通过。请确认 warning 是否需要处理，然后给出最终总结。\n");
     }
-    (status, summary, crate::ai::truncate_chars(&report, 30_000))
+    let (mut report, saved) = crate::context_index::compress_output(&report, 30_000);
+    if saved > 0 {
+        report.push_str(&format!("\n（构建报告已压缩，省略 {saved} 字符）\n"));
+    }
+    (status, summary, report)
 }
 
 fn toast_life(severity: Severity) -> Duration {

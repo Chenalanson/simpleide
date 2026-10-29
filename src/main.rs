@@ -15,6 +15,7 @@ mod column_select;
 mod comment;
 mod completion;
 mod config;
+mod context_index;
 mod debugger;
 mod editor;
 mod file_tree;

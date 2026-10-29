@@ -37,6 +37,7 @@ struct WorkbenchActions {
     original_mode: bool,
     open_settings: bool,
     open_cli: bool,
+    rebuild_index: bool,
     refresh_skill: bool,
     orb_clicked: bool,
 }
@@ -203,6 +204,9 @@ impl App {
         }
         if workbench.open_cli {
             self.open_cli();
+        }
+        if workbench.rebuild_index {
+            self.start_context_index_scan();
         }
         if send {
             self.send_ai_message();
@@ -448,14 +452,16 @@ impl App {
                             crate::util::display_path(path)
                         ));
                     }
-                    let auto = if self.ai.framework_path.is_some() {
+                    let auto = if self.context_index.index.is_some() {
+                        "自动 · framework.md + 检索片段"
+                    } else if self.ai.framework_path.is_some() {
                         "自动 · framework.md + 引用文件"
                     } else {
                         "自动 · framework.md / 工程源文件"
                     };
                     ui.label(RichText::new(auto).size(8.8).color(theme::text_faint()))
                         .on_hover_text(
-                            "每次发送会自动附带 framework.md、hardware.dts、framework.md 中引用的工程文件和 APP/MID/BSP/Core 源文件；右侧的附加文件只是额外补充，不需要把每个文件都手动加进来。",
+                            "每次发送会自动附带 framework.md、hardware.dts、framework.md 中引用的工程文件和工程源文件；本地上下文索引会按你的需求只检索相关代码片段，减少 token。右侧的附加文件只是额外补充。",
                         );
                 });
             });
@@ -611,11 +617,72 @@ impl App {
                     ai_kv(
                         ui,
                         "自动上下文",
-                        if self.ai.framework_path.is_some() {
+                        if self.context_index.index.is_some() {
+                            "framework.md + 检索片段"
+                        } else if self.ai.framework_path.is_some() {
                             "framework.md + 引用文件"
                         } else {
                             "framework.md / 工程源文件"
                         },
+                    );
+
+                    ui.add_space(10.0);
+                    ai_section(ui, "上下文索引");
+                    if self.context_index.building {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(
+                                RichText::new("构建中…")
+                                    .size(9.0)
+                                    .color(theme::text_faint()),
+                            );
+                        });
+                    } else if let Some(index) = &self.context_index.index {
+                        let stats = index.stats();
+                        ai_kv(
+                            ui,
+                            "规模",
+                            &format!("{} 文件 / {} 片段", stats.files, stats.chunks),
+                        );
+                        ai_kv(ui, "大小", &format!("{} KB", stats.bytes / 1024));
+                        if let Some(context) = &self.ai.context_stats {
+                            ai_kv(
+                                ui,
+                                "上次检索",
+                                &format!(
+                                    "{} 项 / {} KB",
+                                    context.selected_chunks,
+                                    context.selected_bytes / 1024
+                                ),
+                            );
+                        }
+                        if let Some(built_at) = self.context_index.built_at {
+                            ai_kv(
+                                ui,
+                                "更新",
+                                &format!("{} 秒前", built_at.elapsed().as_secs()),
+                            );
+                        }
+                    } else {
+                        ui.label(
+                            RichText::new("尚未建立索引，发送时会使用完整源文件回退")
+                                .size(8.8)
+                                .color(theme::text_faint()),
+                        );
+                    }
+                    if let Some(error) = &self.context_index.error {
+                        ui.add(
+                            Label::new(RichText::new(error).size(8.5).color(theme::error()))
+                                .wrap(),
+                        );
+                    }
+                    if ui.add(theme::secondary_button("重建索引")).clicked() {
+                        actions.rebuild_index = true;
+                    }
+                    ui.label(
+                        RichText::new("只把相关片段发给模型；framework.md 和关键文件仍完整附带。")
+                            .size(8.2)
+                            .color(theme::text_faint()),
                     );
 
                     ui.add_space(10.0);

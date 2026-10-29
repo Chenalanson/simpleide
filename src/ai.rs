@@ -807,6 +807,19 @@ pub struct Context<'a> {
     pub extra_skills: &'a ResourceBundle,
     pub references: &'a ResourceBundle,
     pub evolution: &'a str,
+    /// The user's current request; used to retrieve focused chunks from the
+    /// local context index instead of attaching every source file.
+    pub query: &'a str,
+    pub index: Option<&'a crate::context_index::ContextIndex>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ContextBuildStats {
+    pub indexed_files: usize,
+    pub indexed_chunks: usize,
+    pub selected_chunks: usize,
+    pub selected_bytes: usize,
+    pub prompt_bytes: usize,
 }
 
 /// Find `.opencode/skills/stm32-embedded-dev/SKILL.md` in the project, an
@@ -955,7 +968,13 @@ fn append_resource_section(prompt: &mut String, title: &str, note: &str, text: &
 }
 
 /// Build the system prompt sent with every AI request.
-pub fn build_system_prompt(context: &Context<'_>) -> String {
+pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, ContextBuildStats) {
+    let mut stats = ContextBuildStats::default();
+    if let Some(index) = context.index {
+        let index_stats = index.stats();
+        stats.indexed_files = index_stats.files;
+        stats.indexed_chunks = index_stats.chunks;
+    }
     let mut prompt = String::new();
     prompt.push_str(
         "你是 Simple embedded 的 AI 助手，正在协助 STM32 嵌入式开发。\n\
@@ -1143,25 +1162,104 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
             &mut appended,
         );
     }
-    prompt.push_str("\n### 工程主要源文件\n");
-    let mut source_bytes = 0usize;
-    for path in source_candidates(context.root) {
-        if prompt.len() > MAX_SYSTEM_PROMPT_BYTES - PROMPT_PROTOCOL_RESERVE
-            || source_bytes > 140_000
-            || appended.len() > 48
-        {
-            break;
-        }
-        let before = prompt.len();
-        append_file(
-            &mut prompt,
-            context.root,
-            &path,
-            36_000,
-            fence_language(&path),
-            &mut appended,
+    let index_hits = context
+        .index
+        .map(|index| index.search(context.query, 24))
+        .unwrap_or_default();
+    let mut selected_chunks = 0usize;
+    let mut selected_bytes = 0usize;
+    let mut section_chunks = 0usize;
+    if !index_hits.is_empty() {
+        prompt.push_str("\n## 上下文索引命中（按当前需求检索，不是全量文件）\n");
+        prompt.push_str(
+            "> 下列完整文件/片段由本地上下文索引按本次需求检索，只保留相关代码；\
+             修改时 SEARCH 必须来自当前磁盘文件，必要时先打开完整文件核对。\n",
         );
-        source_bytes += prompt.len().saturating_sub(before);
+        // Keep the top two matched files complete so edits have exact context;
+        // the rest are focused chunks from the local index.
+        let mut full_files = HashSet::new();
+        for hit in &index_hits {
+            if full_files.len() >= 2 {
+                break;
+            }
+            if !full_files.insert(hit.path.clone()) {
+                continue;
+            }
+            let before = appended.len();
+            append_file(
+                &mut prompt,
+                context.root,
+                &context.root.join(&hit.path),
+                40_000,
+                fence_language(Path::new(&hit.path)),
+                &mut appended,
+            );
+            if appended.len() > before {
+                selected_chunks += 1;
+                selected_bytes += std::fs::metadata(context.root.join(&hit.path))
+                    .map(|metadata| metadata.len() as usize)
+                    .unwrap_or(0);
+            }
+        }
+        let mut section = String::new();
+        for hit in &index_hits {
+            if appended
+                .iter()
+                .any(|path| path.eq_ignore_ascii_case(&hit.path))
+            {
+                continue;
+            }
+            if section_chunks >= 20 || selected_bytes >= 64_000 {
+                break;
+            }
+            if prompt.len() + section.len() + hit.text.len() + 512
+                > MAX_SYSTEM_PROMPT_BYTES - PROMPT_PROTOCOL_RESERVE
+            {
+                break;
+            }
+            section.push_str(&format!(
+                "\n### {}（第 {}-{} 行）\n\n```{}\n",
+                hit.path,
+                hit.start_line,
+                hit.end_line,
+                fence_language(Path::new(&hit.path))
+            ));
+            section.push_str(&hit.text);
+            if !hit.text.ends_with('\n') {
+                section.push('\n');
+            }
+            section.push_str("```\n");
+            section_chunks += 1;
+            selected_chunks += 1;
+            selected_bytes += hit.text.len();
+        }
+        if section_chunks > 0 {
+            prompt.push_str(&section);
+        }
+    }
+    // Fall back to broad source files only when the index produced no hits;
+    // with an index we deliberately avoid attaching every layer file.
+    if index_hits.is_empty() {
+        prompt.push_str("\n### 工程主要源文件\n");
+        let mut source_bytes = 0usize;
+        for path in source_candidates(context.root) {
+            if prompt.len() > MAX_SYSTEM_PROMPT_BYTES - PROMPT_PROTOCOL_RESERVE
+                || source_bytes > 140_000
+                || appended.len() > 48
+            {
+                break;
+            }
+            let before = prompt.len();
+            append_file(
+                &mut prompt,
+                context.root,
+                &path,
+                36_000,
+                fence_language(&path),
+                &mut appended,
+            );
+            source_bytes += prompt.len().saturating_sub(before);
+        }
     }
     if let Some(ioc) = first_file_with_extension(context.root, "ioc") {
         append_file(
@@ -1279,7 +1377,10 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
         prompt.truncate(end);
         prompt.push_str("\n\n[工程上下文已截断，请向用户询问缺失文件]\n");
     }
-    prompt
+    stats.selected_chunks = selected_chunks;
+    stats.selected_bytes = selected_bytes;
+    stats.prompt_bytes = prompt.len();
+    (prompt, stats)
 }
 
 fn append_file(
@@ -2385,6 +2486,48 @@ mod tests {
     }
 
     #[test]
+    fn prompt_uses_context_index_chunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("skill");
+        write(&skill.join("SKILL.md"), "skill body");
+        let bundle = load_skill(&skill.join("SKILL.md")).unwrap();
+        write(
+            &dir.path().join("BSP/PERIPHERAL/bsp_uart.c"),
+            "void uart_echo_marker(void) {}\n",
+        );
+        write(
+            &dir.path().join("BSP/PERIPHERAL/bsp_led.c"),
+            "void led_marker(void) {}\n",
+        );
+        let index = crate::context_index::ContextIndex::build(dir.path());
+        let meta = ProjectMeta::default();
+        let extra_skills = ResourceBundle::default();
+        let references = ResourceBundle::default();
+        let context = Context {
+            root: dir.path(),
+            project_name: "demo",
+            meta: &meta,
+            build: &BuildConfig::default(),
+            debug: &ProjectDebugSettings::default(),
+            memory_layout: None,
+            active_file: None,
+            include_dirs: &[],
+            library_dirs: &[],
+            defines: &[],
+            skill: &bundle,
+            extra_skills: &extra_skills,
+            references: &references,
+            evolution: "",
+            query: "uart echo",
+            index: Some(&index),
+        };
+        let (prompt, stats) = build_system_prompt_with_stats(&context);
+        assert!(stats.selected_chunks > 0);
+        assert!(prompt.contains("上下文索引命中"));
+        assert!(prompt.contains("uart_echo_marker"));
+    }
+
+    #[test]
     fn builds_prompt_with_project_context() {
         let dir = tempfile::tempdir().unwrap();
         let skill = dir.path().join("skill");
@@ -2437,8 +2580,10 @@ mod tests {
             extra_skills: &extra_skills,
             references: &references,
             evolution: "user evolution marker",
+            query: "uart gpio",
+            index: None,
         };
-        let prompt = build_system_prompt(&context);
+        let prompt = build_system_prompt_with_stats(&context).0;
         assert!(prompt.contains("STM32G431CBTx"));
         assert!(prompt.contains("hardware.dts"));
         assert!(prompt.contains("int main(void)"));
