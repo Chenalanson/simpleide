@@ -71,7 +71,7 @@
         run_led      = <&led_status>;                          /* 运行状态指示 */
         debug_port   = <&pin_swd_io_pa13 &pin_swd_clk_pa14>;   /* 在线调试/下载 */
         clock_source = <&pin_hse_in_pd0 &pin_hse_out_pd1>;     /* 系统时钟源 */
-        /* console   = <&uart1>;        预留：启用调试串口时取消注释并同步改 status */
+        console      = <&uart1>;                               /* USART1：PC ↔ 单片机回显通道 */
         /* wdg       = <&iwdg_guard>;   预留：启用独立看门狗时取消注释 */
     };
 
@@ -87,7 +87,9 @@
         usage = "普通 GPIO 业务节点容器（见下方 &general-gpios 区）";
     };
 
-    uart1 { /* 占位：预留调试串口，定义见 &uart1 区 */ };
+    uart1 { /* 占位：USART1 回显串口，定义见 &uart1 区 */ };
+
+    dma1 { /* 占位：DMA1 控制器，定义见 &dma1 区 */ };
 
     safety {
         usage = "安全资源规划容器（见下方 &safety 区；本板无功率级，不设刹车/使能节点）";
@@ -147,7 +149,7 @@
         mode = "alternate-push-pull";
         speed = "medium";                    /* TODO: 依波特率与线长核对是否需高速档 */
         f1-remap = "none";                   /* USART1 默认映射，无需 AFIO 重映射 */
-        usage = "预留调试串口 TX（当前未启用）";
+        usage = "USART1 TX：回显通道发送（→ PC 的 RX）";
     };
 
     uart1_rx_pa10: uart1_rx_pa10 {
@@ -155,7 +157,7 @@
         mode = "input-floating";
         pull = "up";                         /* 接收线建议上拉避免悬空误触发，依实际接线核对 */
         f1-remap = "none";
-        usage = "预留调试串口 RX（当前未启用）";
+        usage = "USART1 RX：回显通道接收（← PC 的 TX）";
     };
 };
 
@@ -166,13 +168,13 @@
     led_status: led_status {
         compatible = "stm32,gpio";
         status = "okay";
-        usage = "运行状态指示：亮/灭各 500ms 无限循环";
+        usage = "运行状态指示：亮/灭各 1000ms 无限循环";
         pinctrl-0 = <&pin_led_pc13>;
         pinctrl-names = "default";
         io-direction = "out";
         polarity = "active-low";             /* TODO: 与 pin_led_pc13 同步销项 */
         safe-state = "high";                 /* 上电/复位默认熄灭（低有效则写高电平） */
-        toggle-interval-ms = <500>;          /* 半周期，翻转周期 1000ms */
+        toggle-interval-ms = <1000>;         /* 半周期 1000ms，完整翻转周期 2000ms */
         note = "代码位置：Core/Src/main.c USER CODE 2/3；参数宏位置：Core/Inc/main.h LED_*";
     };
 };
@@ -182,16 +184,38 @@
  * ============================================================================ */
 &uart1 {
     compatible = "stm32,usart";
-    status = "disabled";
-    usage = "预留调试串口 / 上位机命令通道";
+    status = "okay";
+    usage = "PC ↔ 单片机回显通道：PC 发任意字节，单片机原样回传（echo）";
     current-speed = <115200>;
     data-bits = <8>;
     parity = "none";
     stop-bits = <1>;
     pinctrl-0 = <&uart1_tx_pa9 &uart1_rx_pa10>;
     pinctrl-names = "default";
-    interrupts = <37 3>;                     /* TODO: IRQn 对照 RM 中断向量表核对；优先级待分组规划 */
-    note = "启用步骤：①hal_conf.h 打开 HAL_UART_MODULE_ENABLED ②Makefile 加入 hal_uart 源文件 ③本节点改 okay ④补 bsp_uart 代码";
+    interrupts = <37 0>;                     /* USART1 全局中断（IDLE / TC）：IRQn=37 已核对；优先级 0 沿用 .ioc */
+    dmas = <&dma1 4>, <&dma1 5>;             /* TODO: 依 RM「DMA request mapping」表核对：USART1_TX=DMA1_CH4、USART1_RX=DMA1_CH5 */
+    dma-names = "tx", "rx";
+    rx-mode = "dma-circular-idle";            /* DMA 循环接收 + 空闲中断分段搬运，逐帧搬运不做逐字节中断 */
+    tx-mode = "dma-single-chunk";             /* DMA 单次发送，完成回调释放发送权 */
+    rx-dma-buffer-size = <128>;               /* DMA 循环缓冲字节数（CNDTR 为 16 位，上限 65535） */
+    rx-ring-size = <256>;                     /* 主环形缓冲字节数 */
+    tx-chunk-size = <64>;                     /* 单次 TX DMA 最大字节数 */
+    idle-clear-sequence = "read-sr-then-dr";  /* 已核对：RM USART「Idle line detection」要求读 SR 后读 DR 清 IDLE */
+    note = "初始化沿用 MX_USART1_UART_Init()；DMA 句柄在 HAL_UART_MspInit() 的 USER CODE 区创建后 __HAL_LINKDMA 关联，必须早于 HAL_UART_Init 内部配置；业务代码：Core/Src/app_echo.c；参数宏：Core/Inc/app_echo.h";
+};
+
+/*
+ * DMA1 控制器：F1 无 DMAMUX，通道与外设请求为固定映射，本工程只占用 CH4/CH5
+ * 优先级规划：USART1=0（最高）、DMA1_CH4/CH5=1，避免 DMA 完成中断抢占串口中断
+ */
+&dma1 {
+    compatible = "stm32,dma";
+    status = "okay";
+    usage = "USART1 收发 DMA";
+    channels = <4 5>;                         /* TODO: 依 RM「DMA request mapping」表核对 */
+    rx-channel = "DMA1_Channel5";             /* 循环模式，外设→内存，字节宽度，内存递增 */
+    tx-channel = "DMA1_Channel4";             /* 单次模式，内存→外设，字节宽度，内存递增 */
+    note = "DMA1_Channel4=USART1_TX；DMA1_Channel5=USART1_RX；NVIC 优先级均取 1";
 };
 
 /* ============================================================================
@@ -216,7 +240,11 @@
  * [ ] PC13 输出能力限制（低驱动能力引脚组）       —— 依据：DS「Pin definitions」PC13~PC15 注释
  * [ ] HSE 晶振实物是否 8MHz                      —— 依据：原理图 Y1 位号
  * [ ] Flash 等待周期 2WS @72MHz 是否满足电压区间   —— 依据：DS Flash 时序表
- * [ ] USART1 IRQn 编号与中断优先级分组            —— 依据：RM 中断向量表 + NVIC 配置
- * [ ] USART1 TX 引脚输出速度档位                  —— 依据：波特率与线长评估
+ * [x] USART1 IRQn=37、优先级 0                    —— 已核对：工程 USART1_IRQn 宏 + test32.ioc NVIC.USART1_IRQn=true:0:0
+ * [ ] USART1 TX 引脚输出速度档位（当前 GPIO_SPEED_FREQ_HIGH）—— 依据：波特率与线长评估
+ * [ ] PC 侧 USB-TTL 接线：TX→PA10、RX→PA9、共地   —— 依据：实际接线核对
+ * [ ] USART1_TX/RX 的 DMA1 通道号（CH4/CH5）      —— 依据：RM「DMA request mapping」表
+ * [ ] DMA1_Channel4/5 的 IRQn 编号与优先级取值     —— 依据：RM 中断向量表（当前取 1）
+ * [x] USART1 IDLE 标志清除序列「读 SR → 读 DR」   —— 已核对：RM USART「Idle line detection」
  * [ ] IWDG 超时与喂狗窗口                         —— 依据：RM IWDG 章节 + LSI 频率范围
  * ============================================================================ */

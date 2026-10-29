@@ -22,6 +22,7 @@
 #include "stm32f1xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "app_echo.h"    /* app_echo_idle_isr()：USART1 空闲中断分段搬运 */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -204,12 +205,45 @@ void SysTick_Handler(void)
 void USART1_IRQHandler(void)
 {
   /* USER CODE BEGIN USART1_IRQn 0 */
-
+  /* IDLE 中断 HAL 不处理：先自行清标志并搬运，再交给 HAL 处理错误/TC */
+  app_echo_idle_isr();
   /* USER CODE END USART1_IRQn 0 */
   HAL_UART_IRQHandler(&huart1);
   /* USER CODE BEGIN USART1_IRQn 1 */
 
   /* USER CODE END USART1_IRQn 1 */
+}
+
+/**
+  * @brief This function handles DMA1 channel4 global interrupt.
+  * @note  USART1_TX 完成中断
+  */
+void DMA1_Channel4_IRQHandler(void)
+{
+  /* USER CODE BEGIN DMA1_Channel4_IRQn 0 */
+  /* USER CODE END DMA1_Channel4_IRQn 0 */
+  if (huart1.hdmatx != NULL)
+  {
+    HAL_DMA_IRQHandler(huart1.hdmatx);
+  }
+  /* USER CODE BEGIN DMA1_Channel4_IRQn 1 */
+  /* USER CODE END DMA1_Channel4_IRQn 1 */
+}
+
+/**
+  * @brief This function handles DMA1 channel5 global interrupt.
+  * @note  USART1_RX 循环接收的 HT/TC 中断
+  */
+void DMA1_Channel5_IRQHandler(void)
+{
+  /* USER CODE BEGIN DMA1_Channel5_IRQn 0 */
+  /* USER CODE END DMA1_Channel5_IRQn 0 */
+  if (huart1.hdmarx != NULL)
+  {
+    HAL_DMA_IRQHandler(huart1.hdmarx);
+  }
+  /* USER CODE BEGIN DMA1_Channel5_IRQn 1 */
+  /* USER CODE END DMA1_Channel5_IRQn 1 */
 }
 
 /* USER CODE BEGIN 1 */

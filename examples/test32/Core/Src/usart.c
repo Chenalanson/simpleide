@@ -21,7 +21,10 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
-
+/* USART1 的 DMA 句柄：RX=DMA1_Channel5（循环），TX=DMA1_Channel4（单次）
+ * TODO: 通道映射依 RM「DMA request mapping」表核对（F1：USART1_TX=CH4、USART1_RX=CH5） */
+DMA_HandleTypeDef hdma_usart1_rx;
+DMA_HandleTypeDef hdma_usart1_tx;
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart1;
@@ -87,7 +90,48 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(USART1_IRQn);
   /* USER CODE BEGIN USART1_MspInit 1 */
+    /* ---- USART1 的 DMA 配置（RX 循环 / TX 单次）----
+     * 说明：CubeMX 未勾选 USART1 DMA，本段为手工追加；
+     *       若后续在 .ioc 中启用 DMA，请删除本段改用 CubeMX 生成的 MX_DMA_Init()，避免重复初始化。
+     * TODO: 通道号依 RM「DMA request mapping」表核对（F1：USART1_TX=DMA1_CH4、USART1_RX=DMA1_CH5） */
+    __HAL_RCC_DMA1_CLK_ENABLE();
 
+    /* --- RX：外设→内存，循环模式 --- */
+    hdma_usart1_rx.Instance                 = DMA1_Channel5;
+    hdma_usart1_rx.Init.Direction           = DMA_PERIPH_TO_MEMORY;
+    hdma_usart1_rx.Init.PeriphInc           = DMA_PINC_DISABLE;
+    hdma_usart1_rx.Init.MemInc              = DMA_MINC_ENABLE;
+    hdma_usart1_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    hdma_usart1_rx.Init.MemDataAlignment    = DMA_MDATAALIGN_BYTE;
+    hdma_usart1_rx.Init.Mode                = DMA_CIRCULAR;
+    hdma_usart1_rx.Init.Priority            = DMA_PRIORITY_HIGH;
+    if (HAL_DMA_Init(&hdma_usart1_rx) != HAL_OK)
+    {
+      Error_Handler();
+    }
+    __HAL_LINKDMA(uartHandle, hdmarx, hdma_usart1_rx);
+
+    /* --- TX：内存→外设，单次模式 --- */
+    hdma_usart1_tx.Instance                 = DMA1_Channel4;
+    hdma_usart1_tx.Init.Direction           = DMA_MEMORY_TO_PERIPH;
+    hdma_usart1_tx.Init.PeriphInc           = DMA_PINC_DISABLE;
+    hdma_usart1_tx.Init.MemInc              = DMA_MINC_ENABLE;
+    hdma_usart1_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    hdma_usart1_tx.Init.MemDataAlignment    = DMA_MDATAALIGN_BYTE;
+    hdma_usart1_tx.Init.Mode                = DMA_NORMAL;
+    hdma_usart1_tx.Init.Priority            = DMA_PRIORITY_MEDIUM;
+    if (HAL_DMA_Init(&hdma_usart1_tx) != HAL_OK)
+    {
+      Error_Handler();
+    }
+    __HAL_LINKDMA(uartHandle, hdmatx, hdma_usart1_tx);
+
+    /* DMA 中断：TX 完成回调必需；RX 的 HT/TC 中断用于保持 HAL 状态机一致
+     * TODO: IRQn 编号依 RM 中断向量表核对 */
+    HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 1, 0);
+    HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
+    HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 1, 0);
+    HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
   /* USER CODE END USART1_MspInit 1 */
   }
 }

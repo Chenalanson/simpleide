@@ -3,10 +3,10 @@
 > 目录
 > 1. 技术栈判定（S0 结论表）
 > 2. 台账字段 → 代码位置同源映射表
-> 3. 分层结构与文件归属
+> 3. 分层落点速查（细则见 architecture.md）
 > 4. 通用编码规范（编号规则）
-> 5. 外设要点速查表（GPIO/UART/ADC/TIM/SPI/I2C/CAN/DMA/NVIC）
-> 6. FreeRTOS 可选层
+> 5. 外设要点速查表（GPIO/UART/ADC/TIM/SPI/I2C/CAN/DMA/NVIC，落点 PERIPHERAL）
+> 6. FreeRTOS 可选层（与 software-arch.md 抢占式模型衔接）
 > 7. 现有工程最小改动规则（强制）
 >
 > 用法：S3 阶段照本表选模式、填参数、组织代码；不展开教科书解释。参数未核实处集中宏 + TODO 注释。
@@ -33,14 +33,24 @@
 | 器件子节点 `reg = <0x48>` | 总线读写地址参数 | 器件地址宏 `I2C_ADDR_TEMP` |
 | 安全节点 `brake_bkin` / `en_power` | GPIO 初始化 + 故障处理函数 | 有效电平、安全态与台账 `polarity`/`safe-state` 一致 |
 
-## 3. 分层结构与文件归属
+## 3. 分层落点速查（架构细则见 architecture.md）
 
-| 层 | 文件位置建议 | 职责 | 禁止事项 |
+> 架构确认流程、层级表、目录树、依赖红线 D1–D6、文件归属决策表统一查 `architecture.md`；本节仅给代码落点与命名规则。
+
+| 层 | 目录 | 代码职责 | 落点要点 |
 |---|---|---|---|
-| 板级配置层 | `bsp/bsp_<periph>.c/.h`；现有工程则补到对应 `_init.c` 或新建 bsp 文件 | 外设初始化、时钟使能、NVIC、Msp 补充 | 不写业务逻辑；不改已有 `MX_xxx_Init` |
-| 驱动接口层 | `drivers/<module>.c/.h` | 打开/读写/启停/状态；错误码返回；超时参数 | 不直接持有业务状态；不调用主循环标志 |
-| 业务逻辑层 | `app/app_fsm.c`、`app/main.c` 调用点 | 状态机、采样滤波、协议业务、控制策略、故障动作链 | 不直接操作寄存器细节；通过驱动接口调用 |
-| 集中配置 | `bsp_conf.h` | 引脚/通道/缓冲长度/超时/地址/AF 宏 | 禁止函数体内散落魔法数 |
+| APP | `APP/` | `app_init` 三步编排、调度线程、循环线程、业务任务 | 只调用不实现器件细节；顺序：外设使能→设备初始化→任务注册 |
+| MID | `MID/` | 调度器、设备管理器、解释层高级 API、日志、错误码 | 跨模块公共机制；不含具体器件时序 |
+| BSP/MODULES | `BSP/MODULES/` | 具体器件驱动（屏/传感器/计量芯片/按键编码器） | 句柄结构体 + 对外接口；向下调用 PERIPHERAL；规范见 module-convention.md |
+| BSP/PERIPHERAL | `BSP/PERIPHERAL/` | 片上外设封装（SPI/I2C/ADC/PWM/UART/TIME/GPIO） | 一个外设实例一个模块；封装初始化/收发/启停；向下调 LL/HAL |
+| 集中配置 | `bsp_conf.h`（或层头文件） | 引脚/通道/缓冲长度/超时/地址/AF 宏 | 禁止函数体散落魔法数 |
+
+命名规则：
+
+- PERIPHERAL：`bsp_<外设>.c/.h`（`bsp_spi.c`、`bsp_adc.c`），接口 `<外设>_<动作>`（`spi_init`、`adc_init_dma`）。
+- MODULES：`bsp_<器件缩写>.c/.h`（`bsp_st7789v.c`、`bsp_sc8701.c`），接口 `<器件>_<动作>`（`st7789v_init`）。
+- MID：`task_sched`、`dev_manager`、`service_<域>`；APP 固定 `app.c/app.h`。
+- 依赖方向：APP → MID → MODULES → PERIPHERAL → LL/HAL；禁止反向包含与循环依赖。
 
 ## 4. 通用编码规范（编号规则，违反即返工）
 
@@ -169,3 +179,4 @@
 | M4 必要修改说明 | 必须改现有行时登记「文件\|位置\|原值\|新值\|原因」；能用新增封装规避则不修改 | 改动表不得出现无理由修改 |
 | M5 复用优先 | 现有句柄、宏、延时/打印工具直接引用，不重复定义同义设施 | 复用清单与代码引用一致 |
 | M6 台账先行 | 新增硬件资源先登记台账片段，再写代码；代码参数回指台账字段 | 模板 B 第 2 节先于第 3 节 |
+| M7 新模块挂接 | 新 MODULES/PERIPHERAL 模块按 module-convention.md M-DEV 步骤完成句柄与接口；初始化按 architecture.md 第 6 节三步法挂入 `app_init`；注册（设备管理器/调度器）同步完成 | framework.md 依赖矩阵与任务表同步更新 |

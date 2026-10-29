@@ -87,6 +87,22 @@ const EMBEDDED_SKILL_FILES: &[(&str, &str)] = &[
         "references/ledger-schema.md",
         include_str!("../.opencode/skills/stm32-embedded-dev/references/ledger-schema.md"),
     ),
+    (
+        "references/architecture.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/architecture.md"),
+    ),
+    (
+        "references/framework-template.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/framework-template.md"),
+    ),
+    (
+        "references/module-convention.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/module-convention.md"),
+    ),
+    (
+        "references/software-arch.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/software-arch.md"),
+    ),
 ];
 
 /// Skill copy compiled into the executable. Used when the opened project (and
@@ -1635,7 +1651,9 @@ mod tests {
         let bundle = embedded_skill();
         assert!(bundle.text.contains("hardware.dts"));
         assert!(bundle.text.contains("references/checklist.md"));
-        assert!(bundle.files.len() >= 6);
+        assert!(bundle.text.contains("references/framework-template.md"));
+        assert!(bundle.text.contains("references/software-arch.md"));
+        assert!(bundle.files.len() >= 10);
     }
 
     #[test]
