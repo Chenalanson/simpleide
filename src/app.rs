@@ -754,6 +754,26 @@ impl AiBuildStatus {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AiFsStatus {
+    #[default]
+    Waiting,
+    Done,
+    Limited,
+    Error,
+}
+
+impl AiFsStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Waiting => "读取中",
+            Self::Done => "已读取",
+            Self::Limited => "已达上限",
+            Self::Error => "读取失败",
+        }
+    }
+}
+
 struct AiBuildCheck {
     message_index: usize,
     started: bool,
@@ -764,6 +784,7 @@ struct AiBuildCheck {
 
 const MAX_AI_BUILD_ROUNDS: usize = 5;
 const MAX_AI_CLI_ROUNDS: usize = 5;
+const MAX_AI_FS_ROUNDS: usize = 6;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum AiCliStatus {
@@ -828,6 +849,12 @@ struct AiChatMessage {
     cli_status: AiCliStatus,
     cli_summary: Option<String>,
     cli_output: Option<String>,
+    fs_requested: bool,
+    fs_requests: Vec<crate::ai_fs::AiFsRequest>,
+    fs_status: AiFsStatus,
+    fs_summary: Option<String>,
+    fs_output: Option<String>,
+    fs_error: Option<String>,
     issues: Vec<crate::ai_issue::AiIssue>,
     evolutions: Vec<String>,
     evolution_status: AiEditStatus,
@@ -864,6 +891,12 @@ impl AiChatMessage {
             cli_status: AiCliStatus::Waiting,
             cli_summary: None,
             cli_output: None,
+            fs_requested: false,
+            fs_requests: Vec::new(),
+            fs_status: AiFsStatus::Waiting,
+            fs_summary: None,
+            fs_output: None,
+            fs_error: None,
             issues: Vec::new(),
             evolutions: Vec::new(),
             evolution_status: AiEditStatus::Pending,
@@ -909,6 +942,17 @@ impl AiChatMessage {
                 content.push_str(&format!("- {command}\n"));
             }
             if let Some(summary) = &self.cli_summary {
+                content.push_str(summary);
+                content.push('\n');
+            }
+        }
+        if self.fs_requested {
+            content.push_str("\n\n### AI 文件检索（历史记录）\n\n");
+            content.push_str(&format!("结果：{}\n", self.fs_status.label()));
+            for request in &self.fs_requests {
+                content.push_str(&format!("- {}\n", request.label()));
+            }
+            if let Some(summary) = &self.fs_summary {
                 content.push_str(summary);
                 content.push('\n');
             }
@@ -1031,6 +1075,8 @@ struct AiState {
     build_rounds: usize,
     cli_check: Option<AiCliCheck>,
     cli_rounds: usize,
+    fs_rounds: usize,
+    pending_retrieval: Option<String>,
     context_stats: Option<crate::ai::ContextBuildStats>,
 }
 
@@ -5295,6 +5341,8 @@ impl App {
         self.ai.input.clear();
         self.ai.sending = false;
         self.ai.receiver = None;
+        self.ai.fs_rounds = 0;
+        self.ai.pending_retrieval = None;
         self.save_ai_chat();
     }
 
@@ -5388,10 +5436,12 @@ impl App {
     }
 
     fn send_ai_text(&mut self, text: String) -> bool {
+        self.ai.fs_rounds = 0;
         self.start_ai_request(text, true, false)
     }
 
     fn send_ai_answer(&mut self, text: String) -> bool {
+        self.ai.fs_rounds = 0;
         self.start_ai_request(text, true, true)
     }
 
@@ -5412,9 +5462,11 @@ impl App {
             self.set_toast("请先打开工程", Severity::Warning);
             return false;
         };
+        let retrieval = self.ai.pending_retrieval.take();
         // The prompt and the file-edit base hashes are built from disk. Save
         // dirty tabs first so the model sees the same content the user does.
         if let Err(err) = self.save_all_dirty() {
+            self.ai.pending_retrieval = retrieval;
             self.set_toast(format!("发送前保存失败：{err}"), Severity::Error);
             return false;
         }
@@ -5470,6 +5522,7 @@ impl App {
                 } else {
                     None
                 },
+                retrieval: retrieval.as_deref().unwrap_or(""),
             });
         self.ai.context_stats = Some(context_stats);
         // A new user message supersedes any still-unanswered question cards
@@ -5543,6 +5596,12 @@ impl App {
             cli_status: AiCliStatus::Waiting,
             cli_summary: None,
             cli_output: None,
+            fs_requested: false,
+            fs_requests: Vec::new(),
+            fs_status: AiFsStatus::Waiting,
+            fs_summary: None,
+            fs_output: None,
+            fs_error: None,
             issues: Vec::new(),
             evolutions: Vec::new(),
             evolution_status: AiEditStatus::Pending,
@@ -5556,6 +5615,7 @@ impl App {
         if let Err(err) = spawned {
             self.ai.sending = false;
             self.ai.receiver = None;
+            self.ai.pending_retrieval = retrieval;
             if let Some(message) = self.ai.messages.iter_mut().rev().find(|m| m.streaming) {
                 message.streaming = false;
                 message.error = true;
@@ -5630,6 +5690,7 @@ impl App {
         let cli_commands = parsed.cli_commands;
         let issues = parsed.issues;
         let evolutions = parsed.evolutions;
+        let fs_requests = parsed.fs_requests;
         if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
             for edit in &mut edits {
                 edit.prepare(&root);
@@ -5677,6 +5738,7 @@ impl App {
             && asks.is_empty()
             && !build
             && cli_commands.is_empty()
+            && fs_requests.is_empty()
         {
             format!(
                 "已记录 {} 个问题到工程根目录的 .ai-issues.md。",
@@ -5688,6 +5750,7 @@ impl App {
             && deletes.is_empty()
             && asks.is_empty()
             && cli_commands.is_empty()
+            && fs_requests.is_empty()
         {
             "已请求构建验证；IDE 会运行当前工程的构建命令，并把真实输出自动发送给 AI。".to_owned()
         } else if text.is_empty()
@@ -5697,15 +5760,30 @@ impl App {
             && asks.is_empty()
             && issues.is_empty()
             && !build
+            && fs_requests.is_empty()
         {
             "已请求串口 Debug。".to_owned()
+        } else if text.is_empty()
+            && !fs_requests.is_empty()
+            && edits.is_empty()
+            && deletes.is_empty()
+            && asks.is_empty()
+            && issues.is_empty()
+            && !build
+            && cli_commands.is_empty()
+        {
+            format!(
+                "已请求检索 {} 个工程文件 / 目录，IDE 会读取真实内容并自动继续。",
+                fs_requests.len()
+            )
         } else if text.is_empty()
             && (!edits.is_empty()
                 || !deletes.is_empty()
                 || !asks.is_empty()
                 || !issues.is_empty()
                 || build
-                || !cli_commands.is_empty())
+                || !cli_commands.is_empty()
+                || !fs_requests.is_empty())
         {
             let mut parts = Vec::new();
             if !edits.is_empty() {
@@ -5725,6 +5803,9 @@ impl App {
             }
             if !cli_commands.is_empty() {
                 parts.push(format!("串口 Debug（{} 条命令）", cli_commands.len()));
+            }
+            if !fs_requests.is_empty() {
+                parts.push(format!("文件检索（{} 项）", fs_requests.len()));
             }
             format!("已准备 {}，请查看下方卡片并分别确认。", parts.join("、"))
         } else if text.is_empty() && !evolutions.is_empty() {
@@ -5779,6 +5860,12 @@ impl App {
             }
         });
         message.cli_output = None;
+        message.fs_requested = !fs_requests.is_empty();
+        message.fs_requests = fs_requests.clone();
+        message.fs_status = AiFsStatus::Waiting;
+        message.fs_summary = (!fs_requests.is_empty()).then(|| "准备读取真实工程文件".to_owned());
+        message.fs_output = None;
+        message.fs_error = None;
         message.issues = issues;
         message.evolutions = evolutions;
         message.evolution_status = AiEditStatus::Pending;
@@ -5849,6 +5936,107 @@ impl App {
             });
         }
         self.save_ai_chat();
+        if !fs_requests.is_empty() {
+            self.run_ai_fs_requests(index, fs_requests);
+        }
+    }
+
+    fn run_ai_fs_requests(&mut self, index: usize, requests: Vec<crate::ai_fs::AiFsRequest>) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message.fs_status = AiFsStatus::Error;
+                message.fs_error = Some("请先打开工程".to_owned());
+            }
+            return;
+        };
+        let outcome = crate::ai_fs::execute(&root, &requests);
+        let has_content = outcome.files > 0 || outcome.dirs > 0;
+        let blocked = self.ai.messages.get(index).is_some_and(|message| {
+            (message.edit_status == AiEditStatus::Pending && !message.edits.is_empty())
+                || (message.delete_status == AiEditStatus::Pending && !message.deletes.is_empty())
+                || (message.ask_status == AiEditStatus::Pending && !message.asks.is_empty())
+                || (message.evolution_status == AiEditStatus::Pending
+                    && !message.evolutions.is_empty())
+                || message.build_requested
+                || message.cli_requested
+        });
+        let limit_reached = self.ai.fs_rounds >= MAX_AI_FS_ROUNDS;
+        // A reply should normally contain either retrievals or actions, not
+        // both. If it does mix them, keep the read results and cancel the
+        // automatic build/CLI run so the next model turn can use the files.
+        if blocked {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                if message.build_requested {
+                    message.build_status = AiBuildStatus::Cancelled;
+                    message.build_summary =
+                        Some("同回复包含文件检索，构建验证已取消；请在下一轮重新请求".to_owned());
+                }
+                if message.cli_requested {
+                    message.cli_status = AiCliStatus::Cancelled;
+                    message.cli_summary = Some(
+                        "同回复包含文件检索，串口 Debug 已取消；请在下一轮重新请求".to_owned(),
+                    );
+                }
+            }
+            if self
+                .ai
+                .build_check
+                .as_ref()
+                .is_some_and(|check| check.message_index == index)
+            {
+                self.ai.build_check = None;
+            }
+            if self
+                .ai
+                .cli_check
+                .as_ref()
+                .is_some_and(|check| check.message_index == index)
+            {
+                self.ai.cli_check = None;
+            }
+        }
+        let status = if !has_content {
+            AiFsStatus::Error
+        } else if blocked || limit_reached {
+            AiFsStatus::Limited
+        } else {
+            AiFsStatus::Done
+        };
+        let summary = if blocked {
+            format!(
+                "{}；同回复还有待确认卡片，已保留读取结果，处理后再发送消息即可继续",
+                outcome.summary
+            )
+        } else if limit_reached {
+            format!("{}；已达到自动检索轮次上限，请手动继续", outcome.summary)
+        } else {
+            outcome.summary.clone()
+        };
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            message.fs_status = status;
+            message.fs_summary = Some(summary.clone());
+            message.fs_output = Some(outcome.report.clone());
+            message.fs_error = outcome.errors.first().cloned();
+        }
+        if outcome.report.trim().is_empty() {
+            return;
+        }
+        // Keep the real contents for the next request even when auto-continue
+        // is blocked; the next user message will carry them into the prompt.
+        self.ai.pending_retrieval = Some(outcome.report.clone());
+        if blocked || limit_reached {
+            return;
+        }
+        self.ai.fs_rounds += 1;
+        let text = format!(
+            "[IDE 文件检索结果] {summary}\n请基于上面已读取的真实文件内容继续。需要更多文件时继续输出 se-list / se-read；不要猜测未读取的文件内容。"
+        );
+        if !self.start_ai_request(text, true, true) {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message.fs_status = AiFsStatus::Error;
+                message.fs_error = Some("读取完成，但自动继续发送失败；可重新发送消息".to_owned());
+            }
+        }
     }
 
     fn try_start_ai_build(&mut self, check: &mut AiBuildCheck) {

@@ -12,7 +12,7 @@ use eframe::egui::{
     Rect, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, UiBuilder,
 };
 
-use super::{AiBuildStatus, AiChatMessage, AiCliStatus, AiEditStatus, App};
+use super::{AiBuildStatus, AiChatMessage, AiCliStatus, AiEditStatus, AiFsStatus, App};
 use crate::framework::{FrameworkDoc, GanttChart, GanttKind};
 use crate::log::Severity;
 use crate::theme;
@@ -503,7 +503,7 @@ impl App {
                         ));
                     }
                     let auto = if self.context_index.index.is_some() {
-                        "自动 · framework.md + 检索片段"
+                        "自动 · framework.md + 检索片段 + 按需读取"
                     } else if self.ai.framework_path.is_some() {
                         "自动 · framework.md + 引用文件"
                     } else {
@@ -511,7 +511,7 @@ impl App {
                     };
                     ui.label(RichText::new(auto).size(8.8).color(theme::text_faint()))
                         .on_hover_text(
-                            "每次发送会自动附带 framework.md、hardware.dts、framework.md 中引用的工程文件和工程源文件；本地上下文索引会按你的需求只检索相关代码片段，减少 token。右侧的附加文件只是额外补充。",
+                            "每次发送会自动附带 framework.md、hardware.dts、framework.md 中引用的工程文件和工程源文件；本地上下文索引会按你的需求只检索相关代码片段，减少 token。缺少某个文件时，AI 可以用 se-list / se-read 主动检索工程目录并读取真实正文，IDE 会读取后自动继续。右侧的附加文件只是额外补充。",
                         );
                 });
             });
@@ -2347,6 +2347,10 @@ fn ai_message(
                         &mut requests.cancel_deletes,
                     );
                 }
+                if message.fs_requested {
+                    ui.add_space(7.0);
+                    ai_fs_card(ui, &*message, index);
+                }
                 if message.build_requested {
                     ui.add_space(7.0);
                     ai_build_card(ui, &*message, index, &mut requests.stop_build);
@@ -2375,6 +2379,85 @@ fn ai_message(
                         &mut requests.cancel_evolutions,
                     );
                 }
+            }
+        });
+}
+
+fn ai_fs_card(ui: &mut Ui, message: &AiChatMessage, index: usize) {
+    let (status, color) = match message.fs_status {
+        AiFsStatus::Waiting => ("读取中", theme::warning()),
+        AiFsStatus::Done => ("已读取", theme::success()),
+        AiFsStatus::Limited => ("已保留结果", theme::warning()),
+        AiFsStatus::Error => ("读取失败", theme::error()),
+    };
+    Frame::new()
+        .fill(theme::with_alpha(theme::info(), 8))
+        .stroke(Stroke::new(1.0_f32, theme::with_alpha(theme::info(), 65)))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("AI 文件检索")
+                        .size(10.0)
+                        .strong()
+                        .color(theme::info()),
+                );
+                ui.label(
+                    RichText::new(format!("{} 项", message.fs_requests.len()))
+                        .size(9.5)
+                        .color(theme::text_faint()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(status).size(9.2).color(color));
+                });
+            });
+            ui.add_space(3.0);
+            ui.add(
+                Label::new(
+                    RichText::new(
+                        "IDE 从工程磁盘读取真实内容并加入下一轮上下文；不需要手动附加文件。",
+                    )
+                    .size(8.6)
+                    .color(theme::text_dim()),
+                )
+                .wrap(),
+            );
+            for request in &message.fs_requests {
+                ui.add_space(3.0);
+                let detail = request
+                    .error
+                    .as_ref()
+                    .map(|error| format!("失败：{error}"))
+                    .unwrap_or_else(|| request.label());
+                ui.add(
+                    Label::new(RichText::new(format!("• {detail}")).size(9.0).color(
+                        if request.error.is_some() {
+                            theme::error()
+                        } else {
+                            theme::text()
+                        },
+                    ))
+                    .wrap(),
+                );
+            }
+            if let Some(summary) = &message.fs_summary {
+                ui.add_space(3.0);
+                ui.add(
+                    Label::new(RichText::new(summary).size(8.6).color(theme::text_faint())).wrap(),
+                );
+            }
+            if let Some(error) = &message.fs_error {
+                ui.add_space(3.0);
+                ui.add(Label::new(RichText::new(error).size(8.6).color(theme::error())).wrap());
+            }
+            if let Some(output) = &message.fs_output {
+                ui.add_space(4.0);
+                egui::CollapsingHeader::new("查看读取内容")
+                    .id_salt(("simple_embedded_ai_fs_output", index))
+                    .show(ui, |ui| {
+                        render_code_block(ui, "检索结果", output, index, 10_000);
+                    });
             }
         });
 }

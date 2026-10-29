@@ -4,6 +4,7 @@ mod ai;
 mod ai_ask;
 mod ai_chat;
 mod ai_edit;
+mod ai_fs;
 mod ai_issue;
 mod app;
 mod arraygen;

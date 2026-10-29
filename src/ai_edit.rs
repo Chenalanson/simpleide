@@ -62,6 +62,7 @@ pub struct ParsedEdits {
     pub cli_commands: Vec<String>,
     pub issues: Vec<crate::ai_issue::AiIssue>,
     pub evolutions: Vec<String>,
+    pub fs_requests: Vec<crate::ai_fs::AiFsRequest>,
 }
 
 #[derive(Clone, Debug)]
@@ -442,6 +443,8 @@ pub fn incomplete_edit_block(text: &str) -> bool {
                 | "se-cli"
                 | "se-issue"
                 | "se-evolve"
+                | "se-list"
+                | "se-read"
         ) {
             open_fence = Some(ticks);
         }
@@ -458,6 +461,7 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
     let mut cli_commands = Vec::new();
     let mut issues = Vec::new();
     let mut evolutions = Vec::new();
+    let mut fs_requests = Vec::new();
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let mut index = 0usize;
     while index < lines.len() {
@@ -479,6 +483,8 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
                 | "se-cli"
                 | "se-issue"
                 | "se-evolve"
+                | "se-list"
+                | "se-read"
         ) {
             cleaned.push_str(line);
             index += 1;
@@ -503,7 +509,11 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
             break;
         };
         let body = lines[index + 1..close].concat();
-        if tag == "se-evolve" {
+        if tag == "se-list" {
+            fs_requests.push(crate::ai_fs::AiFsRequest::parse(false, attrs));
+        } else if tag == "se-read" {
+            fs_requests.push(crate::ai_fs::AiFsRequest::parse(true, attrs));
+        } else if tag == "se-evolve" {
             evolutions.extend(parse_evolution_rules(&body));
         } else if tag == "se-build" {
             build = true;
@@ -535,6 +545,7 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
         cli_commands,
         issues,
         evolutions,
+        fs_requests,
     }
 }
 
@@ -580,6 +591,8 @@ fn find_last_fence(lines: &[&str], start: usize, fence_len: usize) -> Option<usi
                         | "se-cli"
                         | "se-issue"
                         | "se-evolve"
+                        | "se-list"
+                        | "se-read"
                 )
             })
         })
@@ -609,7 +622,7 @@ fn fence_header(line: &str) -> Option<(usize, &str, &str)> {
     Some((ticks, tag, rest[end..].trim()))
 }
 
-fn parse_path_attr(attrs: &str) -> Option<String> {
+pub(crate) fn parse_path_attr(attrs: &str) -> Option<String> {
     for key in ["path", "file"] {
         let Some(start) = attrs.find(key) else {
             continue;
@@ -711,7 +724,7 @@ pub fn normalize_rel_path(path: &str) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
-fn is_generated_dir(name: &str) -> bool {
+pub(crate) fn is_generated_dir(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
         ".git"
@@ -1037,6 +1050,25 @@ mod tests {
         assert!(!parsed.text.contains("se-issue"));
         assert!(parsed.text.contains("已记录"));
         assert!(incomplete_edit_block("````se-issue\n标题：未闭合\n"));
+    }
+
+    #[test]
+    fn parses_fs_list_and_read_blocks() {
+        let reply = "需要读取源码。\n\
+                     ````se-list path=Core/Src depth=2\n\
+                     ````\n\
+                     ````se-read path=Core/Src/main.c lines=10-30\n\
+                     ````\n";
+        let parsed = parse_edits(reply);
+        assert_eq!(parsed.fs_requests.len(), 2);
+        assert_eq!(parsed.fs_requests[0].path, "Core/Src");
+        assert_eq!(parsed.fs_requests[0].depth, 2);
+        assert_eq!(parsed.fs_requests[1].path, "Core/Src/main.c");
+        assert_eq!(parsed.fs_requests[1].lines, Some((10, 30)));
+        assert!(!parsed.text.contains("se-list"));
+        assert!(!parsed.text.contains("se-read"));
+        assert!(parsed.text.contains("需要读取源码"));
+        assert!(incomplete_edit_block("````se-read path=Core/Src/main.c\n"));
     }
 
     #[test]

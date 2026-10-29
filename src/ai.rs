@@ -27,6 +27,10 @@ const PROMPT_PROTOCOL_RESERVE: usize = 16_000;
 const MAX_FRAMEWORK_BYTES: usize = 120_000;
 const MAX_FRAMEWORK_FILES: usize = 32;
 const MAX_FRAMEWORK_FILE_BYTES: usize = 60_000;
+/// Files explicitly requested with `se-list` / `se-read` are inserted before
+/// the rest of the project context and capped so they cannot crowd out the
+/// edit protocol.
+const MAX_RETRIEVAL_BYTES: usize = 48_000;
 
 #[derive(Clone, Debug, Default)]
 pub struct AiConfig {
@@ -845,6 +849,10 @@ pub struct Context<'a> {
     /// local context index instead of attaching every source file.
     pub query: &'a str,
     pub index: Option<&'a crate::context_index::ContextIndex>,
+    /// Real file contents returned by the previous `se-list` / `se-read`
+    /// request. This is deliberately separate from chat history so the 12k
+    /// per-message truncation cannot drop the files the model asked for.
+    pub retrieval: &'a str,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1015,6 +1023,7 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
          必须优先遵循已加载的 stm32-embedded-dev skill：先按第 1 节判定 T1–T7 任务类型，再按第 3 节对应固定模板的小节编号、标题和表格输出；\
          T1–T5 使用模板 A–E，T6 其他操作使用模板 F，T7 代码风格使用模板 G。模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载，删除文件用 se-delete 承载；\
          用户提到代码风格、优化、code_style.md、模块封装或代码审查时，先读取工程根目录 code_style.md 并优先遵守；T4 必须先给诊断假设和可观测验证（串口或 LED/GPIO/watch），不得跳过验证；\
+         缺少某个目录或文件正文时，先用 se-list / se-read 请求 IDE 读取，不要声称无法遍历磁盘，也不要猜测未读取的代码；\
          不要自创分点或省略不适用的 N/A 行。\
          硬件资源变化先更新/新建 hardware.dts 台账；现有工程只做最小改动，不重写已有初始化，不修改已验证的引脚、时钟和句柄。\
          手册级事实（AF、IRQn、DMA 映射、地址、电气极限）不确定时用 TODO/待核对表标注，不要编造。\n\n",
@@ -1041,6 +1050,27 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
             "以下是用户通过历史纠正确认的长期规则，优先于 SKILL.md 默认写法；但仍以用户当前指令、工程现状和安全/硬件事实为准。\n\n",
         );
         prompt.push_str(context.evolution);
+    }
+    if !context.retrieval.trim().is_empty() {
+        prompt.push_str("\n\n## IDE 文件检索结果（上一轮 se-list / se-read 的真实返回）\n\n");
+        prompt.push_str(
+            "> 以下内容由 IDE 从工程磁盘读取，不是模型猜测。请直接基于这些正文继续分析；需要更多文件时继续输出 se-list / se-read，不要编造未读取的文件内容。\n\n",
+        );
+        let limit = MAX_SYSTEM_PROMPT_BYTES.saturating_sub(PROMPT_PROTOCOL_RESERVE);
+        let available = limit.saturating_sub(prompt.len());
+        let budget = MAX_RETRIEVAL_BYTES.min(available);
+        if budget > 512 {
+            let mut end = context.retrieval.len().min(budget);
+            while end > 0 && !context.retrieval.is_char_boundary(end) {
+                end -= 1;
+            }
+            prompt.push_str(&context.retrieval[..end]);
+            if end < context.retrieval.len() {
+                prompt.push_str("\n\n[检索结果过长，已截断；请分轮读取剩余部分]\n");
+            }
+        } else {
+            prompt.push_str("[上下文预算不足，未插入检索结果；请减少 Skill 或参考资料后重试]\n");
+        }
     }
     prompt.push_str("\n\n## 工程上下文\n\n");
     let _ = writeln!(prompt, "- 工程名：{}", context.project_name);
@@ -1102,37 +1132,16 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
     }
     prompt.push_str("```\n\n## 关键文件\n");
     prompt.push_str(
-        "> framework.md 会完整附带，其中列出的工程文件会按路径自动读取并附在下面；\
+        "> framework.md 及其列出的工程文件会尽量自动附带；当前打开的文件优先于 framework.md。\
          不要要求用户手动附加这些文件，也不要只根据用户附加的一个文件回答。\
          先读 framework.md 的分层、调用链、调度和文件表，再定位实际代码。\
          如果某个文件没有出现在关键文件或自动引用文件的正文中，不要猜测其内容；\
-         请让用户打开它，或明确说明需要该文件。\n",
+         用 se-read 请求 IDE 读取它，或明确说明还需要哪个文件。\n",
     );
 
     let mut appended = Vec::new();
-    append_file(
-        &mut prompt,
-        context.root,
-        &context.root.join("hardware.dts"),
-        60_000,
-        "dts",
-        &mut appended,
-    );
-    let mut framework_text = None;
-    if let Some(framework) = crate::framework::find(context.root) {
-        framework_text = read_text_file(&framework).ok().map(|loaded| loaded.text);
-        append_file_clipped(
-            &mut prompt,
-            context.root,
-            &framework,
-            MAX_FRAMEWORK_BYTES,
-            "markdown",
-            &mut appended,
-        );
-    }
-    let referenced = framework_text
-        .as_deref()
-        .map(|text| framework_context_files(context.root, text));
+    // The file the user is looking at is the most important context. Attach it
+    // before framework.md so a large architecture document cannot crowd it out.
     if let Some(active) = context.active_file {
         append_file(
             &mut prompt,
@@ -1143,6 +1152,16 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
             &mut appended,
         );
     }
+    append_file(
+        &mut prompt,
+        context.root,
+        &context.root.join("hardware.dts"),
+        60_000,
+        "dts",
+        &mut appended,
+    );
+    // Keep the entry file before framework.md for the same reason: it is the
+    // file most likely to contain the function the user is asking about.
     for candidate in ["Core/Src/main.c", "src/main.c", "main.c"] {
         append_file(
             &mut prompt,
@@ -1156,6 +1175,28 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
             break;
         }
     }
+    let mut framework_text = None;
+    if let Some(framework) = crate::framework::find(context.root) {
+        framework_text = read_text_file(&framework).ok().map(|loaded| loaded.text);
+        // Keep room for framework-referenced source files and the issue log.
+        let framework_budget = MAX_FRAMEWORK_BYTES.min(
+            MAX_SYSTEM_PROMPT_BYTES
+                .saturating_sub(PROMPT_PROTOCOL_RESERVE)
+                .saturating_sub(prompt.len())
+                .saturating_sub(32_000),
+        );
+        append_file_clipped(
+            &mut prompt,
+            context.root,
+            &framework,
+            framework_budget,
+            "markdown",
+            &mut appended,
+        );
+    }
+    let referenced = framework_text
+        .as_deref()
+        .map(|text| framework_context_files(context.root, text));
     if let Some(referenced) = referenced {
         prompt.push_str("\n### framework.md 自动引用文件\n");
         if referenced.is_empty() {
@@ -1359,7 +1400,17 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
     }
 
     prompt.push_str(
-        "\n\n## 文件修改协议（重要）\n\n\
+        "\n\n## 工程文件检索协议（重要）\n\n\
+         如果当前上下文缺少某个目录或文件的正文，不要声称“无法主动遍历磁盘”，也不要根据 framework.md 的文件表猜测代码内容。先输出四反引号的 se-list / se-read，IDE 会从工程根目录真实读取，并把结果放进下一轮上下文自动继续：\n\n\
+         ````se-list path=Core/Src depth=2\n\
+         ````\n\n\
+         ````se-read path=Core/Src/main.c lines=1-200\n\
+         ````\n\n\
+         se-list：列出目录，path=. 表示工程根目录，depth 为 1–3，默认 1；只列真实文件和目录。\n\
+         se-read：读取一个文本文件，lines 可省略；一次最多 24KB，单文件上限 2MB；需要后续内容时用 lines 继续读。\n\
+         一次最多 12 个检索请求，IDE 最多自动继续 6 轮；路径必须相对工程根目录，禁止绝对路径、`..`、build/Debug/Release/out/target、`.simple-embedded`、`.git`、`.opencode` 等生成或配置目录，禁止符号链接和二进制文件。\n\
+         检索回复只输出 se-list / se-read 和简短说明，不要在同一回复里输出 se-file / se-replace / se-delete；拿到正文后再生成修改。优先按 framework.md 的文件表定位，再 list 目录、read 关键文件，不要重复读取已经出现过的全文。\n\n\
+         ## 文件修改协议（重要）\n\n\
          你运行在 Simple embedded 的 AI 模式中，IDE 会执行你给出的文件修改。不要声称无法写入磁盘，也不要把完整代码只放在普通 Markdown 代码块里让用户手动复制。\n\n\
          新建或整体覆盖文件，使用四个反引号（内容里可以安全包含普通的三反引号 Markdown 代码块，例如 framework.md 的 Mermaid 图）：\n\n\
          ````se-file path=相对路径\n\
@@ -1434,7 +1485,7 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
     prompt.push_str(
         "\n\n## 输出要求（与 skill 固定模板的关系）\n\n\
          1. 正文结构以 skill 第 1 节任务判定和第 3 节对应模板为准：T1–T5 使用模板 A–E，T6 使用模板 F；保留模板的小节编号、标题、表格维度和 N/A 行，不得自创分点。\n\
-         2. skill 模板中的代码实现/代码修改节仍保留编号，但实际写入工程的内容用 se-file / se-replace 块承载，删除用 se-delete，确认问题用 se-ask，真实构建验证用 se-build，串口调试用 se-cli，问题/解决方案记录用 se-issue；执行器会显示差异卡片、独立删除卡片、确认卡片、构建卡片和串口调试卡片，并把问题写入 .ai-issues.md，不要在普通代码块里重复同一份完整代码。\n\
+         2. skill 模板中的代码实现/代码修改节仍保留编号，但实际写入工程的内容用 se-file / se-replace 块承载，删除用 se-delete，确认问题用 se-ask，真实构建验证用 se-build，串口调试用 se-cli，文件检索用 se-list / se-read，问题/解决方案记录用 se-issue；执行器会显示差异卡片、独立删除卡片、确认卡片、构建卡片、串口调试卡片和文件检索卡片，并把问题写入 .ai-issues.md，不要在普通代码块里重复同一份完整代码。\n\
          3. 涉及硬件资源变化时，先按模板输出 hardware.dts 台账；手册级事实不确定时放在待核对表/TODO 中。\n\
          4. S4 核对表、S5 构建/排查和 S7 串口 Debug 是 T1–T5 的必输出项；S5 必须用 se-build 实际构建并引用 IDE 回传输出，串口可用时 S7 必须用 se-cli 实际收发，不能只给命令或伪造结果；T6 按模板 F 给出影响分析、执行预览、结果、验证与回退。\n\
          5. 若模型无法完整遵循模板，至少给出任务判定、台账/无变更说明、代码修改或删除预览、核对表和验证步骤，并明确缺失项。\n",
@@ -2681,6 +2732,44 @@ mod tests {
     }
 
     #[test]
+    fn active_file_survives_large_framework_and_skill() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("src/main.c"),
+            "void active_main_marker(void) {}\n",
+        );
+        write(
+            &dir.path().join("framework.md"),
+            &"# Framework\n\n".repeat(12_000),
+        );
+        let bundle = embedded_skill();
+        let extra_skills = ResourceBundle::default();
+        let references = ResourceBundle::default();
+        let context = Context {
+            root: dir.path(),
+            project_name: "demo",
+            meta: &ProjectMeta::default(),
+            build: &BuildConfig::default(),
+            debug: &ProjectDebugSettings::default(),
+            memory_layout: None,
+            active_file: Some(&dir.path().join("src/main.c")),
+            include_dirs: &[],
+            library_dirs: &[],
+            defines: &[],
+            skill: &bundle,
+            extra_skills: &extra_skills,
+            references: &references,
+            evolution: "",
+            query: "修改 main.c",
+            index: None,
+            retrieval: "",
+        };
+        let prompt = build_system_prompt_with_stats(&context).0;
+        assert!(prompt.contains("active_main_marker"));
+        assert!(prompt.contains("src/main.c"));
+    }
+
+    #[test]
     fn prompt_uses_context_index_chunks() {
         let dir = tempfile::tempdir().unwrap();
         let skill = dir.path().join("skill");
@@ -2715,6 +2804,7 @@ mod tests {
             evolution: "",
             query: "uart echo",
             index: Some(&index),
+            retrieval: "",
         };
         let (prompt, stats) = build_system_prompt_with_stats(&context);
         assert!(stats.selected_chunks > 0);
@@ -2781,6 +2871,7 @@ mod tests {
             evolution: "user evolution marker",
             query: "uart gpio",
             index: None,
+            retrieval: "ide retrieval marker",
         };
         let prompt = build_system_prompt_with_stats(&context).0;
         assert!(prompt.contains("STM32G431CBTx"));
@@ -2794,12 +2885,16 @@ mod tests {
         assert!(prompt.contains("se-file"));
         assert!(prompt.contains("se-replace"));
         assert!(prompt.contains("se-cli"));
+        assert!(prompt.contains("se-list"));
+        assert!(prompt.contains("se-read"));
         assert!(prompt.contains("用户导入的额外 Skill"));
         assert!(prompt.contains("extra skill marker"));
         assert!(prompt.contains("用户导入的参考资料"));
         assert!(prompt.contains("reference marker"));
         assert!(prompt.contains("用户技能进化规则"));
         assert!(prompt.contains("user evolution marker"));
+        assert!(prompt.contains("IDE 文件检索结果"));
+        assert!(prompt.contains("ide retrieval marker"));
     }
 
     #[test]
