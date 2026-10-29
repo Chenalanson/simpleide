@@ -9,6 +9,7 @@ mod build;
 mod codetheme;
 mod column;
 mod column_select;
+mod comment;
 mod completion;
 mod config;
 mod debugger;

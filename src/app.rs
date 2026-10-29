@@ -741,6 +741,10 @@ struct AiChatMessage {
     edit_status: AiEditStatus,
     apply_error: Option<String>,
     backup_dir: Option<PathBuf>,
+    deletes: Vec<crate::ai_edit::AiDelete>,
+    delete_status: AiEditStatus,
+    delete_error: Option<String>,
+    delete_backup_dir: Option<PathBuf>,
     evolutions: Vec<String>,
     evolution_status: AiEditStatus,
     evolution_error: Option<String>,
@@ -758,6 +762,10 @@ impl AiChatMessage {
             edit_status: AiEditStatus::Pending,
             apply_error: None,
             backup_dir: None,
+            deletes: Vec::new(),
+            delete_status: AiEditStatus::Pending,
+            delete_error: None,
+            delete_backup_dir: None,
             evolutions: Vec::new(),
             evolution_status: AiEditStatus::Pending,
             evolution_error: None,
@@ -4792,6 +4800,10 @@ impl App {
             edit_status: AiEditStatus::Pending,
             apply_error: None,
             backup_dir: None,
+            deletes: Vec::new(),
+            delete_status: AiEditStatus::Pending,
+            delete_error: None,
+            delete_backup_dir: None,
             evolutions: Vec::new(),
             evolution_status: AiEditStatus::Pending,
             evolution_error: None,
@@ -4869,17 +4881,50 @@ impl App {
         let parsed = crate::ai_edit::parse_edits(&raw);
         let text = parsed.text.trim().to_owned();
         let mut edits = crate::ai_edit::merge_edits(parsed.edits);
+        let mut deletes = parsed.deletes;
         let evolutions = parsed.evolutions;
         if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
             for edit in &mut edits {
                 edit.prepare(&root);
             }
+            for delete in &mut deletes {
+                delete.prepare(&root);
+            }
         }
-        let content = if text.is_empty() && !edits.is_empty() {
-            format!(
-                "已准备 {} 个文件修改，请查看下方差异并点击“应用全部”。",
-                edits.len()
-            )
+        let edit_paths = edits
+            .iter()
+            .map(|edit| edit.path.to_ascii_lowercase())
+            .collect::<BTreeSet<_>>();
+        let mut seen_deletes = BTreeSet::new();
+        for delete in &mut deletes {
+            let key = delete
+                .path
+                .trim()
+                .replace('\\', "/")
+                .trim_start_matches("./")
+                .to_ascii_lowercase();
+            if !seen_deletes.insert(key.clone()) {
+                delete.error = Some("同一文件被重复删除".to_owned());
+            } else if edit_paths.contains(&key) {
+                delete.error = Some("同一文件同时出现在修改和删除中".to_owned());
+            }
+        }
+        if deletes.len() > 10 {
+            for delete in &mut deletes {
+                if delete.error.is_none() {
+                    delete.error = Some("一次最多删除 10 个文件，请分批确认".to_owned());
+                }
+            }
+        }
+        let content = if text.is_empty() && (!edits.is_empty() || !deletes.is_empty()) {
+            let mut parts = Vec::new();
+            if !edits.is_empty() {
+                parts.push(format!("{} 个文件修改", edits.len()));
+            }
+            if !deletes.is_empty() {
+                parts.push(format!("{} 个文件删除", deletes.len()));
+            }
+            format!("已准备 {}，请查看下方卡片并分别确认。", parts.join("、"))
         } else if text.is_empty() && !evolutions.is_empty() {
             format!(
                 "已准备 {} 条技能进化规则，请确认后保存到用户 evolution.md。",
@@ -4896,6 +4941,10 @@ impl App {
         message.edit_status = AiEditStatus::Pending;
         message.apply_error = None;
         message.backup_dir = None;
+        message.deletes = deletes;
+        message.delete_status = AiEditStatus::Pending;
+        message.delete_error = None;
+        message.delete_backup_dir = None;
         message.evolutions = evolutions;
         message.evolution_status = AiEditStatus::Pending;
         message.evolution_error = None;
@@ -5004,6 +5053,15 @@ impl App {
             if message.edit_status == AiEditStatus::Pending {
                 message.edit_status = AiEditStatus::Cancelled;
                 message.apply_error = None;
+            }
+        }
+    }
+
+    fn cancel_ai_deletes(&mut self, index: usize) {
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            if message.delete_status == AiEditStatus::Pending {
+                message.delete_status = AiEditStatus::Cancelled;
+                message.delete_error = None;
             }
         }
     }
@@ -5234,6 +5292,224 @@ impl App {
             ),
             Severity::Success,
         );
+    }
+
+    /// Validate and delete the files proposed in an assistant message. This is
+    /// deliberately separate from `apply_ai_edits`: deleting a file is not an
+    /// edit and must not happen through the generic "应用全部" button.
+    fn apply_ai_deletes(&mut self, index: usize) {
+        let Some(message) = self.ai.messages.get(index) else {
+            return;
+        };
+        if message.delete_status != AiEditStatus::Pending || message.deletes.is_empty() {
+            return;
+        }
+        let deletes = message.deletes.clone();
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message.delete_error = Some("请先打开工程".to_owned());
+            }
+            return;
+        };
+
+        struct Plan {
+            delete: crate::ai_edit::AiDelete,
+            absolute: PathBuf,
+        }
+
+        macro_rules! fail {
+            ($err:expr) => {{
+                if let Some(message) = self.ai.messages.get_mut(index) {
+                    message.delete_error = Some($err);
+                }
+                return;
+            }};
+        }
+
+        let mut plans = Vec::new();
+        for delete in deletes {
+            let absolute = match delete.verify(&root) {
+                Ok(path) => path,
+                Err(err) => fail!(err),
+            };
+            let open_index = self
+                .tabs
+                .iter()
+                .position(|doc| same_path(&doc.path, &absolute));
+            if let Some(doc_index) = open_index {
+                if self.tabs[doc_index].is_dirty() {
+                    fail!(format!(
+                        "{} 有未保存修改，请先保存或关闭后再删除",
+                        delete.path
+                    ));
+                }
+            }
+            if plans
+                .iter()
+                .any(|plan: &Plan| same_path(&plan.absolute, &absolute))
+            {
+                fail!(format!("同一文件被重复删除：{}", delete.path));
+            }
+            plans.push(Plan { delete, absolute });
+        }
+
+        let stamp = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default();
+        let project_name = root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "project".to_owned());
+        let key = crate::ai_edit::hash_text(&project_key(&root));
+        let backup_root = crate::config::settings_path()
+            .parent()
+            .map(|path| path.join("backups"))
+            .unwrap_or_else(|| std::env::temp_dir().join("SimpleEmbedded-backups"));
+        let backup_dir = backup_root
+            .join(format!("{project_name}-{key:08x}"))
+            .join(format!("ai-delete-{stamp}"));
+        if let Err(err) = std::fs::create_dir_all(&backup_dir) {
+            fail!(format!("无法创建 AI 删除备份目录：{err}"));
+        }
+        for plan in &plans {
+            let destination = backup_dir.join(&plan.delete.path);
+            if let Some(parent) = destination.parent() {
+                if let Err(err) = std::fs::create_dir_all(parent) {
+                    fail!(format!("无法创建备份目录：{err}"));
+                }
+            }
+            if let Err(err) = std::fs::copy(&plan.absolute, &destination) {
+                fail!(format!(
+                    "备份 {} 失败：{err}",
+                    util::display_path(&plan.absolute)
+                ));
+            }
+        }
+        let manifest = plans
+            .iter()
+            .map(|plan| {
+                format!(
+                    "{}\t{}\n",
+                    plan.delete.path,
+                    if plan.delete.reason.is_empty() {
+                        ""
+                    } else {
+                        plan.delete.reason.as_str()
+                    }
+                )
+            })
+            .collect::<String>();
+        let _ = std::fs::write(backup_dir.with_extension("manifest.txt"), manifest);
+
+        let makefile_path = makefile::find_makefile(&root);
+        let mut makefile_deleted = false;
+        let mut makefile_dirty_noted = false;
+        let mut makefile_synced = false;
+        let mut deleted = 0usize;
+        let mut errors = Vec::new();
+        for plan in &plans {
+            match std::fs::remove_file(&plan.absolute) {
+                Ok(()) => {
+                    deleted += 1;
+                    let is_makefile = makefile_path
+                        .as_ref()
+                        .is_some_and(|path| same_path(path, &plan.absolute));
+                    if is_makefile {
+                        makefile_deleted = true;
+                    } else if !makefile_deleted {
+                        let makefile_dirty = makefile_path.as_ref().is_some_and(|path| {
+                            self.tabs
+                                .iter()
+                                .any(|doc| same_path(&doc.path, path) && doc.is_dirty())
+                        });
+                        if makefile_dirty {
+                            if !makefile_dirty_noted {
+                                errors.push("Makefile 有未保存修改，未同步 C_SOURCES".to_owned());
+                                makefile_dirty_noted = true;
+                            }
+                        } else {
+                            match makefile::remove_sources(&root, &plan.absolute, false) {
+                                Ok(Some(changed)) => {
+                                    if let Some(doc) = self
+                                        .tabs
+                                        .iter_mut()
+                                        .find(|doc| same_path(&doc.path, &changed))
+                                    {
+                                        if let Ok(loaded) = util::read_text_file(&changed) {
+                                            let cursor =
+                                                doc.cursor_index.min(loaded.text.chars().count());
+                                            doc.buffer.set_text(loaded.text);
+                                            doc.update_cursor(cursor);
+                                            doc.saved_revision = doc.buffer.revision();
+                                            doc.folds.clear();
+                                            doc.macro_issue_revision = u64::MAX;
+                                        }
+                                    }
+                                    makefile_synced = true;
+                                }
+                                Ok(None) => {}
+                                Err(err) => {
+                                    errors.push(format!("更新 C_SOURCES 失败：{err}"));
+                                }
+                            }
+                        }
+                    }
+                    self.remove_path_references(&plan.absolute);
+                }
+                Err(err) => {
+                    errors.push(format!("删除 {} 失败：{err}", plan.delete.path));
+                }
+            }
+        }
+
+        if deleted > 0 {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message.delete_status = AiEditStatus::Applied;
+                message.delete_backup_dir = Some(backup_dir.clone());
+                message.delete_error = (!errors.is_empty()).then(|| errors.join("；"));
+            }
+            if let Some(tree) = &mut self.tree {
+                tree.refresh();
+            }
+            self.member_index = None;
+            self.multi_cursor = None;
+            self.column_selection = None;
+            self.symbols.scanned = false;
+            self.relations = RelationState::default();
+            self.start_relations_scan();
+            self.refresh_ai_framework(true);
+            self.refresh_support_packs();
+            self.refresh_git_status();
+            self.find.dirty = true;
+            let sync = if makefile_synced {
+                "；已从 Makefile C_SOURCES 移除"
+            } else {
+                ""
+            };
+            let warning = if errors.is_empty() {
+                String::new()
+            } else {
+                format!("；部分操作失败：{}", errors.join("；"))
+            };
+            self.set_toast(
+                format!(
+                    "AI 已删除 {deleted} 个文件，备份：{}{sync}{warning}",
+                    util::display_path(&backup_dir)
+                ),
+                if errors.is_empty() {
+                    Severity::Success
+                } else {
+                    Severity::Warning
+                },
+            );
+        } else if let Some(message) = self.ai.messages.get_mut(index) {
+            message.delete_error = Some(if errors.is_empty() {
+                "没有文件被删除".to_owned()
+            } else {
+                errors.join("；")
+            });
+        }
     }
 
     fn poll_resource_report(&mut self, ctx: &egui::Context) {
@@ -5719,6 +5995,89 @@ impl App {
             self.focus_editor = true;
             ctx.request_repaint();
         }
+    }
+
+    fn toggle_line_comments(&mut self, ctx: &egui::Context) {
+        let Some(active) = self.active else {
+            return;
+        };
+        let Some(doc) = self.tabs.get(active) else {
+            return;
+        };
+        if doc.read_only || doc.binary.is_some() {
+            return;
+        }
+        let path = doc.path.clone();
+        let language = doc.language.clone();
+        let text = doc.buffer.as_string().to_owned();
+        let folds = doc.folds.clone();
+        let cursor = doc.cursor_index;
+        let folded = !folds.is_empty();
+        let editor_id = if folded {
+            egui::Id::new(("simple_embedded_folded_editor", &path))
+        } else {
+            egui::Id::new(("simple_embedded_code_editor", &path))
+        };
+        let selection = egui::text_edit::TextEditState::load(ctx, editor_id)
+            .and_then(|state| state.cursor.char_range())
+            .map(|range| {
+                let start = range.primary.index.min(range.secondary.index);
+                let end = range.primary.index.max(range.secondary.index);
+                if folded {
+                    let buffer = crate::fold::FoldBuffer::new(text.clone(), folds.clone());
+                    (buffer.view_to_source(start), buffer.view_to_source(end))
+                } else {
+                    (start, end)
+                }
+            })
+            .unwrap_or((cursor, cursor));
+        let Some(token) = crate::comment::line_comment_token(&path, &language) else {
+            self.set_toast("当前文件类型不支持单行注释", Severity::Info);
+            return;
+        };
+        let result = crate::comment::toggle(&text, selection.0, selection.1, token);
+        if !result.changed {
+            return;
+        }
+        let Some(doc) = self.tabs.get_mut(active) else {
+            return;
+        };
+        doc.buffer.set_text(result.text);
+        doc.update_cursor(result.end);
+        if folded {
+            let buffer =
+                crate::fold::FoldBuffer::new(doc.buffer.as_string().to_owned(), doc.folds.clone());
+            let view_start = buffer.source_to_view(result.start);
+            let view_end = buffer.source_to_view(result.end);
+            let mut state =
+                egui::text_edit::TextEditState::load(ctx, editor_id).unwrap_or_default();
+            if result.start == result.end {
+                state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::one(
+                        egui::text::CCursor::new(view_end),
+                    )));
+            } else {
+                state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(view_start),
+                        egui::text::CCursor::new(view_end),
+                    )));
+            }
+            state.store(ctx, editor_id);
+        } else if result.start == result.end {
+            set_editor_cursor(ctx, &path, result.end);
+        } else {
+            set_editor_selection(ctx, &path, result.start, result.end);
+        }
+        self.column_selection = None;
+        self.multi_cursor = None;
+        self.completion.open = false;
+        self.find.dirty = true;
+        self.find
+            .ensure_matches(doc.buffer.as_string(), doc.buffer.revision());
+        ctx.request_repaint();
     }
 
     fn ensure_undo_document(&mut self, path: &Path) -> Option<usize> {
@@ -7932,6 +8291,18 @@ impl App {
             return;
         }
 
+        let comment_pressed = !self.ai.enabled
+            && editor_focused
+            && ctx.input(|input| !input.modifiers.shift && !input.modifiers.alt)
+            && ctx.input_mut(|input| {
+                input.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)
+                    || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Slash)
+            });
+        if comment_pressed {
+            self.toggle_line_comments(ctx);
+            return;
+        }
+
         let fold_pressed = editor_focused
             && ctx.input_mut(|input| {
                 input.consume_key(
@@ -8813,6 +9184,14 @@ impl App {
             same_path(&preview.path, removed) || preview.path.starts_with(removed)
         }) {
             self.image_preview = None;
+        }
+        if self
+            .ai
+            .context_file
+            .as_ref()
+            .is_some_and(|path| same_path(path, removed) || path.starts_with(removed))
+        {
+            self.ai.context_file = None;
         }
     }
 

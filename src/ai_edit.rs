@@ -7,7 +7,8 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use similar::{ChangeTag, TextDiff};
 
@@ -52,7 +53,81 @@ pub struct AiEdit {
 pub struct ParsedEdits {
     pub text: String,
     pub edits: Vec<AiEdit>,
+    pub deletes: Vec<AiDelete>,
     pub evolutions: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AiDelete {
+    pub path: String,
+    pub reason: String,
+    pub size: u64,
+    pub modified: Option<SystemTime>,
+    pub error: Option<String>,
+}
+
+impl AiDelete {
+    fn new(path: String, reason: String) -> Self {
+        Self {
+            path,
+            reason,
+            size: 0,
+            modified: None,
+            error: None,
+        }
+    }
+
+    /// Validate the target before showing the deletion card. The actual file is
+    /// checked again by [`Self::verify`] immediately before removal so a file
+    /// that changed after the AI response is not deleted silently.
+    pub fn prepare(&mut self, root: &Path) {
+        self.error = None;
+        self.size = 0;
+        self.modified = None;
+        match inspect_delete_target(root, &self.path) {
+            Ok((path, metadata)) => {
+                self.path = path;
+                self.size = metadata.len();
+                self.modified = metadata.modified().ok();
+            }
+            Err(err) => self.error = Some(err),
+        }
+    }
+
+    pub fn verify(&self, root: &Path) -> Result<PathBuf, String> {
+        if let Some(err) = &self.error {
+            return Err(err.clone());
+        }
+        let (path, metadata) = inspect_delete_target(root, &self.path)?;
+        if metadata.len() != self.size || metadata.modified().ok() != self.modified {
+            return Err(format!(
+                "{} 在 AI 生成后被修改，请重新生成删除操作",
+                self.path
+            ));
+        }
+        Ok(root.join(path))
+    }
+}
+
+fn inspect_delete_target(root: &Path, path: &str) -> Result<(String, std::fs::Metadata), String> {
+    let path = normalize_delete_path(path)?;
+    let absolute = root.join(&path);
+    let metadata = std::fs::symlink_metadata(&absolute)
+        .map_err(|err| format!("{path} 不存在或无法读取：{err}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("不允许通过符号链接删除：{path}"));
+    }
+    if !metadata.is_file() {
+        return Err(format!("只允许 AI 删除普通文件，不能删除目录：{path}"));
+    }
+    let root_canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let absolute_canonical = absolute
+        .canonicalize()
+        .map_err(|err| format!("无法解析 {path}：{err}"))?;
+    if !absolute_canonical.starts_with(&root_canonical) {
+        return Err(format!("删除路径不在工程内：{path}"));
+    }
+    Ok((path, metadata))
 }
 
 impl AiEdit {
@@ -194,7 +269,10 @@ pub fn incomplete_edit_block(text: &str) -> bool {
         }
         let tag = trimmed[ticks..].trim_start();
         let tag = tag.split_whitespace().next().unwrap_or("");
-        if matches!(tag, "se-file" | "se-write" | "se-replace" | "se-evolve") {
+        if matches!(
+            tag,
+            "se-file" | "se-write" | "se-replace" | "se-delete" | "se-evolve"
+        ) {
             open_fence = Some(ticks);
         }
     }
@@ -204,6 +282,7 @@ pub fn incomplete_edit_block(text: &str) -> bool {
 pub fn parse_edits(text: &str) -> ParsedEdits {
     let mut cleaned = String::new();
     let mut edits = Vec::new();
+    let mut deletes = Vec::new();
     let mut evolutions = Vec::new();
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let mut index = 0usize;
@@ -215,7 +294,10 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
             index += 1;
             continue;
         };
-        if !matches!(tag, "se-file" | "se-write" | "se-replace" | "se-evolve") {
+        if !matches!(
+            tag,
+            "se-file" | "se-write" | "se-replace" | "se-delete" | "se-evolve"
+        ) {
             cleaned.push_str(line);
             index += 1;
             continue;
@@ -241,6 +323,9 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
         let body = lines[index + 1..close].concat();
         if tag == "se-evolve" {
             evolutions.extend(parse_evolution_rules(&body));
+        } else if tag == "se-delete" {
+            let reason = body.trim().chars().take(500).collect::<String>();
+            deletes.push(AiDelete::new(path, reason));
         } else if tag == "se-replace" {
             edits.push(AiEdit::replace(path, parse_pairs(&body)));
         } else {
@@ -254,6 +339,7 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
     ParsedEdits {
         text: cleaned,
         edits,
+        deletes,
         evolutions,
     }
 }
@@ -276,7 +362,10 @@ fn find_last_fence(lines: &[&str], start: usize, fence_len: usize) -> Option<usi
     let limit = (start..lines.len())
         .find(|index| {
             fence_header(lines[*index].trim_start()).is_some_and(|(_, tag, _)| {
-                matches!(tag, "se-file" | "se-write" | "se-replace" | "se-evolve")
+                matches!(
+                    tag,
+                    "se-file" | "se-write" | "se-replace" | "se-delete" | "se-evolve"
+                )
             })
         })
         .unwrap_or(lines.len());
@@ -418,6 +507,39 @@ fn is_generated_dir(name: &str) -> bool {
             | "tools"
             | "dist"
     )
+}
+
+fn normalize_delete_path(path: &str) -> Result<String, String> {
+    let path = path
+        .trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .replace('\\', "/");
+    if path.is_empty() {
+        return Err("删除文件路径为空".to_owned());
+    }
+    if path.starts_with('/') || path.contains(':') {
+        return Err(format!("只允许删除工程内相对路径：{path}"));
+    }
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => continue,
+            ".." => return Err(format!("删除路径不能包含 ..：{path}")),
+            part => parts.push(part),
+        }
+    }
+    if parts.is_empty() {
+        return Err("删除文件路径为空".to_owned());
+    }
+    if parts.iter().any(|part| is_generated_dir(part)) {
+        return Err(format!("不允许删除生成目录或配置目录：{path}"));
+    }
+    if path.to_ascii_lowercase().ends_with(".se-workspace") {
+        return Err(format!("不允许删除工作区文件：{path}"));
+    }
+    Ok(parts.join("/"))
 }
 
 pub fn hash_text(text: &str) -> u64 {
@@ -605,5 +727,53 @@ mod tests {
         assert!(parsed.edits[0].content.contains("```mermaid"));
         assert!(parsed.edits[0].content.contains("gantt"));
         assert!(!incomplete_edit_block(reply));
+    }
+
+    #[test]
+    fn parses_delete_block_with_reason() {
+        let reply = "已迁移。\n````se-delete path=Core/Src/bsp_usart_echo.c\n旧实现已迁移到 BSP/PERIPHERAL，保留会重复定义。\n````\n";
+        let parsed = parse_edits(reply);
+        assert_eq!(parsed.deletes.len(), 1);
+        assert_eq!(parsed.deletes[0].path, "Core/Src/bsp_usart_echo.c");
+        assert!(parsed.deletes[0].reason.contains("BSP/PERIPHERAL"));
+        assert!(!parsed.text.contains("se-delete"));
+        assert!(parsed.text.contains("已迁移"));
+        assert!(incomplete_edit_block(
+            "````se-delete path=Core/Src/bsp_usart_echo.c\n"
+        ));
+    }
+
+    #[test]
+    fn prepares_and_verifies_delete_target() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("Core/Src/old.c"), "int old;\n");
+        let mut delete = AiDelete::new("Core/Src/old.c".to_owned(), "unused".to_owned());
+        delete.prepare(dir.path());
+        assert!(delete.error.is_none());
+        assert_eq!(delete.size, 9);
+        assert!(delete.verify(dir.path()).is_ok());
+        std::fs::write(dir.path().join("Core/Src/old.c"), "int changed;\n").unwrap();
+        assert!(delete.verify(dir.path()).is_err());
+    }
+
+    #[test]
+    fn rejects_unsafe_delete_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("Core/Src/old.c"), "int old;\n");
+        let mut directory = AiDelete::new("Core".to_owned(), String::new());
+        directory.prepare(dir.path());
+        assert!(directory.error.is_some());
+        for path in [
+            "../secret.c",
+            "build/out.c",
+            ".simple-embedded/settings.json",
+            "project.se-workspace",
+            "missing.c",
+        ] {
+            let mut delete = AiDelete::new(path.to_owned(), String::new());
+            delete.prepare(dir.path());
+            assert!(delete.error.is_some(), "{path} should be rejected");
+        }
+        assert!(normalize_delete_path("Core/Src/old.c").is_ok());
     }
 }

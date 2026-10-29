@@ -107,6 +107,10 @@ const EMBEDDED_SKILL_FILES: &[(&str, &str)] = &[
         "references/software-arch.md",
         include_str!("../.opencode/skills/stm32-embedded-dev/references/software-arch.md"),
     ),
+    (
+        "references/other-operations.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/other-operations.md"),
+    ),
 ];
 
 /// Skill copy compiled into the executable. Used when the opened project (and
@@ -943,8 +947,9 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
     let mut prompt = String::new();
     prompt.push_str(
         "你是 Simple embedded 的 AI 助手，正在协助 STM32 嵌入式开发。\n\
-         必须优先遵循已加载的 stm32-embedded-dev skill：先按第 1 节判定 T1–T5 任务类型，再按第 3 节对应固定模板的小节编号、标题和表格输出；\
-         模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载，不要自创分点或省略不适用的 N/A 行。\
+         必须优先遵循已加载的 stm32-embedded-dev skill：先按第 1 节判定 T1–T6 任务类型，再按第 3 节对应固定模板的小节编号、标题和表格输出；\
+         T1–T5 使用模板 A–E，T6 其他操作使用模板 F。模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载，删除文件用 se-delete 承载；\
+         不要自创分点或省略不适用的 N/A 行。\
          硬件资源变化先更新/新建 hardware.dts 台账；现有工程只做最小改动，不重写已有初始化，不修改已验证的引脚、时钟和句柄。\
          手册级事实（AF、IRQn、DMA 映射、地址、电气极限）不确定时用 TODO/待核对表标注，不要编造。\n\n",
     );
@@ -1134,21 +1139,28 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
          <替换后的文本>\n\
          >>>>>>> REPLACE\n\
          ````\n\n\
+         删除工程内文件，使用四个反引号；IDE 会显示独立的“AI 文件删除”卡片，只有用户再次确认后才会删除，并在删除前备份到用户目录：\n\n\
+         ````se-delete path=相对路径\n\
+         <为什么删除；可省略>\n\
+         ````\n\n\
+         删除规则：只删除用户明确要求删除的普通文件；一次最多 10 个删除；禁止删除目录、工程根目录、`.simple-embedded`、`.git`、构建/生成目录和 `.se-workspace`；\
+         禁止用空文件、占位注释、“请手动删除”或 se-file 覆盖来假装删除。文件已迁移时，直接对旧文件发 se-delete，不要在新文件里写“请从工程中删除旧文件”。\
+         se-delete 是真实执行请求，不是示例；展示删除命令或演示路径时使用普通 Markdown 代码块。\n\n\
          当用户提出长期可复用的偏好或纠正（目录归属、命名、分层、调度、流程、代码风格等）时，在回答末尾追加一个四反引号的 se-evolve 块；IDE 会显示“AI 技能进化”卡片，用户确认后才写入用户级 evolution.md：\n\n\
          ````se-evolve\n\
          - 目录：应用任务放 APP/tasks/，不要在 Core/Src 新增业务文件。\n\
          - 命名：外设驱动统一 bsp_<外设>.c/.h。\n\
          ````\n\n\
          se-evolve 只记录长期规则，不记录一次性需求、密钥、客户隐私或大段源码，一次最多 5 条；不确定是否长期有效时先询问用户。\n\n\
-         规则：路径必须相对工程根目录，禁止绝对路径、`..`、`build` / `Debug` / `Release` / `out` / `target` 等生成目录；一次最多修改 20 个文件；SEARCH 必须能在当前文件中唯一匹配；不要修改 `.simple-embedded` 工程配置。IDE 会生成差异，只有用户点击“应用全部”后才会写入，写入前会备份到用户目录。skill 中要求输出代码块的步骤在 AI 模式下改用上述格式，解释文字照常输出。\n",
+         规则：路径必须相对工程根目录，禁止绝对路径、`..`、`build` / `Debug` / `Release` / `out` / `target` 等生成目录；一次最多修改 20 个文件、删除 10 个文件；SEARCH 必须能在当前文件中唯一匹配；不要修改 `.simple-embedded` 工程配置。IDE 会生成修改差异和独立删除卡片：用户点击“应用全部”只写入修改，删除必须再点“删除文件”确认；写入/删除前都会备份到用户目录。skill 中要求输出代码块的步骤在 AI 模式下改用上述格式，解释文字照常输出。\n",
     );
     prompt.push_str(
         "\n\n## 输出要求（与 skill 固定模板的关系）\n\n\
-         1. 正文结构以 skill 第 1 节任务判定和第 3 节对应模板为准：保留模板的小节编号、标题、表格维度和 N/A 行，不得自创分点。\n\
-         2. skill 模板中的代码实现/代码修改节仍保留编号，但实际写入工程的内容用 se-file / se-replace 块承载；执行器会显示差异卡片，不要在普通代码块里重复同一份完整代码。\n\
+         1. 正文结构以 skill 第 1 节任务判定和第 3 节对应模板为准：T1–T5 使用模板 A–E，T6 使用模板 F；保留模板的小节编号、标题、表格维度和 N/A 行，不得自创分点。\n\
+         2. skill 模板中的代码实现/代码修改节仍保留编号，但实际写入工程的内容用 se-file / se-replace 块承载，删除用 se-delete；执行器会显示差异卡片和独立删除卡片，不要在普通代码块里重复同一份完整代码。\n\
          3. 涉及硬件资源变化时，先按模板输出 hardware.dts 台账；手册级事实不确定时放在待核对表/TODO 中。\n\
-         4. S4 核对表和 S5 构建/排查是必输出项；不要用本提示词的通用分点替代 skill 模板。\n\
-         5. 若模型无法完整遵循模板，至少给出任务判定、台账/无变更说明、代码修改、核对表和验证步骤，并明确缺失项。\n",
+         4. S4 核对表和 S5 构建/排查是 T1–T5 的必输出项；T6 按模板 F 给出影响分析、执行预览、结果、验证与回退。\n\
+         5. 若模型无法完整遵循模板，至少给出任务判定、台账/无变更说明、代码修改或删除预览、核对表和验证步骤，并明确缺失项。\n",
     );
 
     if prompt.len() > MAX_SYSTEM_PROMPT_BYTES {
@@ -1842,8 +1854,9 @@ mod tests {
         assert!(bundle.text.contains("references/checklist.md"));
         assert!(bundle.text.contains("references/framework-template.md"));
         assert!(bundle.text.contains("references/software-arch.md"));
+        assert!(bundle.text.contains("references/other-operations.md"));
         assert!(bundle.text.contains("evolution.md"));
-        assert!(bundle.files.len() >= 11);
+        assert!(bundle.files.len() >= 12);
     }
 
     #[test]

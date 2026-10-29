@@ -40,6 +40,16 @@ struct WorkbenchActions {
     orb_clicked: bool,
 }
 
+#[derive(Default)]
+struct AiCardRequests {
+    apply_edits: Option<usize>,
+    cancel_edits: Option<usize>,
+    apply_deletes: Option<usize>,
+    cancel_deletes: Option<usize>,
+    apply_evolutions: Option<usize>,
+    cancel_evolutions: Option<usize>,
+}
+
 #[derive(Clone, Copy)]
 struct MeteorSpec {
     target: egui::Pos2,
@@ -244,10 +254,7 @@ impl App {
         clear: &mut bool,
         quick_prompt: &mut Option<&'static str>,
     ) {
-        let mut apply_request = None;
-        let mut cancel_request = None;
-        let mut evolution_apply_request = None;
-        let mut evolution_cancel_request = None;
+        let mut requests = AiCardRequests::default();
         ai_panel(ui, rect, reveal, origin, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
@@ -258,6 +265,8 @@ impl App {
                 );
                 let pending = self.ai.messages.iter().any(|message| {
                     (message.edit_status == AiEditStatus::Pending && !message.edits.is_empty())
+                        || (message.delete_status == AiEditStatus::Pending
+                            && !message.deletes.is_empty())
                         || (message.evolution_status == AiEditStatus::Pending
                             && !message.evolutions.is_empty())
                 });
@@ -298,34 +307,34 @@ impl App {
                         ai_empty_state(ui, quick_prompt);
                     } else {
                         for (index, message) in self.ai.messages.iter().enumerate() {
-                            ai_message(
-                                ui,
-                                message,
-                                index,
-                                &mut apply_request,
-                                &mut cancel_request,
-                                &mut evolution_apply_request,
-                                &mut evolution_cancel_request,
-                            );
+                            ai_message(ui, message, index, &mut requests);
                             ui.add_space(8.0);
                         }
                     }
                     ui.add_space(4.0);
                 });
         });
-        if let Some(index) = apply_request {
+        if let Some(index) = requests.apply_edits {
             self.apply_ai_edits(index);
             ui.ctx().request_repaint();
         }
-        if let Some(index) = cancel_request {
+        if let Some(index) = requests.cancel_edits {
             self.cancel_ai_edits(index);
             ui.ctx().request_repaint();
         }
-        if let Some(index) = evolution_apply_request {
+        if let Some(index) = requests.apply_deletes {
+            self.apply_ai_deletes(index);
+            ui.ctx().request_repaint();
+        }
+        if let Some(index) = requests.cancel_deletes {
+            self.cancel_ai_deletes(index);
+            ui.ctx().request_repaint();
+        }
+        if let Some(index) = requests.apply_evolutions {
             self.apply_ai_evolutions(index);
             ui.ctx().request_repaint();
         }
-        if let Some(index) = evolution_cancel_request {
+        if let Some(index) = requests.cancel_evolutions {
             self.cancel_ai_evolutions(index);
             ui.ctx().request_repaint();
         }
@@ -1679,15 +1688,7 @@ fn paint_dot(ui: &mut Ui, color: Color32) {
     ui.painter().circle_filled(rect.center(), 3.0, color);
 }
 
-fn ai_message(
-    ui: &mut Ui,
-    message: &AiChatMessage,
-    index: usize,
-    apply_request: &mut Option<usize>,
-    cancel_request: &mut Option<usize>,
-    evolution_apply_request: &mut Option<usize>,
-    evolution_cancel_request: &mut Option<usize>,
-) {
+fn ai_message(ui: &mut Ui, message: &AiChatMessage, index: usize, requests: &mut AiCardRequests) {
     let user = message.role == "user";
     let (fill, border) = if message.error {
         (
@@ -1768,7 +1769,23 @@ fn ai_message(
                 render_markdown(ui, &message.content, index, message.error);
                 if !message.edits.is_empty() {
                     ui.add_space(7.0);
-                    ai_edits_card(ui, message, index, apply_request, cancel_request);
+                    ai_edits_card(
+                        ui,
+                        message,
+                        index,
+                        &mut requests.apply_edits,
+                        &mut requests.cancel_edits,
+                    );
+                }
+                if !message.deletes.is_empty() {
+                    ui.add_space(7.0);
+                    ai_deletes_card(
+                        ui,
+                        message,
+                        index,
+                        &mut requests.apply_deletes,
+                        &mut requests.cancel_deletes,
+                    );
                 }
                 if !message.evolutions.is_empty() {
                     ui.add_space(7.0);
@@ -1776,8 +1793,8 @@ fn ai_message(
                         ui,
                         message,
                         index,
-                        evolution_apply_request,
-                        evolution_cancel_request,
+                        &mut requests.apply_evolutions,
+                        &mut requests.cancel_evolutions,
                     );
                 }
             }
@@ -1917,6 +1934,156 @@ fn ai_reasoning_block(ui: &mut Ui, message: &AiChatMessage, index: usize) {
                 });
             }
         });
+}
+
+fn ai_deletes_card(
+    ui: &mut Ui,
+    message: &AiChatMessage,
+    message_index: usize,
+    apply_request: &mut Option<usize>,
+    cancel_request: &mut Option<usize>,
+) {
+    let has_errors = message.deletes.iter().any(|delete| delete.error.is_some());
+    let color = theme::error();
+    Frame::new()
+        .fill(theme::with_alpha(color, 10))
+        .stroke(Stroke::new(1.0_f32, theme::with_alpha(color, 90)))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("AI 文件删除")
+                        .size(10.5)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.label(
+                    RichText::new(format!("{} 个文件", message.deletes.len()))
+                        .size(9.5)
+                        .color(theme::text_faint()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    match message.delete_status {
+                        AiEditStatus::Pending => {
+                            if has_errors {
+                                ui.add_enabled(false, theme::primary_button("删除文件"));
+                            } else if ai_danger_button(ui, "删除文件") {
+                                *apply_request = Some(message_index);
+                            }
+                            ui.add_space(4.0);
+                            if ui.add(theme::secondary_button("取消")).clicked() {
+                                *cancel_request = Some(message_index);
+                            }
+                        }
+                        AiEditStatus::Applied => {
+                            let (label, color) = if message.delete_error.is_some() {
+                                ("部分完成", theme::warning())
+                            } else {
+                                ("已删除", theme::success())
+                            };
+                            ui.label(RichText::new(label).size(10.0).strong().color(color));
+                        }
+                        AiEditStatus::Cancelled => {
+                            ui.label(
+                                RichText::new("已取消")
+                                    .size(10.0)
+                                    .color(theme::text_faint()),
+                            );
+                        }
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            ui.add(
+                Label::new(
+                    RichText::new("删除不可撤销；IDE 会先备份到用户目录，并关闭相关标签页。")
+                        .size(8.8)
+                        .color(theme::text_faint()),
+                )
+                .wrap(),
+            );
+            if let Some(error) = &message.delete_error {
+                ui.add_space(4.0);
+                ui.add(Label::new(RichText::new(error).size(9.5).color(theme::error())).wrap());
+            }
+            for delete in &message.deletes {
+                ui.add_space(5.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("删除").size(9.0).strong().color(color));
+                    ui.add(
+                        Label::new(
+                            RichText::new(&delete.path)
+                                .monospace()
+                                .size(9.5)
+                                .color(theme::text()),
+                        )
+                        .wrap(),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if delete.size > 0 {
+                            ui.label(
+                                RichText::new(format_delete_size(delete.size))
+                                    .size(8.5)
+                                    .color(theme::text_faint()),
+                            );
+                        }
+                    });
+                });
+                if !delete.reason.is_empty() {
+                    ui.add(
+                        Label::new(
+                            RichText::new(&delete.reason)
+                                .size(8.8)
+                                .color(theme::text_dim()),
+                        )
+                        .wrap(),
+                    );
+                }
+                if let Some(error) = &delete.error {
+                    ui.add_space(2.0);
+                    ui.add(Label::new(RichText::new(error).size(9.0).color(theme::error())).wrap());
+                }
+            }
+            if let Some(backup) = &message.delete_backup_dir {
+                ui.add_space(5.0);
+                ui.add(
+                    Label::new(
+                        RichText::new(format!("备份：{}", crate::util::display_path(backup)))
+                            .size(8.5)
+                            .color(theme::text_faint()),
+                    )
+                    .wrap(),
+                );
+            }
+        });
+}
+
+fn ai_danger_button(ui: &mut Ui, label: &str) -> bool {
+    ui.add(
+        egui::Button::new(
+            RichText::new(label)
+                .size(10.0)
+                .strong()
+                .color(theme::on_accent()),
+        )
+        .fill(theme::error().gamma_multiply(0.8))
+        .stroke(Stroke::NONE)
+        .corner_radius(6)
+        .min_size(egui::vec2(0.0, 24.0)),
+    )
+    .clicked()
+}
+
+fn format_delete_size(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn ai_edits_card(
