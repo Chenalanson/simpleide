@@ -745,6 +745,11 @@ struct AiChatMessage {
     delete_status: AiEditStatus,
     delete_error: Option<String>,
     delete_backup_dir: Option<PathBuf>,
+    asks: Vec<crate::ai_ask::AiAsk>,
+    ask_drafts: Vec<crate::ai_ask::AiAskDraft>,
+    ask_status: AiEditStatus,
+    ask_error: Option<String>,
+    ask_answer: Option<String>,
     evolutions: Vec<String>,
     evolution_status: AiEditStatus,
     evolution_error: Option<String>,
@@ -766,10 +771,75 @@ impl AiChatMessage {
             delete_status: AiEditStatus::Pending,
             delete_error: None,
             delete_backup_dir: None,
+            asks: Vec::new(),
+            ask_drafts: Vec::new(),
+            ask_status: AiEditStatus::Pending,
+            ask_error: None,
+            ask_answer: None,
             evolutions: Vec::new(),
             evolution_status: AiEditStatus::Pending,
             evolution_error: None,
         }
+    }
+
+    fn from_stored(stored: crate::ai_chat::StoredChatMessage) -> Self {
+        let mut message = Self::text(&stored.role, stored.content, false);
+        message.reasoning = stored.reasoning;
+        message
+    }
+
+    /// Convert a completed chat message to a human-readable Markdown record.
+    /// Pending file/delete cards are summarized as history; they are not
+    /// reconstructed as executable actions after a restart.
+    fn stored_chat_message(&self) -> Option<crate::ai_chat::StoredChatMessage> {
+        if self.streaming {
+            return None;
+        }
+        let mut content = self.content.clone();
+        if !self.asks.is_empty() {
+            content.push_str("\n\n### AI 需要确认（历史记录）\n\n");
+            for (index, ask) in self.asks.iter().enumerate() {
+                content.push_str(&format!("{}. {}\n", index + 1, ask.question));
+                for option in &ask.options {
+                    content.push_str(&format!("   - {option}\n"));
+                }
+            }
+        }
+        if !self.edits.is_empty() {
+            content.push_str("\n\n### AI 文件修改（历史记录，不可在此处应用）\n\n");
+            for edit in &self.edits {
+                let kind = match edit.kind {
+                    crate::ai_edit::AiEditKind::Write if edit.base_hash.is_some() => "覆盖",
+                    crate::ai_edit::AiEditKind::Write => "新建",
+                    crate::ai_edit::AiEditKind::Replace => "替换",
+                };
+                content.push_str(&format!("- {}（{}）\n", edit.path, kind));
+            }
+        }
+        if !self.deletes.is_empty() {
+            content.push_str("\n\n### AI 文件删除（历史记录）\n\n");
+            for delete in &self.deletes {
+                content.push_str(&format!("- {}", delete.path));
+                if !delete.reason.is_empty() {
+                    content.push_str(&format!("：{}", delete.reason.replace('\n', " ")));
+                }
+                content.push('\n');
+            }
+        }
+        if !self.evolutions.is_empty() {
+            content.push_str("\n\n### AI 技能进化规则（历史记录）\n\n");
+            for rule in &self.evolutions {
+                content.push_str(&format!("- {rule}\n"));
+            }
+        }
+        if content.trim().is_empty() && self.reasoning.trim().is_empty() {
+            return None;
+        }
+        Some(crate::ai_chat::StoredChatMessage {
+            role: self.role.clone(),
+            content,
+            reasoning: self.reasoning.clone(),
+        })
     }
 }
 
@@ -807,6 +877,8 @@ struct AiState {
     import_status: Option<String>,
     import_error: Option<String>,
     orb_clicks: Vec<Instant>,
+    chat_path: Option<PathBuf>,
+    chat_error: Option<String>,
 }
 
 struct AiSettingsDraft {
@@ -1387,6 +1459,10 @@ impl App {
         self.registers = RegisterState::default();
         self.relations = RelationState::default();
         self.report = ReportState::default();
+        self.abort_ai_stream("已切换工程，本次输出中断");
+        if !self.ai.messages.is_empty() || self.ai.chat_path.is_some() {
+            self.save_ai_chat();
+        }
         self.ai = AiState::default();
         self.ai_settings_draft = None;
         self.output_view = OutputView::Build;
@@ -4365,6 +4441,7 @@ impl App {
         self.ai.focus_input = true;
         self.refresh_ai_skill();
         self.refresh_ai_framework(true);
+        self.load_ai_chat();
         self.ai.transition = Some(AiTransition {
             started: Instant::now(),
             from: self.last_editor_rect.unwrap_or(egui::Rect::NOTHING),
@@ -4372,10 +4449,10 @@ impl App {
     }
 
     fn exit_ai_mode(&mut self) {
+        self.abort_ai_stream("已退出 AI 模式，本次输出中断");
+        self.save_ai_chat();
         self.ai.enabled = false;
         self.ai.transition = None;
-        self.ai.sending = false;
-        self.ai.receiver = None;
         self.ai_settings_draft = None;
         self.focus_editor = true;
     }
@@ -4703,30 +4780,120 @@ impl App {
         self.ai.input.clear();
         self.ai.sending = false;
         self.ai.receiver = None;
+        self.save_ai_chat();
+    }
+
+    fn abort_ai_stream(&mut self, reason: &str) {
+        if let Some(message) = self.ai.messages.iter_mut().rev().find(|m| m.streaming) {
+            message.streaming = false;
+            message.error = true;
+            if message.content.trim().is_empty() {
+                message.content = format!("[{reason}]");
+            } else {
+                message.content = format!("{}\n\n[{reason}]", message.content);
+            }
+        }
+        self.ai.sending = false;
+        self.ai.receiver = None;
+    }
+
+    fn load_ai_chat(&mut self) {
+        if !self.ai.messages.is_empty() {
+            return;
+        }
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        let project_name = self
+            .project
+            .as_ref()
+            .map(|project| project.name.clone())
+            .unwrap_or_default();
+        let path = crate::ai_chat::chat_path(&root, &project_name);
+        self.ai.chat_path = Some(path.clone());
+        match crate::ai_chat::load(&path) {
+            Ok(messages) if !messages.is_empty() => {
+                self.ai.messages = messages
+                    .into_iter()
+                    .map(AiChatMessage::from_stored)
+                    .collect();
+                self.ai.chat_error = None;
+            }
+            Ok(_) => {
+                // Create the log even before the first message so the project
+                // root always exposes where the conversation is stored.
+                self.save_ai_chat();
+            }
+            Err(err) => {
+                self.ai.chat_error = Some(err.clone());
+                self.set_toast(format!("加载 AI 对话失败：{err}"), Severity::Warning);
+            }
+        }
+    }
+
+    fn save_ai_chat(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            return;
+        };
+        let project_name = self
+            .project
+            .as_ref()
+            .map(|project| project.name.clone())
+            .unwrap_or_default();
+        let messages = self
+            .ai
+            .messages
+            .iter()
+            .filter_map(AiChatMessage::stored_chat_message)
+            .collect::<Vec<_>>();
+        let path = crate::ai_chat::chat_path(&root, &project_name);
+        match crate::ai_chat::write(&path, &project_name, &messages) {
+            Ok(()) => {
+                self.ai.chat_path = Some(path);
+                self.ai.chat_error = None;
+            }
+            Err(err) => {
+                let changed = self.ai.chat_error.as_deref() != Some(err.as_str());
+                self.ai.chat_error = Some(err.clone());
+                if changed {
+                    self.set_toast(format!("保存 AI 对话失败：{err}"), Severity::Warning);
+                }
+            }
+        }
     }
 
     fn send_ai_message(&mut self) {
-        if self.ai.sending {
-            return;
-        }
         let text = self.ai.input.trim().to_owned();
         if text.is_empty() {
             return;
         }
+        if self.send_ai_text(text) {
+            self.ai.input.clear();
+        }
+    }
+
+    fn send_ai_text(&mut self, text: String) -> bool {
+        if self.ai.sending {
+            return false;
+        }
+        let text = text.trim().to_owned();
+        if text.is_empty() {
+            return false;
+        }
         if !self.ai_config().is_ready() {
             self.set_toast("请先在 AI 设置中填写 API Key 和模型名称", Severity::Info);
             self.open_ai_settings();
-            return;
+            return false;
         }
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             self.set_toast("请先打开工程", Severity::Warning);
-            return;
+            return false;
         };
         // The prompt and the file-edit base hashes are built from disk. Save
         // dirty tabs first so the model sees the same content the user does.
         if let Err(err) = self.save_all_dirty() {
             self.set_toast(format!("发送前保存失败：{err}"), Severity::Error);
-            return;
+            return false;
         }
         // Prefer the skill checked out in the project (or a global skills
         // folder), then fall back to the copy compiled into the executable.
@@ -4757,6 +4924,15 @@ impl App {
             references: &references,
             evolution: &evolution,
         });
+        // A new user message supersedes any still-unanswered question cards
+        // from earlier replies. The answer path marks its own card Applied
+        // after this function returns.
+        for message in &mut self.ai.messages {
+            if message.ask_status == AiEditStatus::Pending && !message.asks.is_empty() {
+                message.ask_status = AiEditStatus::Cancelled;
+                message.ask_error = None;
+            }
+        }
         self.ai
             .messages
             .push(AiChatMessage::text("user", text, false));
@@ -4788,7 +4964,6 @@ impl App {
         let (sender, receiver) = mpsc::channel();
         self.ai.receiver = Some(receiver);
         self.ai.sending = true;
-        self.ai.input.clear();
         self.ai.focus_input = true;
         self.ai.messages.push(AiChatMessage {
             role: "assistant".to_owned(),
@@ -4804,6 +4979,11 @@ impl App {
             delete_status: AiEditStatus::Pending,
             delete_error: None,
             delete_backup_dir: None,
+            asks: Vec::new(),
+            ask_drafts: Vec::new(),
+            ask_status: AiEditStatus::Pending,
+            ask_error: None,
+            ask_answer: None,
             evolutions: Vec::new(),
             evolution_status: AiEditStatus::Pending,
             evolution_error: None,
@@ -4822,6 +5002,8 @@ impl App {
                 message.content = format!("无法启动 AI 请求：{err}");
             }
         }
+        self.save_ai_chat();
+        true
     }
 
     fn ai_config(&self) -> crate::ai::AiConfig {
@@ -4875,6 +5057,7 @@ impl App {
             } else {
                 format!("{raw}\n\n{reason}")
             };
+            self.save_ai_chat();
             return;
         }
 
@@ -4882,6 +5065,7 @@ impl App {
         let text = parsed.text.trim().to_owned();
         let mut edits = crate::ai_edit::merge_edits(parsed.edits);
         let mut deletes = parsed.deletes;
+        let mut asks = parsed.asks;
         let evolutions = parsed.evolutions;
         if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
             for edit in &mut edits {
@@ -4916,25 +5100,40 @@ impl App {
                 }
             }
         }
-        let content = if text.is_empty() && (!edits.is_empty() || !deletes.is_empty()) {
-            let mut parts = Vec::new();
-            if !edits.is_empty() {
-                parts.push(format!("{} 个文件修改", edits.len()));
+        if asks.len() > 6 {
+            for ask in &mut asks {
+                if ask.error.is_none() {
+                    ask.error = Some("一次最多提出 6 个确认问题，请分批询问".to_owned());
+                }
             }
-            if !deletes.is_empty() {
-                parts.push(format!("{} 个文件删除", deletes.len()));
-            }
-            format!("已准备 {}，请查看下方卡片并分别确认。", parts.join("、"))
-        } else if text.is_empty() && !evolutions.is_empty() {
-            format!(
-                "已准备 {} 条技能进化规则，请确认后保存到用户 evolution.md。",
-                evolutions.len()
-            )
-        } else if text.is_empty() && !reasoning.trim().is_empty() {
-            "（模型只返回了思考过程，没有正文）".to_owned()
-        } else {
-            text
-        };
+        }
+        let content =
+            if text.is_empty() && (!edits.is_empty() || !deletes.is_empty() || !asks.is_empty()) {
+                let mut parts = Vec::new();
+                if !edits.is_empty() {
+                    parts.push(format!("{} 个文件修改", edits.len()));
+                }
+                if !deletes.is_empty() {
+                    parts.push(format!("{} 个文件删除", deletes.len()));
+                }
+                if !asks.is_empty() {
+                    parts.push(format!("{} 个确认问题", asks.len()));
+                }
+                format!("已准备 {}，请查看下方卡片并分别确认。", parts.join("、"))
+            } else if text.is_empty() && !evolutions.is_empty() {
+                format!(
+                    "已准备 {} 条技能进化规则，请确认后保存到用户 evolution.md。",
+                    evolutions.len()
+                )
+            } else if text.is_empty() && !reasoning.trim().is_empty() {
+                "（模型只返回了思考过程，没有正文）".to_owned()
+            } else {
+                text
+            };
+        let ask_drafts = asks
+            .iter()
+            .map(crate::ai_ask::AiAskDraft::new)
+            .collect::<Vec<_>>();
         let message = &mut self.ai.messages[index];
         message.content = content;
         message.edits = edits;
@@ -4945,6 +5144,11 @@ impl App {
         message.delete_status = AiEditStatus::Pending;
         message.delete_error = None;
         message.delete_backup_dir = None;
+        message.asks = asks;
+        message.ask_drafts = ask_drafts;
+        message.ask_status = AiEditStatus::Pending;
+        message.ask_error = None;
+        message.ask_answer = None;
         message.evolutions = evolutions;
         message.evolution_status = AiEditStatus::Pending;
         message.evolution_error = None;
@@ -4953,6 +5157,7 @@ impl App {
             message.error = true;
             message.content = "模型返回了空内容".to_owned();
         }
+        self.save_ai_chat();
     }
 
     fn poll_ai(&mut self, ctx: &egui::Context) {
@@ -5062,6 +5267,48 @@ impl App {
             if message.delete_status == AiEditStatus::Pending {
                 message.delete_status = AiEditStatus::Cancelled;
                 message.delete_error = None;
+            }
+        }
+    }
+
+    fn submit_ai_answers(&mut self, index: usize) {
+        if self.ai.sending {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message.ask_error = Some("AI 正在生成，请稍后再提交回答".to_owned());
+            }
+            return;
+        }
+        let answer = {
+            let Some(message) = self.ai.messages.get(index) else {
+                return;
+            };
+            if message.ask_status != AiEditStatus::Pending || message.asks.is_empty() {
+                return;
+            }
+            crate::ai_ask::answer_text(&message.asks, &message.ask_drafts)
+        };
+        let Some(answer) = answer else {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message.ask_error = Some("请为每个问题选择选项或填写自定义回答".to_owned());
+            }
+            return;
+        };
+        if self.send_ai_text(answer.clone()) {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message.ask_status = AiEditStatus::Applied;
+                message.ask_error = None;
+                message.ask_answer = Some(answer);
+            }
+        } else if let Some(message) = self.ai.messages.get_mut(index) {
+            message.ask_error = Some("发送回答失败，请检查 AI 设置或工程状态".to_owned());
+        }
+    }
+
+    fn cancel_ai_asks(&mut self, index: usize) {
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            if message.ask_status == AiEditStatus::Pending {
+                message.ask_status = AiEditStatus::Cancelled;
+                message.ask_error = None;
             }
         }
     }
@@ -10300,6 +10547,13 @@ impl eframe::App for App {
             } else {
                 ctx.request_repaint_after(life - elapsed);
             }
+        }
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if !self.ai.messages.is_empty() || self.ai.chat_path.is_some() {
+            self.abort_ai_stream("应用退出，本次输出中断");
+            self.save_ai_chat();
         }
     }
 }

@@ -46,6 +46,8 @@ struct AiCardRequests {
     cancel_edits: Option<usize>,
     apply_deletes: Option<usize>,
     cancel_deletes: Option<usize>,
+    submit_answers: Option<usize>,
+    cancel_asks: Option<usize>,
     apply_evolutions: Option<usize>,
     cancel_evolutions: Option<usize>,
 }
@@ -255,6 +257,9 @@ impl App {
         quick_prompt: &mut Option<&'static str>,
     ) {
         let mut requests = AiCardRequests::default();
+        let sending = self.ai.sending;
+        let messages_empty = self.ai.messages.is_empty();
+        let message_count = self.ai.messages.len();
         ai_panel(ui, rect, reveal, origin, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
@@ -267,6 +272,7 @@ impl App {
                     (message.edit_status == AiEditStatus::Pending && !message.edits.is_empty())
                         || (message.delete_status == AiEditStatus::Pending
                             && !message.deletes.is_empty())
+                        || (message.ask_status == AiEditStatus::Pending && !message.asks.is_empty())
                         || (message.evolution_status == AiEditStatus::Pending
                             && !message.evolutions.is_empty())
                 });
@@ -286,7 +292,7 @@ impl App {
                         *clear = true;
                     }
                     ui.label(
-                        RichText::new(format!("{} 条消息", self.ai.messages.len()))
+                        RichText::new(format!("{message_count} 条消息"))
                             .size(9.5)
                             .color(theme::text_faint()),
                     );
@@ -303,11 +309,11 @@ impl App {
                 .max_height(height)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    if self.ai.messages.is_empty() {
+                    if messages_empty {
                         ai_empty_state(ui, quick_prompt);
                     } else {
-                        for (index, message) in self.ai.messages.iter().enumerate() {
-                            ai_message(ui, message, index, &mut requests);
+                        for (index, message) in self.ai.messages.iter_mut().enumerate() {
+                            ai_message(ui, message, index, sending, &mut requests);
                             ui.add_space(8.0);
                         }
                     }
@@ -328,6 +334,14 @@ impl App {
         }
         if let Some(index) = requests.cancel_deletes {
             self.cancel_ai_deletes(index);
+            ui.ctx().request_repaint();
+        }
+        if let Some(index) = requests.submit_answers {
+            self.submit_ai_answers(index);
+            ui.ctx().request_repaint();
+        }
+        if let Some(index) = requests.cancel_asks {
+            self.cancel_ai_asks(index);
             ui.ctx().request_repaint();
         }
         if let Some(index) = requests.apply_evolutions {
@@ -536,6 +550,46 @@ impl App {
                         self.ai.skill_error.as_deref(),
                         &mut actions.refresh_skill,
                     );
+
+                    ui.add_space(10.0);
+                    ai_section(ui, "对话记录");
+                    let chat_path = self.ai.chat_path.clone().or_else(|| {
+                        self.project.as_ref().map(|project| {
+                            crate::ai_chat::chat_path(&project.root, &project.name)
+                        })
+                    });
+                    if let Some(path) = chat_path {
+                        ui.add(
+                            Label::new(
+                                RichText::new(crate::util::display_path(&path))
+                                    .size(9.5)
+                                    .color(theme::text_dim()),
+                            )
+                            .wrap(),
+                        );
+                        ui.add(
+                            Label::new(
+                                RichText::new(
+                                    "进入 AI 模式时自动加载；清空聊天会重写该文件。",
+                                )
+                                .size(8.8)
+                                .color(theme::text_faint()),
+                            )
+                            .wrap(),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("打开工程并进入 AI 模式后自动创建。")
+                                .size(9.0)
+                                .color(theme::text_faint()),
+                        );
+                    }
+                    if let Some(error) = &self.ai.chat_error {
+                        ui.add(
+                            Label::new(RichText::new(error).size(9.0).color(theme::error()))
+                                .wrap(),
+                        );
+                    }
 
                     ui.add_space(10.0);
                     ai_section(ui, "模型");
@@ -1688,7 +1742,13 @@ fn paint_dot(ui: &mut Ui, color: Color32) {
     ui.painter().circle_filled(rect.center(), 3.0, color);
 }
 
-fn ai_message(ui: &mut Ui, message: &AiChatMessage, index: usize, requests: &mut AiCardRequests) {
+fn ai_message(
+    ui: &mut Ui,
+    message: &mut AiChatMessage,
+    index: usize,
+    sending: bool,
+    requests: &mut AiCardRequests,
+) {
     let user = message.role == "user";
     let (fill, border) = if message.error {
         (
@@ -1730,7 +1790,7 @@ fn ai_message(ui: &mut Ui, message: &AiChatMessage, index: usize, requests: &mut
             });
             ui.add_space(3.0);
             if !message.reasoning.is_empty() || (message.streaming && message.content.is_empty()) {
-                ai_reasoning_block(ui, message, index);
+                ai_reasoning_block(ui, &*message, index);
                 ui.add_space(6.0);
             }
             if message.streaming {
@@ -1767,11 +1827,22 @@ fn ai_message(ui: &mut Ui, message: &AiChatMessage, index: usize, requests: &mut
                 });
             } else {
                 render_markdown(ui, &message.content, index, message.error);
+                if !message.asks.is_empty() {
+                    ui.add_space(7.0);
+                    ai_asks_card(
+                        ui,
+                        message,
+                        index,
+                        sending,
+                        &mut requests.submit_answers,
+                        &mut requests.cancel_asks,
+                    );
+                }
                 if !message.edits.is_empty() {
                     ui.add_space(7.0);
                     ai_edits_card(
                         ui,
-                        message,
+                        &*message,
                         index,
                         &mut requests.apply_edits,
                         &mut requests.cancel_edits,
@@ -1781,7 +1852,7 @@ fn ai_message(ui: &mut Ui, message: &AiChatMessage, index: usize, requests: &mut
                     ui.add_space(7.0);
                     ai_deletes_card(
                         ui,
-                        message,
+                        &*message,
                         index,
                         &mut requests.apply_deletes,
                         &mut requests.cancel_deletes,
@@ -1791,7 +1862,7 @@ fn ai_message(ui: &mut Ui, message: &AiChatMessage, index: usize, requests: &mut
                     ui.add_space(7.0);
                     ai_evolution_card(
                         ui,
-                        message,
+                        &*message,
                         index,
                         &mut requests.apply_evolutions,
                         &mut requests.cancel_evolutions,
@@ -1934,6 +2005,230 @@ fn ai_reasoning_block(ui: &mut Ui, message: &AiChatMessage, index: usize) {
                 });
             }
         });
+}
+
+fn ai_asks_card(
+    ui: &mut Ui,
+    message: &mut AiChatMessage,
+    message_index: usize,
+    sending: bool,
+    submit: &mut Option<usize>,
+    cancel: &mut Option<usize>,
+) {
+    let pending = message.ask_status == AiEditStatus::Pending;
+    let has_errors = message.asks.iter().any(|ask| ask.error.is_some());
+    let complete = crate::ai_ask::answers_complete(&message.asks, &message.ask_drafts);
+    let ask_count = message.asks.len();
+    let (status, color) = match message.ask_status {
+        AiEditStatus::Pending => ("待回答", theme::warning()),
+        AiEditStatus::Applied => ("已回答", theme::success()),
+        AiEditStatus::Cancelled => ("已取消", theme::text_faint()),
+    };
+    Frame::new()
+        .fill(theme::with_alpha(theme::accent(), 10))
+        .stroke(Stroke::new(1.0_f32, theme::with_alpha(theme::accent(), 85)))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("AI 需要确认")
+                        .size(10.5)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.label(
+                    RichText::new(format!("{ask_count} 个问题"))
+                        .size(9.5)
+                        .color(theme::text_faint()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(status).size(9.5).color(color));
+                });
+            });
+            ui.add_space(2.0);
+            ui.add(
+                Label::new(
+                    RichText::new(
+                        "选择选项，或在下方填写自定义回答；提交后会作为你的下一条消息发送给 AI。",
+                    )
+                    .size(8.8)
+                    .color(theme::text_faint()),
+                )
+                .wrap(),
+            );
+            for ask_index in 0..ask_count {
+                let question = message.asks[ask_index].question.clone();
+                let options = message.asks[ask_index].options.clone();
+                let multiple = message.asks[ask_index].multiple;
+                let ask_error = message.asks[ask_index].error.clone();
+                let draft = &mut message.ask_drafts[ask_index];
+                let suffix = if multiple { "（可多选）" } else { "" };
+                ui.add_space(7.0);
+                ui.add(
+                    Label::new(
+                        RichText::new(if ask_count > 1 {
+                            format!("{}. {}{}", ask_index + 1, question, suffix)
+                        } else {
+                            format!("{question}{suffix}")
+                        })
+                        .size(10.2)
+                        .strong()
+                        .color(theme::text()),
+                    )
+                    .wrap(),
+                );
+                if pending {
+                    if !options.is_empty() {
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            for (option_index, option) in options.iter().enumerate() {
+                                let selected =
+                                    draft.selected.get(option_index).copied().unwrap_or(false);
+                                if ai_choice_button(ui, option, selected).clicked() {
+                                    if multiple {
+                                        if let Some(slot) = draft.selected.get_mut(option_index) {
+                                            *slot = !selected;
+                                        }
+                                    } else {
+                                        let was_selected = selected;
+                                        draft.selected.fill(false);
+                                        if !was_selected {
+                                            if let Some(slot) = draft.selected.get_mut(option_index)
+                                            {
+                                                *slot = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    ui.add_space(4.0);
+                    ui.add(
+                        TextEdit::multiline(&mut draft.custom)
+                            .id_salt(("simple_embedded_ai_ask_custom", message_index, ask_index))
+                            .frame(Frame::new().fill(theme::editor_bg()).corner_radius(6))
+                            .margin(Margin::symmetric(7, 5))
+                            .font(FontId::proportional(10.5))
+                            .text_color(theme::text())
+                            .hint_text(if options.is_empty() {
+                                "输入你的回答…"
+                            } else {
+                                "自定义回答（可选）…"
+                            })
+                            .desired_rows(1)
+                            .desired_width(f32::INFINITY),
+                    );
+                } else {
+                    let selected = options
+                        .iter()
+                        .zip(&draft.selected)
+                        .filter(|(_, selected)| **selected)
+                        .map(|(option, _)| option.clone())
+                        .collect::<Vec<_>>();
+                    if !selected.is_empty() {
+                        ui.add(
+                            Label::new(
+                                RichText::new(format!("选择：{}", selected.join("、")))
+                                    .size(9.0)
+                                    .color(theme::text_dim()),
+                            )
+                            .wrap(),
+                        );
+                    }
+                    if !draft.custom.trim().is_empty() {
+                        ui.add(
+                            Label::new(
+                                RichText::new(format!("自定义：{}", draft.custom.trim()))
+                                    .size(9.0)
+                                    .color(theme::text_dim()),
+                            )
+                            .wrap(),
+                        );
+                    }
+                }
+                if let Some(error) = ask_error {
+                    ui.add_space(2.0);
+                    ui.add(Label::new(RichText::new(error).size(9.0).color(theme::error())).wrap());
+                }
+            }
+            if let Some(error) = &message.ask_error {
+                ui.add_space(4.0);
+                ui.add(Label::new(RichText::new(error).size(9.5).color(theme::error())).wrap());
+            }
+            if pending {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let can_submit = !sending && !has_errors && complete;
+                    if ui
+                        .add_enabled(can_submit, theme::primary_button("发送回答"))
+                        .clicked()
+                    {
+                        *submit = Some(message_index);
+                    }
+                    if ui.add(theme::secondary_button("取消")).clicked() {
+                        *cancel = Some(message_index);
+                    }
+                    if sending {
+                        ui.label(
+                            RichText::new("AI 正在生成，暂时不能提交")
+                                .size(8.8)
+                                .color(theme::text_faint()),
+                        );
+                    } else if !complete {
+                        ui.label(
+                            RichText::new("请为每个问题选择或填写回答")
+                                .size(8.8)
+                                .color(theme::text_faint()),
+                        );
+                    }
+                });
+            } else if let Some(answer) = &message.ask_answer {
+                ui.add_space(4.0);
+                ui.add(
+                    Label::new(
+                        RichText::new(format!("已发送回答：{answer}"))
+                            .size(8.5)
+                            .color(theme::text_faint()),
+                    )
+                    .wrap(),
+                );
+            }
+        });
+}
+
+fn ai_choice_button(ui: &mut Ui, label: &str, selected: bool) -> egui::Response {
+    let display = if label.chars().count() > 60 {
+        let mut text = label.chars().take(60).collect::<String>();
+        text.push('…');
+        text
+    } else {
+        label.to_owned()
+    };
+    ui.add(
+        egui::Button::new(RichText::new(display).size(9.5).color(if selected {
+            theme::on_accent()
+        } else {
+            theme::text()
+        }))
+        .fill(if selected {
+            theme::accent()
+        } else {
+            theme::surface()
+        })
+        .stroke(Stroke::new(
+            1.0_f32,
+            if selected {
+                theme::accent()
+            } else {
+                theme::border_soft()
+            },
+        ))
+        .corner_radius(6)
+        .min_size(egui::vec2(0.0, 24.0)),
+    )
 }
 
 fn ai_deletes_card(

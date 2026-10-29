@@ -54,6 +54,7 @@ pub struct ParsedEdits {
     pub text: String,
     pub edits: Vec<AiEdit>,
     pub deletes: Vec<AiDelete>,
+    pub asks: Vec<crate::ai_ask::AiAsk>,
     pub evolutions: Vec<String>,
 }
 
@@ -271,7 +272,7 @@ pub fn incomplete_edit_block(text: &str) -> bool {
         let tag = tag.split_whitespace().next().unwrap_or("");
         if matches!(
             tag,
-            "se-file" | "se-write" | "se-replace" | "se-delete" | "se-evolve"
+            "se-file" | "se-write" | "se-replace" | "se-delete" | "se-ask" | "se-evolve"
         ) {
             open_fence = Some(ticks);
         }
@@ -283,6 +284,7 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
     let mut cleaned = String::new();
     let mut edits = Vec::new();
     let mut deletes = Vec::new();
+    let mut asks = Vec::new();
     let mut evolutions = Vec::new();
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let mut index = 0usize;
@@ -296,7 +298,7 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
         };
         if !matches!(
             tag,
-            "se-file" | "se-write" | "se-replace" | "se-delete" | "se-evolve"
+            "se-file" | "se-write" | "se-replace" | "se-delete" | "se-ask" | "se-evolve"
         ) {
             cleaned.push_str(line);
             index += 1;
@@ -323,6 +325,8 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
         let body = lines[index + 1..close].concat();
         if tag == "se-evolve" {
             evolutions.extend(parse_evolution_rules(&body));
+        } else if tag == "se-ask" {
+            asks.push(crate::ai_ask::parse_ask(attrs, &body));
         } else if tag == "se-delete" {
             let reason = body.trim().chars().take(500).collect::<String>();
             deletes.push(AiDelete::new(path, reason));
@@ -340,6 +344,7 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
         text: cleaned,
         edits,
         deletes,
+        asks,
         evolutions,
     }
 }
@@ -364,7 +369,7 @@ fn find_last_fence(lines: &[&str], start: usize, fence_len: usize) -> Option<usi
             fence_header(lines[*index].trim_start()).is_some_and(|(_, tag, _)| {
                 matches!(
                     tag,
-                    "se-file" | "se-write" | "se-replace" | "se-delete" | "se-evolve"
+                    "se-file" | "se-write" | "se-replace" | "se-delete" | "se-ask" | "se-evolve"
                 )
             })
         })
@@ -478,6 +483,9 @@ pub fn normalize_rel_path(path: &str) -> Result<String, String> {
         return Err(format!("不允许修改生成目录或配置目录：{path}"));
     }
     let lower = path.to_ascii_lowercase();
+    if lower.ends_with(crate::ai_chat::CHAT_SUFFIX) {
+        return Err(format!("AI 对话记录由 IDE 维护，不能修改：{path}"));
+    }
     if [
         ".bin", ".elf", ".axf", ".o", ".a", ".lib", ".exe", ".pack", ".png", ".jpg", ".jpeg",
         ".gif", ".bmp", ".ico", ".zip", ".pdf",
@@ -536,8 +544,12 @@ fn normalize_delete_path(path: &str) -> Result<String, String> {
     if parts.iter().any(|part| is_generated_dir(part)) {
         return Err(format!("不允许删除生成目录或配置目录：{path}"));
     }
-    if path.to_ascii_lowercase().ends_with(".se-workspace") {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".se-workspace") {
         return Err(format!("不允许删除工作区文件：{path}"));
+    }
+    if lower.ends_with(crate::ai_chat::CHAT_SUFFIX) {
+        return Err(format!("AI 对话记录由 IDE 维护，不能删除：{path}"));
     }
     Ok(parts.join("/"))
 }
@@ -618,6 +630,7 @@ mod tests {
         assert!(normalize_rel_path("C:\\secret.c").is_err());
         assert!(normalize_rel_path("build/out.c").is_err());
         assert!(normalize_rel_path("firmware.bin").is_err());
+        assert!(normalize_rel_path("demo.ai-chat.md").is_err());
         assert!(normalize_rel_path("Core/Src/main.c").is_ok());
         assert_eq!(
             normalize_rel_path("./Core\\Src\\main.c").unwrap(),
@@ -730,6 +743,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_ask_block_with_options() {
+        let reply =
+            "需要确认。\n````se-ask multiple\n需要保留哪些功能？\n- 串口回显\n- DMA\n````\n";
+        let parsed = parse_edits(reply);
+        assert_eq!(parsed.asks.len(), 1);
+        assert_eq!(parsed.asks[0].question, "需要保留哪些功能？");
+        assert!(parsed.asks[0].multiple);
+        assert_eq!(parsed.asks[0].options, vec!["串口回显", "DMA"]);
+        assert!(!parsed.text.contains("se-ask"));
+        assert!(parsed.text.contains("需要确认"));
+        assert!(incomplete_edit_block(
+            "````se-ask\n使用哪个串口？\n- USART1\n"
+        ));
+    }
+
+    #[test]
     fn parses_delete_block_with_reason() {
         let reply = "已迁移。\n````se-delete path=Core/Src/bsp_usart_echo.c\n旧实现已迁移到 BSP/PERIPHERAL，保留会重复定义。\n````\n";
         let parsed = parse_edits(reply);
@@ -768,6 +797,7 @@ mod tests {
             "build/out.c",
             ".simple-embedded/settings.json",
             "project.se-workspace",
+            "demo.ai-chat.md",
             "missing.c",
         ] {
             let mut delete = AiDelete::new(path.to_owned(), String::new());
