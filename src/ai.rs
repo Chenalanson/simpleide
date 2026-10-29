@@ -5,8 +5,10 @@ use std::fmt::Write as _;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
+use regex::Regex;
 use serde_json::{json, Value};
 
 use crate::config::{BuildConfig, ProjectDebugSettings};
@@ -19,6 +21,12 @@ const SKILL_ID: &str = "stm32-embedded-dev";
 const MAX_SKILL_BYTES: usize = 160_000;
 const MAX_SYSTEM_PROMPT_BYTES: usize = 220_000;
 const MAX_TREE_FILES: usize = 400;
+/// Reserve enough room for the edit protocol and output requirements at the end
+/// of the system prompt. Project files must not crowd them out.
+const PROMPT_PROTOCOL_RESERVE: usize = 16_000;
+const MAX_FRAMEWORK_BYTES: usize = 120_000;
+const MAX_FRAMEWORK_FILES: usize = 32;
+const MAX_FRAMEWORK_FILE_BYTES: usize = 60_000;
 
 #[derive(Clone, Debug, Default)]
 pub struct AiConfig {
@@ -1039,6 +1047,13 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
         prompt.push('\n');
     }
     prompt.push_str("```\n\n## 关键文件\n");
+    prompt.push_str(
+        "> framework.md 会完整附带，其中列出的工程文件会按路径自动读取并附在下面；\
+         不要要求用户手动附加这些文件，也不要只根据用户附加的一个文件回答。\
+         先读 framework.md 的分层、调用链、调度和文件表，再定位实际代码。\
+         如果某个文件没有出现在关键文件或自动引用文件的正文中，不要猜测其内容；\
+         请让用户打开它，或明确说明需要该文件。\n",
+    );
 
     let mut appended = Vec::new();
     append_file(
@@ -1049,27 +1064,21 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
         "dts",
         &mut appended,
     );
+    let mut framework_text = None;
     if let Some(framework) = crate::framework::find(context.root) {
-        append_file(
+        framework_text = read_text_file(&framework).ok().map(|loaded| loaded.text);
+        append_file_clipped(
             &mut prompt,
             context.root,
             &framework,
-            80_000,
+            MAX_FRAMEWORK_BYTES,
             "markdown",
             &mut appended,
         );
     }
-    let issue_log = crate::ai_issue::issue_path(context.root, context.project_name);
-    if issue_log.is_file() {
-        append_file(
-            &mut prompt,
-            context.root,
-            &issue_log,
-            40_000,
-            "markdown",
-            &mut appended,
-        );
-    }
+    let referenced = framework_text
+        .as_deref()
+        .map(|text| framework_context_files(context.root, text));
     if let Some(active) = context.active_file {
         append_file(
             &mut prompt,
@@ -1093,12 +1102,53 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
             break;
         }
     }
+    if let Some(referenced) = referenced {
+        prompt.push_str("\n### framework.md 自动引用文件\n");
+        if referenced.is_empty() {
+            prompt.push_str("（未在 framework.md 中发现可解析的工程文件路径）\n");
+        } else {
+            prompt.push_str(
+                "以下文件由 IDE 按 framework.md 中的路径自动读取，不需要用户手动附加；\
+                 如与文件表冲突，以文件表路径为准。受上下文预算限制，部分文件可能未附全文，\
+                 请以实际出现的 ### 文件名为准：\n",
+            );
+            for path in &referenced {
+                let relative = path
+                    .strip_prefix(context.root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let _ = writeln!(prompt, "- {relative}");
+            }
+        }
+        for path in &referenced {
+            append_file_clipped(
+                &mut prompt,
+                context.root,
+                path,
+                MAX_FRAMEWORK_FILE_BYTES,
+                fence_language(path),
+                &mut appended,
+            );
+        }
+    }
+    let issue_log = crate::ai_issue::issue_path(context.root, context.project_name);
+    if issue_log.is_file() {
+        append_file(
+            &mut prompt,
+            context.root,
+            &issue_log,
+            40_000,
+            "markdown",
+            &mut appended,
+        );
+    }
     prompt.push_str("\n### 工程主要源文件\n");
     let mut source_bytes = 0usize;
     for path in source_candidates(context.root) {
-        if prompt.len() > MAX_SYSTEM_PROMPT_BYTES - 24_000
-            || source_bytes > 110_000
-            || appended.len() > 40
+        if prompt.len() > MAX_SYSTEM_PROMPT_BYTES - PROMPT_PROTOCOL_RESERVE
+            || source_bytes > 140_000
+            || appended.len() > 48
         {
             break;
         }
@@ -1254,6 +1304,10 @@ fn append_file(
     let Ok(loaded) = read_text_file(path) else {
         return;
     };
+    let limit = MAX_SYSTEM_PROMPT_BYTES.saturating_sub(PROMPT_PROTOCOL_RESERVE);
+    if prompt.len() + loaded.text.len() + 256 > limit {
+        return;
+    }
     if loaded.text.len() > max_bytes {
         return;
     }
@@ -1268,6 +1322,208 @@ fn append_file(
         prompt.push('\n');
     }
     prompt.push_str("```\n");
+}
+
+/// Append a file even when it is larger than the per-file budget. The body is
+/// clipped at a character boundary and marked, keeping the edit protocol at the
+/// end of the system prompt intact.
+fn append_file_clipped(
+    prompt: &mut String,
+    root: &Path,
+    path: &Path,
+    max_bytes: usize,
+    language: &str,
+    appended: &mut Vec<String>,
+) {
+    if !path.is_file() {
+        return;
+    }
+    let relative = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    if appended.iter().any(|item| item == &relative) {
+        return;
+    }
+    let Ok(loaded) = read_text_file(path) else {
+        return;
+    };
+    let limit = MAX_SYSTEM_PROMPT_BYTES
+        .saturating_sub(PROMPT_PROTOCOL_RESERVE)
+        .saturating_sub(512);
+    let available = limit.saturating_sub(prompt.len());
+    if available < 2_000 {
+        return;
+    }
+    let budget = max_bytes.min(available);
+    let mut body = loaded.text;
+    let mut clipped = false;
+    if body.len() > budget {
+        let mut end = budget;
+        while end > 0 && !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        body.truncate(end);
+        clipped = true;
+    }
+    appended.push(relative.clone());
+    prompt.push_str("\n### ");
+    prompt.push_str(&relative);
+    prompt.push_str("\n\n```");
+    prompt.push_str(language);
+    prompt.push('\n');
+    prompt.push_str(&body);
+    if !body.ends_with('\n') {
+        prompt.push('\n');
+    }
+    if clipped {
+        prompt.push_str("\n…（文件较长，已按上下文预算截断；需要完整内容时请让用户打开该文件）\n");
+    }
+    prompt.push_str("```\n");
+}
+
+fn framework_path_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)((?:[A-Za-z0-9_.\-]+[\\/])*[A-Za-z0-9_.\-]+\.(?:cc|cpp|cxx|hpp|hh|hxx|asm|dtsi|dts|c|h|s|ld|ioc|json))(?:[^A-Za-z0-9_]|$)",
+        )
+        .expect("framework path regex")
+    })
+}
+
+fn framework_referenced_paths(text: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut paths = Vec::new();
+    for found in framework_path_regex().captures_iter(text) {
+        let Some(found) = found.get(1) else {
+            continue;
+        };
+        let candidate = found.as_str().trim_start_matches("./").to_owned();
+        if candidate.is_empty() || candidate.contains("..") {
+            continue;
+        }
+        let key = candidate.replace('\\', "/").to_ascii_lowercase();
+        if seen.insert(key) {
+            paths.push(candidate);
+        }
+        if paths.len() >= 128 {
+            break;
+        }
+    }
+    paths
+}
+
+/// Resolve a path mentioned in `framework.md` against the project. Direct
+/// matches win; a case-insensitive component walk handles Windows/Linux path
+/// case differences; a bounded suffix search handles bare file names.
+fn resolve_framework_path(root: &Path, candidate: &str) -> Option<PathBuf> {
+    let candidate = candidate.replace('\\', "/");
+    let candidate = candidate.trim_start_matches("./");
+    if candidate.is_empty()
+        || candidate.starts_with('/')
+        || candidate.contains("..")
+        || candidate.contains(':')
+    {
+        return None;
+    }
+    let mut current = root.to_path_buf();
+    for part in candidate.split('/').filter(|part| !part.is_empty()) {
+        let entries = std::fs::read_dir(&current).ok()?;
+        let mut found = None;
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(part)
+            {
+                found = Some(entry.path());
+                break;
+            }
+        }
+        current = found?;
+    }
+    current.is_file().then_some(current)
+}
+
+fn find_file_by_suffix(root: &Path, candidate: &str) -> Option<PathBuf> {
+    let lower = candidate
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_ascii_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut visited = 0usize;
+    while let Some((directory, depth)) = stack.pop() {
+        if depth > 8 || visited > 20_000 {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if file_type.is_dir() {
+                if !skip_source_dir(Path::new(&relative))
+                    && !relative
+                        .split('/')
+                        .any(|part| part.starts_with('.') && part.len() > 1)
+                {
+                    stack.push((path, depth + 1));
+                }
+            } else if file_type.is_file() {
+                let relative_lower = relative.to_ascii_lowercase();
+                if relative_lower == lower || relative_lower.ends_with(&format!("/{lower}")) {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn framework_context_files(root: &Path, text: &str) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut files = Vec::new();
+    for candidate in framework_referenced_paths(text) {
+        let Some(path) = resolve_framework_path(root, &candidate)
+            .or_else(|| find_file_by_suffix(root, &candidate))
+        else {
+            continue;
+        };
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/")
+            .to_ascii_lowercase();
+        if relative.ends_with("framework.md")
+            || relative.ends_with(".ai-chat.md")
+            || relative.ends_with(".ai-issues.md")
+            || skip_source_dir(Path::new(&relative).parent().unwrap_or(Path::new("")))
+        {
+            continue;
+        }
+        if seen.insert(relative) {
+            files.push(path);
+        }
+        if files.len() >= MAX_FRAMEWORK_FILES {
+            break;
+        }
+    }
+    files
 }
 
 fn fence_language(path: &Path) -> &'static str {
@@ -1298,7 +1554,23 @@ fn first_file_with_extension(root: &Path, extension: &str) -> Option<PathBuf> {
 
 fn source_candidates(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for directory in ["Core/Src", "Core/Inc", "src", "include", "Inc", "Src"] {
+    for directory in [
+        "APP",
+        "MID",
+        "BSP",
+        "BSP/MODULES",
+        "BSP/PERIPHERAL",
+        "LL",
+        "HAL",
+        "Core/Src",
+        "Core/Inc",
+        "src",
+        "include",
+        "Inc",
+        "Src",
+        "Application",
+        "User",
+    ] {
         collect_sources(root, &root.join(directory), &mut files, 0);
     }
     if let Ok(entries) = std::fs::read_dir(root) {
@@ -1316,7 +1588,7 @@ fn source_candidates(root: &Path) -> Vec<PathBuf> {
 }
 
 fn collect_sources(root: &Path, directory: &Path, files: &mut Vec<PathBuf>, depth: usize) {
-    if depth > 2 || files.len() >= 30 {
+    if depth > 2 || files.len() >= 64 {
         return;
     }
     let Ok(entries) = std::fs::read_dir(directory) else {
@@ -1325,7 +1597,7 @@ fn collect_sources(root: &Path, directory: &Path, files: &mut Vec<PathBuf>, dept
     let mut entries = entries.flatten().collect::<Vec<_>>();
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
-        if files.len() >= 30 {
+        if files.len() >= 64 {
             break;
         }
         let path = entry.path();
@@ -2080,6 +2352,39 @@ mod tests {
     }
 
     #[test]
+    fn framework_references_resolve_automatically() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("APP/app_init.c"),
+            "void app_init_marker(void) {}\n",
+        );
+        write(
+            &dir.path().join("BSP/PERIPHERAL/bsp_led.c"),
+            "void led_marker(void) {}\n",
+        );
+        write(
+            &dir.path().join("src/main.c"),
+            "int main(void) { return 0; }\n",
+        );
+        let text = "调用 `APP/app_init.c`、`bsp_led.c` 和 `SRC/MAIN.C`；版本 v1.2.3，不是文件。\n";
+        let files = framework_context_files(dir.path(), text);
+        assert_eq!(files.len(), 3);
+        let relative = |path: &std::path::PathBuf| path.to_string_lossy().replace('\\', "/");
+        assert!(files
+            .iter()
+            .any(|path| relative(path).ends_with("APP/app_init.c")));
+        assert!(files
+            .iter()
+            .any(|path| relative(path).ends_with("BSP/PERIPHERAL/bsp_led.c")));
+        assert!(files
+            .iter()
+            .any(|path| relative(path).ends_with("src/main.c")));
+        assert!(!framework_referenced_paths(text)
+            .iter()
+            .any(|path| path.contains("1.2.3")));
+    }
+
+    #[test]
     fn builds_prompt_with_project_context() {
         let dir = tempfile::tempdir().unwrap();
         let skill = dir.path().join("skill");
@@ -2096,6 +2401,14 @@ mod tests {
         write(
             &dir.path().join("Core/Src/gpio.c"),
             "void gpio_marker(void) {}\n",
+        );
+        write(
+            &dir.path().join("framework.md"),
+            "# Demo framework\n\n| APP | `app/app_init.c` |\n",
+        );
+        write(
+            &dir.path().join("APP/app_init.c"),
+            "void app_init_marker(void) {}\n",
         );
         let meta = ProjectMeta {
             device: Some("STM32G431CBTx".to_owned()),
@@ -2131,6 +2444,8 @@ mod tests {
         assert!(prompt.contains("int main(void)"));
         assert!(prompt.contains("Core/Src/main.c"));
         assert!(prompt.contains("gpio_marker"));
+        assert!(prompt.contains("framework.md 自动引用文件"));
+        assert!(prompt.contains("app_init_marker"));
         assert!(prompt.contains("se-file"));
         assert!(prompt.contains("se-replace"));
         assert!(prompt.contains("se-cli"));

@@ -439,12 +439,24 @@ impl App {
                             remove_context = true;
                         }
                         ui.label(
-                            RichText::new(format!("上下文 · {name}"))
+                            RichText::new(format!("附加 · {name}"))
                                 .size(9.5)
                                 .color(theme::accent()),
                         )
-                        .on_hover_text(crate::util::display_path(path));
+                        .on_hover_text(format!(
+                            "额外附加的文件：{}\nframework.md、hardware.dts、其中引用的文件和工程源文件会始终自动加入。",
+                            crate::util::display_path(path)
+                        ));
                     }
+                    let auto = if self.ai.framework_path.is_some() {
+                        "自动 · framework.md + 引用文件"
+                    } else {
+                        "自动 · framework.md / 工程源文件"
+                    };
+                    ui.label(RichText::new(auto).size(8.8).color(theme::text_faint()))
+                        .on_hover_text(
+                            "每次发送会自动附带 framework.md、hardware.dts、framework.md 中引用的工程文件和 APP/MID/BSP/Core 源文件；右侧的附加文件只是额外补充，不需要把每个文件都手动加进来。",
+                        );
                 });
             });
             ai_rule(ui);
@@ -594,8 +606,17 @@ impl App {
                             .file_name()
                             .map(|name| name.to_string_lossy().into_owned())
                             .unwrap_or_else(|| crate::util::display_path(file));
-                        ai_kv(ui, "当前文件", &name);
+                        ai_kv(ui, "附加文件", &name);
                     }
+                    ai_kv(
+                        ui,
+                        "自动上下文",
+                        if self.ai.framework_path.is_some() {
+                            "framework.md + 引用文件"
+                        } else {
+                            "framework.md / 工程源文件"
+                        },
+                    );
 
                     ui.add_space(10.0);
                     ai_section(ui, "串口 CLI");
