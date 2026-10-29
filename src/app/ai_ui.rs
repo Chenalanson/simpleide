@@ -22,16 +22,16 @@ pub(super) const AI_EARLY_FOG_SECS: f32 = 0.0;
 /// lot of dense architecture information; the normal editor keeps the user's
 /// own zoom factor.
 const AI_UI_ZOOM: f32 = 1.20;
-/// Keep the enter transition short and cheap: no fog, meteor or layered-window
-/// alpha work. The four panels fade/scale in together within 200 ms.
-const TRANSITION_SECS: f32 = 0.20;
+/// Keep the enter transition cheap and smooth: no fog, meteor or layered-window
+/// alpha work. The four panels fade/scale in within one second.
+const TRANSITION_SECS: f32 = 1.0;
 const METEOR_RIGHT_START: f32 = 1.15;
 const METEOR_RIGHT_END: f32 = 1.95;
 const METEOR_OUTPUT_START: f32 = 1.35;
 const METEOR_OUTPUT_END: f32 = 2.25;
 const PANEL_START: f32 = 0.0;
-const PANEL_STAGGER: f32 = 0.0;
-const PANEL_DURATION: f32 = 0.18;
+const PANEL_STAGGER: f32 = 0.05;
+const PANEL_DURATION: f32 = 0.80;
 const INPUT_ID: &str = "simple_embedded_ai_input";
 
 #[derive(Default)]
@@ -512,6 +512,7 @@ impl App {
 
             let footer = 44.0;
             let editor_height = (ui.available_height() - footer).max(40.0);
+            let rows = ((editor_height - 14.0) / 18.0).max(1.0) as usize;
             Frame::new()
                 .fill(theme::editor_bg())
                 .stroke(Stroke::new(1.0_f32, theme::border_soft()))
@@ -519,19 +520,33 @@ impl App {
                 .inner_margin(Margin::symmetric(8, 6))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    let response = ui.add_sized(
-                        [ui.available_width(), (editor_height - 14.0).max(28.0)],
-                        TextEdit::multiline(&mut self.ai.input)
-                            .id(input_id)
-                            .frame(Frame::NONE)
-                            .margin(Margin::symmetric(0, 0))
-                            .font(FontId::proportional(13.0))
-                            .text_color(theme::text())
-                            .hint_text("描述要新增的外设、要修改的逻辑，或贴上报错信息…")
-                            .desired_width(f32::INFINITY),
-                    );
+                    let mut response = None;
+                    ScrollArea::vertical()
+                        .id_salt("simple_embedded_ai_input_scroll")
+                        .auto_shrink([false, false])
+                        .max_height((editor_height - 14.0).max(28.0))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            response = Some(
+                                ui.add(
+                                    TextEdit::multiline(&mut self.ai.input)
+                                        .id(input_id)
+                                        .frame(Frame::NONE)
+                                        .margin(Margin::symmetric(0, 0))
+                                        .font(FontId::proportional(13.0))
+                                        .text_color(theme::text())
+                                        .hint_text(
+                                            "描述要新增的外设、要修改的逻辑，或贴上报错信息…",
+                                        )
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(rows),
+                                ),
+                            );
+                        });
                     if self.ai.focus_input {
-                        response.request_focus();
+                        if let Some(response) = response {
+                            response.request_focus();
+                        }
                         self.ai.focus_input = false;
                     }
                 });
@@ -3939,7 +3954,7 @@ mod tests {
     fn transition_duration_covers_all_panels() {
         let end = PANEL_START + 2.0 * PANEL_STAGGER + PANEL_DURATION;
         assert!(end < TRANSITION_SECS);
-        const { assert!(TRANSITION_SECS <= 0.20) };
+        const { assert!(TRANSITION_SECS <= 1.0) };
     }
 
     #[test]
