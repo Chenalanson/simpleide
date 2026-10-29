@@ -205,21 +205,51 @@ impl AiEdit {
                     return;
                 }
                 let mut text = old.clone();
-                for (search, replacement) in &self.pairs {
-                    let count = text.matches(search).count();
+                for (pair_index, (search, replacement)) in self.pairs.iter().enumerate() {
+                    let search = search.replace("\r\n", "\n");
+                    let replacement = replacement.replace("\r\n", "\n");
+                    let exact_count = text.matches(&search).count();
+                    // Models often copy a mid-line anchor and leave the fence's
+                    // trailing newline in SEARCH. The file has `、` or another
+                    // character after the anchor, so exact matching fails even
+                    // though the text is correct. Retry once without that
+                    // trailing newline, and drop one newline from REPLACE so the
+                    // existing line break is preserved.
+                    let (needle, replacement_text, count) = if exact_count == 1 {
+                        (search.as_str(), replacement.as_str(), 1)
+                    } else if exact_count == 0 && search.ends_with('\n') {
+                        let trimmed_search = search.strip_suffix('\n').unwrap_or(&search);
+                        let trimmed_count = if trimmed_search.is_empty() {
+                            0
+                        } else {
+                            text.matches(trimmed_search).count()
+                        };
+                        if trimmed_count == 1 {
+                            (
+                                trimmed_search,
+                                replacement.strip_suffix('\n').unwrap_or(&replacement),
+                                1,
+                            )
+                        } else {
+                            (search.as_str(), replacement.as_str(), exact_count)
+                        }
+                    } else {
+                        (search.as_str(), replacement.as_str(), exact_count)
+                    };
                     if count != 1 {
                         let hint = if count == 0 {
-                            "文件可能已变化，或 SEARCH 与当前文件的空白/缩进/换行不一致；可点“分析原因”让 AI 按当前文件重新生成这一处"
+                            "文件可能已变化，或 SEARCH 与当前文件的空白/缩进/换行不一致（已尝试忽略末尾换行）；可点“分析原因”让 AI 按当前文件重新生成这一处"
                         } else {
                             "片段在文件中出现多次，需要更长的上下文才能唯一定位；可点“分析原因”让 AI 重新生成"
                         };
                         self.error = Some(format!(
-                            "SEARCH 片段匹配到 {count} 处（需要恰好 1 处）：{}。{hint}",
-                            preview(search)
+                            "SEARCH 片段 {} 匹配到 {count} 处（需要恰好 1 处）：{}。{hint}",
+                            pair_index + 1,
+                            preview(&search)
                         ));
                         return;
                     }
-                    text = text.replacen(search, replacement, 1);
+                    text = text.replacen(needle, replacement_text, 1);
                 }
                 text
             }
@@ -900,6 +930,28 @@ mod tests {
         assert!(edit.base_hash.is_some());
         assert!(edit.diff.iter().any(|line| line.tag == DiffTag::Add));
         assert!(edit.diff.iter().any(|line| line.tag == DiffTag::Remove));
+    }
+
+    #[test]
+    fn replacement_tolerates_trailing_newline_on_mid_line_anchor() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("hardware.dts"),
+            "    dmas = <&dma1 4>, <&dma1 5>; /* TODO: 依 RM「DMA request mapping」表核对：USART1_TX=DMA1_CH4、USART1_RX=DMA1_CH5 */\n",
+        );
+        let mut edit = AiEdit::replace(
+            "hardware.dts".to_owned(),
+            vec![(
+                "表核对：USART1_TX=DMA1_CH4\n".to_owned(),
+                "表已印证：USART1_TX=DMA1_CH4、USART1_RX=DMA1_CH5（实测）\n".to_owned(),
+            )],
+        );
+        edit.prepare(dir.path());
+        assert!(edit.error.is_none(), "{:?}", edit.error);
+        let resolved = edit.resolved.as_deref().unwrap();
+        assert!(resolved.contains("表已印证：USART1_TX=DMA1_CH4"));
+        assert!(resolved.contains("USART1_RX=DMA1_CH5（实测）"));
+        assert!(!resolved.contains("表核对"));
     }
 
     #[test]
