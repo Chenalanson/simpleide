@@ -1526,7 +1526,7 @@ fn ai_architecture_panel(
             });
         });
         ui.label(
-            RichText::new("内容来自 framework.md（stm32-embedded-dev S3）")
+            RichText::new("内容来自 framework.md（stm32-embedded-dev T8 / S9）")
                 .size(9.0)
                 .color(theme::text_faint()),
         );
@@ -1582,7 +1582,7 @@ fn ai_architecture_panel(
                         ui.add_space(7.0);
                         ui.label(
                             RichText::new(
-                                "可以点击下面的按钮让 AI 按 stm32-embedded-dev skill 的 S3 流程生成，或在你的 skill 工作流中生成。",
+                                "可以点击下面的按钮让 AI 按 stm32-embedded-dev skill 的 T8 / S9 流程先感知工程，再决定是否生成或替换 framework.md。",
                             )
                             .size(8.8)
                             .color(theme::text_faint()),

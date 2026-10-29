@@ -18,7 +18,7 @@ use crate::project_meta::ProjectMeta;
 use crate::util::{display_path, read_text_file};
 
 const SKILL_ID: &str = "stm32-embedded-dev";
-const MAX_SKILL_BYTES: usize = 190_000;
+const MAX_SKILL_BYTES: usize = 200_000;
 const MAX_SYSTEM_PROMPT_BYTES: usize = 240_000;
 const MAX_TREE_FILES: usize = 400;
 /// Reserve enough room for the edit protocol and output requirements at the end
@@ -138,6 +138,10 @@ const EMBEDDED_SKILL_FILES: &[(&str, &str)] = &[
     (
         "references/consulting-design.md",
         include_str!("../.opencode/skills/stm32-embedded-dev/references/consulting-design.md"),
+    ),
+    (
+        "references/system-perception.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/system-perception.md"),
     ),
 ];
 
@@ -1020,8 +1024,10 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
     let mut prompt = String::new();
     prompt.push_str(
         "你是 Simple embedded 的 AI 助手，正在协助 STM32 嵌入式开发。\n\
-         必须优先遵循已加载的 stm32-embedded-dev skill：先按第 1 节判定 T1–T7 任务类型，再按第 3 节对应固定模板的小节编号、标题和表格输出；\
-         T1–T5 使用模板 A–E，T6 其他操作使用模板 F，T7 代码风格使用模板 G。模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载，删除文件用 se-delete 承载；\
+         必须优先遵循已加载的 stm32-embedded-dev skill：先按第 1 节判定 T1–T8 任务类型，再按第 3 节对应固定模板的小节编号、标题和表格输出；\
+         T1–T5 使用模板 A–E，T6 其他操作使用模板 F，T7 代码风格使用模板 G，T8 系统整体感知使用模板 H。模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载，删除文件用 se-delete 承载；\
+         用户要求阅读/理解新导入或别人的工程、分析架构、重新生成或替换 framework.md，或工程明显不是默认 APP/MID/BSP 结构时，先按 T8 盘点实际目录/构建/入口/RTOS/厂商代码和现有文档，判断“默认/兼容/外来/混合”，不要直接套默认架构；T8 默认不改代码/不移动目录，替换或重构前用 se-ask 确认；\
+         凡是需要用户选择、确认、授权或回答的内容，必须输出四反引号的 se-ask 卡片（问题 + 2–8 个选项或自由回答），禁止只在正文末尾写问句等待用户回复；只读的 se-list / se-read 不需要用户授权，缺文件时直接读取，禁止问“请允许我读取”；\
          用户提到代码风格、优化、code_style.md、模块封装或代码审查时，先读取工程根目录 code_style.md 并优先遵守；T4 必须先给诊断假设和可观测验证（串口或 LED/GPIO/watch），不得跳过验证；\
          缺少某个目录或文件正文时，先用 se-list / se-read 请求 IDE 读取，不要声称无法遍历磁盘，也不要猜测未读取的代码；\
          不要自创分点或省略不适用的 N/A 行。\
@@ -1050,27 +1056,6 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
             "以下是用户通过历史纠正确认的长期规则，优先于 SKILL.md 默认写法；但仍以用户当前指令、工程现状和安全/硬件事实为准。\n\n",
         );
         prompt.push_str(context.evolution);
-    }
-    if !context.retrieval.trim().is_empty() {
-        prompt.push_str("\n\n## IDE 文件检索结果（上一轮 se-list / se-read 的真实返回）\n\n");
-        prompt.push_str(
-            "> 以下内容由 IDE 从工程磁盘读取，不是模型猜测。请直接基于这些正文继续分析；需要更多文件时继续输出 se-list / se-read，不要编造未读取的文件内容。\n\n",
-        );
-        let limit = MAX_SYSTEM_PROMPT_BYTES.saturating_sub(PROMPT_PROTOCOL_RESERVE);
-        let available = limit.saturating_sub(prompt.len());
-        let budget = MAX_RETRIEVAL_BYTES.min(available);
-        if budget > 512 {
-            let mut end = context.retrieval.len().min(budget);
-            while end > 0 && !context.retrieval.is_char_boundary(end) {
-                end -= 1;
-            }
-            prompt.push_str(&context.retrieval[..end]);
-            if end < context.retrieval.len() {
-                prompt.push_str("\n\n[检索结果过长，已截断；请分轮读取剩余部分]\n");
-            }
-        } else {
-            prompt.push_str("[上下文预算不足，未插入检索结果；请减少 Skill 或参考资料后重试]\n");
-        }
     }
     prompt.push_str("\n\n## 工程上下文\n\n");
     let _ = writeln!(prompt, "- 工程名：{}", context.project_name);
@@ -1173,6 +1158,30 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
         );
         if appended.iter().any(|path| path.ends_with(candidate)) {
             break;
+        }
+    }
+    // Put files requested by the previous se-list / se-read after the active
+    // file and entry file, but before framework.md. The model asked for them,
+    // yet they must not crowd out the file the user is looking at.
+    if !context.retrieval.trim().is_empty() {
+        prompt.push_str("\n\n## IDE 文件检索结果（上一轮 se-list / se-read 的真实返回）\n\n");
+        prompt.push_str(
+            "> 以下内容由 IDE 从工程磁盘读取，不是模型猜测。请直接基于这些正文继续分析；需要更多文件时继续输出 se-list / se-read，不要编造未读取的文件内容。\n\n",
+        );
+        let limit = MAX_SYSTEM_PROMPT_BYTES.saturating_sub(PROMPT_PROTOCOL_RESERVE);
+        let available = limit.saturating_sub(prompt.len());
+        let budget = MAX_RETRIEVAL_BYTES.min(available);
+        if budget > 512 {
+            let mut end = context.retrieval.len().min(budget);
+            while end > 0 && !context.retrieval.is_char_boundary(end) {
+                end -= 1;
+            }
+            prompt.push_str(&context.retrieval[..end]);
+            if end < context.retrieval.len() {
+                prompt.push_str("\n\n[检索结果过长，已截断；请分轮读取剩余部分]\n");
+            }
+        } else {
+            prompt.push_str("[上下文预算不足，未插入检索结果；请减少 Skill 或参考资料后重试]\n");
         }
     }
     let mut framework_text = None;
@@ -1408,6 +1417,7 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
          ````\n\n\
          se-list：列出目录，path=. 表示工程根目录，depth 为 1–3，默认 1；只列真实文件和目录。\n\
          se-read：读取一个文本文件，lines 可省略；一次最多 24KB，单文件上限 2MB；需要后续内容时用 lines 继续读。\n\
+         se-list / se-read 是只读操作，不需要用户授权；缺文件时直接读取，禁止在正文问“请允许我读取”。只有写文件、删除、重构、烧录、串口连接等有副作用的动作才用 se-ask 确认。\n\
          一次最多 12 个检索请求，IDE 最多自动继续 6 轮；路径必须相对工程根目录，禁止绝对路径、`..`、build/Debug/Release/out/target、`.simple-embedded`、`.git`、`.opencode` 等生成或配置目录，禁止符号链接和二进制文件。\n\
          检索回复只输出 se-list / se-read 和简短说明，不要在同一回复里输出 se-file / se-replace / se-delete；拿到正文后再生成修改。优先按 framework.md 的文件表定位，再 list 目录、read 关键文件，不要重复读取已经出现过的全文。\n\n\
          ## 文件修改协议（重要）\n\n\
@@ -1484,10 +1494,10 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
     );
     prompt.push_str(
         "\n\n## 输出要求（与 skill 固定模板的关系）\n\n\
-         1. 正文结构以 skill 第 1 节任务判定和第 3 节对应模板为准：T1–T5 使用模板 A–E，T6 使用模板 F；保留模板的小节编号、标题、表格维度和 N/A 行，不得自创分点。\n\
+         1. 正文结构以 skill 第 1 节任务判定和第 3 节对应模板为准：T1–T5 使用模板 A–E，T6 使用模板 F，T7 使用模板 G，T8 使用模板 H；保留模板的小节编号、标题、表格维度和 N/A 行，不得自创分点。\n\
          2. skill 模板中的代码实现/代码修改节仍保留编号，但实际写入工程的内容用 se-file / se-replace 块承载，删除用 se-delete，确认问题用 se-ask，真实构建验证用 se-build，串口调试用 se-cli，文件检索用 se-list / se-read，问题/解决方案记录用 se-issue；执行器会显示差异卡片、独立删除卡片、确认卡片、构建卡片、串口调试卡片和文件检索卡片，并把问题写入 .ai-issues.md，不要在普通代码块里重复同一份完整代码。\n\
          3. 涉及硬件资源变化时，先按模板输出 hardware.dts 台账；手册级事实不确定时放在待核对表/TODO 中。\n\
-         4. S4 核对表、S5 构建/排查和 S7 串口 Debug 是 T1–T5 的必输出项；S5 必须用 se-build 实际构建并引用 IDE 回传输出，串口可用时 S7 必须用 se-cli 实际收发，不能只给命令或伪造结果；T6 按模板 F 给出影响分析、执行预览、结果、验证与回退。\n\
+         4. S4 核对表、S5 构建/排查和 S7 串口 Debug 是 T1–T5 的必输出项；S5 必须用 se-build 实际构建并引用 IDE 回传输出，串口可用时 S7 必须用 se-cli 实际收发，不能只给命令或伪造结果；T6 按模板 F 给出影响分析、执行预览、结果、验证与回退；T8 按模板 H 先给工程盘点、归属判断、framework.md 处理和用户确认项，不得在未确认时改写/替换 framework.md。\n\
          5. 若模型无法完整遵循模板，至少给出任务判定、台账/无变更说明、代码修改或删除预览、核对表和验证步骤，并明确缺失项。\n",
     );
 
@@ -2481,11 +2491,14 @@ mod tests {
         assert!(bundle.text.contains("references/code-style.md"));
         assert!(bundle.text.contains("references/diagnostics.md"));
         assert!(bundle.text.contains("references/consulting-design.md"));
+        assert!(bundle.text.contains("references/system-perception.md"));
         assert!(bundle.text.contains("T7 代码风格"));
+        assert!(bundle.text.contains("T8 系统整体感知"));
+        assert!(!bundle.text.contains("skill 文本已截断"));
         assert!(bundle.text.contains("code_style.md"));
         assert!(bundle.text.contains("se-cli"));
         assert!(bundle.text.contains("evolution.md"));
-        assert!(bundle.files.len() >= 15);
+        assert!(bundle.files.len() >= 17);
     }
 
     #[test]
@@ -2887,6 +2900,7 @@ mod tests {
         assert!(prompt.contains("se-cli"));
         assert!(prompt.contains("se-list"));
         assert!(prompt.contains("se-read"));
+        assert!(prompt.contains("T8 系统整体感知"));
         assert!(prompt.contains("用户导入的额外 Skill"));
         assert!(prompt.contains("extra skill marker"));
         assert!(prompt.contains("用户导入的参考资料"));

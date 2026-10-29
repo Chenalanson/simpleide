@@ -65,6 +65,58 @@ pub fn parse_ask(attrs: &str, body: &str) -> AiAsk {
     }
 }
 
+/// Fallback for models that ask a confirmation question in prose instead of
+/// emitting a `se-ask` block. Only a narrow set of explicit permission /
+/// decision phrases is converted, so normal explanations do not become cards.
+pub fn fallback_question_card(text: &str) -> Option<AiAsk> {
+    const TRIGGERS: &[&str] = &[
+        "请允许",
+        "是否允许",
+        "需要你确认",
+        "请确认",
+        "请选择",
+        "是否继续",
+        "是否需要",
+        "要不要",
+        "是否替换",
+        "是否重构",
+        "请回复",
+        "请告诉我",
+    ];
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut candidate = None;
+    for paragraph in trimmed.split("\n\n") {
+        if TRIGGERS.iter().any(|trigger| paragraph.contains(trigger)) {
+            candidate = Some(paragraph.trim());
+        }
+    }
+    let candidate = candidate?;
+    let question = truncate(candidate, 800);
+    let options = if question.contains("允许") {
+        vec!["允许", "不允许"]
+    } else if question.contains("替换") {
+        vec!["替换", "保留"]
+    } else if question.contains("重构") {
+        vec!["重构", "暂不重构"]
+    } else if question.contains("继续") {
+        vec!["继续", "暂停"]
+    } else {
+        vec!["是", "否"]
+    };
+    Some(AiAsk {
+        question,
+        options: options
+            .into_iter()
+            .map(|option| option.to_owned())
+            .collect(),
+        multiple: false,
+        error: None,
+    })
+}
+
 pub fn answers_complete(asks: &[AiAsk], drafts: &[AiAskDraft]) -> bool {
     asks.len() == drafts.len()
         && asks.iter().zip(drafts).all(|(ask, draft)| {
@@ -209,5 +261,21 @@ mod tests {
         let ask = parse_ask("", "- USART1\n- USART2\n");
         assert!(ask.error.is_some());
         assert_eq!(ask.options.len(), 2);
+    }
+
+    #[test]
+    fn fallback_card_for_permission_question() {
+        let text =
+            "在收尾前还有一处需要确认：\n\n请允许我读取两份真实正文确认：\n\n拿到后我会继续。";
+        let ask = fallback_question_card(text).expect("question card");
+        assert!(ask.question.contains("请允许我读取"));
+        assert_eq!(ask.options, vec!["允许", "不允许"]);
+        assert!(ask.error.is_none());
+    }
+
+    #[test]
+    fn fallback_card_ignores_plain_explanation() {
+        assert!(fallback_question_card("本次修改已完成，构建通过。").is_none());
+        assert!(fallback_question_card("这里只是一个普通说明，没有等待用户决定。").is_none());
     }
 }

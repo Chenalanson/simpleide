@@ -5086,7 +5086,7 @@ impl App {
     }
 
     fn request_ai_framework(&mut self) {
-        self.ai.input = "请使用 stm32-embedded-dev skill 的 S3 架构确认和 framework-template.md，分析当前工程并生成/补全工程根目录的 framework.md。必须包含三章：1 分层架构；2 软件架构（2.1 执行范式、2.2 调度模式、2.3 设计模式）；3 运行视图（3.1 启动调用链、3.2 主循环调度时间线 Mermaid gantt、3.3 中断来源与抢占关系表、3.4 关键事件上下文链）。如果 framework.md 已存在但不完整，只补全缺失章节，保留已有正确内容，不要整份重写；不要改其他代码。输出较长时优先使用 se-replace 按小节补全。".to_owned();
+        self.ai.input = "请使用 stm32-embedded-dev skill 的 T8 系统整体感知（S9）和 references/system-perception.md 先阅读当前工程，不要直接按默认 APP/MID/BSP 生成架构。先用 se-list / se-read 盘点构建文件、目录树、入口、启动/链接脚本、RTOS/厂商代码、现有 framework.md / hardware.dts，判断工程属于默认 / 兼容 / 外来 / 混合，并给证据。framework.md 不存在或与实际不一致时，先给处理方案并用 se-ask 让我选择“保留现状并更新文档 / 只补全缺失章节 / 替换整份 / 迁移到默认结构”，我确认后再写；已有且完整时只补全缺失章节，保留正确内容，不要整份重写。确认后生成的 framework.md 必须包含三章：1 分层架构；2 软件架构（2.1 执行范式、2.2 调度模式、2.3 设计模式）；3 运行视图（3.1 启动调用链、3.2 主循环调度时间线 Mermaid gantt、3.3 中断来源与抢占关系表、3.4 关键事件上下文链）。不要修改其他业务代码。".to_owned();
         self.ai.focus_input = true;
         self.send_ai_message();
     }
@@ -5691,6 +5691,21 @@ impl App {
         let issues = parsed.issues;
         let evolutions = parsed.evolutions;
         let fs_requests = parsed.fs_requests;
+        // Models sometimes ask for permission in prose instead of emitting a
+        // se-ask block. Turn explicit permission/decision questions into a
+        // card so the user can answer with one click. Do not do this when the
+        // reply already has another actionable card.
+        if asks.is_empty()
+            && fs_requests.is_empty()
+            && edits.is_empty()
+            && deletes.is_empty()
+            && !build
+            && cli_commands.is_empty()
+        {
+            if let Some(ask) = crate::ai_ask::fallback_question_card(&text) {
+                asks.push(ask);
+            }
+        }
         if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
             for edit in &mut edits {
                 edit.prepare(&root);
