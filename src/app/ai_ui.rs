@@ -4,7 +4,7 @@
 //! whole window so the fog/desktop reveal and the two meteors can cover every
 //! widget without fighting panel clipping.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use eframe::egui::{
@@ -13,11 +13,15 @@ use eframe::egui::{
 };
 
 use super::{AiChatMessage, AiEditStatus, App};
-use crate::architecture::ArchitectureReport;
+use crate::framework::{FrameworkDoc, GanttChart, GanttKind};
 use crate::log::Severity;
 use crate::theme;
 
 pub(super) const AI_EARLY_FOG_SECS: f32 = 0.50;
+/// AI mode intentionally uses a larger UI scale because its panels contain a
+/// lot of dense architecture information; the normal editor keeps the user's
+/// own zoom factor.
+const AI_UI_ZOOM: f32 = 1.20;
 const TRANSITION_SECS: f32 = 3.05;
 const METEOR_RIGHT_START: f32 = 1.15;
 const METEOR_RIGHT_END: f32 = 1.95;
@@ -46,6 +50,13 @@ struct MeteorSpec {
 
 impl App {
     pub(super) fn show_ai_mode(&mut self, ui: &mut egui::Ui) {
+        if self.ai_zoom_before.is_none() {
+            let previous = ui.ctx().zoom_factor();
+            self.ai_zoom_before = Some(previous);
+            ui.ctx()
+                .set_zoom_factor((previous * AI_UI_ZOOM).clamp(0.8, 1.6));
+            ui.ctx().request_repaint();
+        }
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
         let view = ui.available_rect_before_wrap();
         ui.painter()
@@ -107,10 +118,11 @@ impl App {
         let mut clear = false;
         let mut quick_prompt = None;
         let mut workbench = WorkbenchActions::default();
-        let mut architecture_refresh = false;
-        let mut architecture_jump = None;
+        let mut framework_refresh = false;
+        let mut framework_generate = false;
+        let mut framework_open = false;
 
-        self.poll_ai_architecture(ui.ctx());
+        self.poll_ai_framework(ui.ctx());
         self.ai_output_panel(
             ui,
             output,
@@ -125,22 +137,24 @@ impl App {
             architecture,
             reveal_arch,
             arch_origin,
-            self.ai.architecture.as_ref(),
-            self.ai.architecture_receiver.is_some(),
-            self.ai.architecture_error.as_deref(),
-            self.project.as_ref().map(|project| project.root.as_path()),
-            &mut architecture_refresh,
-            &mut architecture_jump,
+            self.ai.framework.as_ref(),
+            self.ai.framework_path.as_deref(),
+            self.ai.framework_error.as_deref(),
+            self.ai.framework_missing,
+            &mut framework_refresh,
+            &mut framework_generate,
+            &mut framework_open,
         );
         self.ai_workbench_panel(ui, right, reveal_right, right_orb, &mut workbench);
 
-        if architecture_refresh {
-            self.refresh_ai_architecture();
+        if framework_refresh {
+            self.refresh_ai_framework(true);
         }
-        if let Some((path, line)) = architecture_jump {
-            self.exit_ai_mode();
-            self.jump_to_debug_source(ui.ctx(), &path, line);
-            self.focus_editor = true;
+        if framework_generate {
+            self.request_ai_framework();
+        }
+        if framework_open {
+            self.open_ai_framework();
             ui.ctx().request_repaint();
             return;
         }
@@ -560,6 +574,12 @@ impl App {
         let mut close = false;
         let mut save = false;
         let mut reload_skill = false;
+        let mut import_skill_folder = false;
+        let mut import_skill_files = false;
+        let mut import_reference_files = false;
+        let mut import_reference_folder = false;
+        let mut open_skill_dir = false;
+        let mut open_reference_dir = false;
 
         let modal = egui::Modal::new(Id::new("simple_embedded_ai_settings_modal"))
             .frame(
@@ -571,7 +591,7 @@ impl App {
             )
             .backdrop_color(Color32::from_black_alpha(170));
         modal.show(ctx, |ui| {
-            ui.set_width(540.0);
+            ui.set_width(620.0);
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new("AI 设置")
@@ -588,18 +608,24 @@ impl App {
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
-                    "使用 OpenAI 兼容接口。设置保存在用户目录，不写入当前工程；进入 AI 模式后会自动加载 stm32-embedded-dev skill。",
+                    "使用 OpenAI 兼容接口。设置、额外 Skill 和参考资料都保存在用户目录，不写入当前工程；进入 AI 模式后会自动加载内置 stm32-embedded-dev skill。",
                 )
                 .size(10.5)
                 .color(theme::text_dim()),
             );
             ui.add_space(12.0);
 
-            ui.label(
-                RichText::new("API Key")
-                    .size(10.5)
-                    .color(theme::text_dim()),
-            );
+            ScrollArea::vertical()
+                .id_salt("simple_embedded_ai_settings_scroll")
+                .max_height(540.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(
+                        RichText::new("API Key")
+                            .size(10.5)
+                            .color(theme::text_dim()),
+                    );
             ui.horizontal(|ui| {
                 let width = (ui.available_width() - 64.0).max(200.0);
                 ui.add_sized(
@@ -633,15 +659,130 @@ impl App {
             );
             ui.add_space(12.0);
 
-            ai_section(ui, "Skill 状态");
-            ai_skill_card(
-                ui,
-                &self.ai.skill_source,
-                self.ai.skill_files,
-                self.ai.skill_builtin,
-                self.ai.skill_error.as_deref(),
-                &mut reload_skill,
-            );
+                    ai_section(ui, "内置 / 目录 Skill");
+                    ai_skill_card(
+                        ui,
+                        &self.ai.skill_source,
+                        self.ai.skill_files,
+                        self.ai.skill_builtin,
+                        self.ai.skill_error.as_deref(),
+                        &mut reload_skill,
+                    );
+                    ui.add(
+                        Label::new(
+                            RichText::new(
+                                "stm32-embedded-dev 是内置的嵌入式专用 Skill；额外 Skill 会追加到系统提示词，用于补充其他领域知识。",
+                            )
+                            .size(8.8)
+                            .color(theme::text_faint()),
+                        )
+                        .wrap(),
+                    );
+                    ui.add_space(12.0);
+
+                    ai_section(ui, "导入其他 Skill");
+                    if self.ai.extra_skills.is_empty() {
+                        ui.label(
+                            RichText::new("尚未导入额外 Skill。")
+                                .size(9.0)
+                                .color(theme::text_faint()),
+                        );
+                    } else {
+                        ai_resource_list(ui, &self.ai.extra_skills);
+                    }
+                    ui.horizontal(|ui| {
+                        let importing = self.ai.import_receiver.is_some();
+                        if ui
+                            .add_enabled(
+                                !importing,
+                                theme::secondary_button("导入 Skill 文件夹"),
+                            )
+                            .on_hover_text("选择包含 SKILL.md 或 Markdown 的文件夹")
+                            .clicked()
+                        {
+                            import_skill_folder = true;
+                        }
+                        if ui
+                            .add_enabled(!importing, theme::secondary_button("导入文件"))
+                            .clicked()
+                        {
+                            import_skill_files = true;
+                        }
+                        if ai_ghost_button(ui, "打开目录") {
+                            open_skill_dir = true;
+                        }
+                    });
+                    ui.add_space(12.0);
+
+                    ai_section(ui, "参考资料");
+                    ui.add(
+                        Label::new(
+                            RichText::new(
+                                "可导入芯片手册、数据手册、HAL 使用说明、例程等。支持 PDF（自动提取文本）、Markdown、TXT、C/H、JSON、CSV、YAML 等；扫描版 PDF 可能无法提取。",
+                            )
+                            .size(8.8)
+                            .color(theme::text_faint()),
+                        )
+                        .wrap(),
+                    );
+                    ui.add_space(4.0);
+                    if self.ai.extra_references.is_empty() {
+                        ui.label(
+                            RichText::new("尚未导入参考资料。")
+                                .size(9.0)
+                                .color(theme::text_faint()),
+                        );
+                    } else {
+                        ai_resource_list(ui, &self.ai.extra_references);
+                    }
+                    ui.horizontal(|ui| {
+                        let importing = self.ai.import_receiver.is_some();
+                        if ui
+                            .add_enabled(!importing, theme::secondary_button("导入文件"))
+                            .on_hover_text("可多选 PDF / Markdown / 文本 / HAL 例程")
+                            .clicked()
+                        {
+                            import_reference_files = true;
+                        }
+                        if ui
+                            .add_enabled(!importing, theme::secondary_button("导入文件夹"))
+                            .clicked()
+                        {
+                            import_reference_folder = true;
+                        }
+                        if ai_ghost_button(ui, "打开目录") {
+                            open_reference_dir = true;
+                        }
+                    });
+                    if self.ai.import_receiver.is_some() {
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            if let Some(status) = &self.ai.import_status {
+                                ui.label(
+                                    RichText::new(status).size(9.0).color(theme::text_dim()),
+                                );
+                            }
+                        });
+                    } else if let Some(status) = &self.ai.import_status {
+                        ui.add_space(5.0);
+                        ui.add(
+                            Label::new(
+                                RichText::new(status).size(9.0).color(theme::success()),
+                            )
+                            .wrap(),
+                        );
+                    }
+                    if let Some(error) = &self.ai.import_error {
+                        ui.add_space(4.0);
+                        ui.add(
+                            Label::new(
+                                RichText::new(error).size(9.0).color(theme::error()),
+                            )
+                            .wrap(),
+                        );
+                    }
+                });
 
             if let Some(error) = &draft.error {
                 ui.add_space(8.0);
@@ -666,6 +807,24 @@ impl App {
         }
         if reload_skill {
             self.refresh_ai_skill();
+        }
+        if import_skill_folder {
+            self.import_ai_skill_folder();
+        }
+        if import_skill_files {
+            self.import_ai_skill_files();
+        }
+        if import_reference_files {
+            self.import_ai_reference_files();
+        }
+        if import_reference_folder {
+            self.import_ai_reference_folder();
+        }
+        if open_skill_dir {
+            self.open_ai_resource_dir(crate::ai::AiResourceKind::Skill);
+        }
+        if open_reference_dir {
+            self.open_ai_resource_dir(crate::ai::AiResourceKind::Reference);
         }
         if save {
             let api_key = draft.api_key.trim().to_owned();
@@ -707,14 +866,16 @@ fn ai_architecture_panel(
     rect: Rect,
     reveal: f32,
     origin: egui::Pos2,
-    report: Option<&ArchitectureReport>,
-    busy: bool,
+    doc: Option<&FrameworkDoc>,
+    path: Option<&Path>,
     error: Option<&str>,
-    root: Option<&Path>,
+    missing: bool,
     refresh: &mut bool,
-    jump: &mut Option<(PathBuf, usize)>,
+    generate: &mut bool,
+    open: &mut bool,
 ) {
     ai_panel(ui, rect, reveal, origin, |ui| {
+        let incomplete = doc.is_some_and(|doc| !doc.missing_sections().is_empty());
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("项目架构")
@@ -722,26 +883,40 @@ fn ai_architecture_panel(
                     .strong()
                     .color(theme::text()),
             );
-            if busy {
-                ui.spinner();
-                ui.label(RichText::new("分析中").size(9.0).color(theme::accent()));
-            } else if error.is_some() {
-                ui.label(RichText::new("分析失败").size(9.0).color(theme::error()));
-            } else if report.is_some() {
+            if error.is_some() {
+                ui.label(RichText::new("读取失败").size(9.0).color(theme::error()));
+            } else if incomplete {
+                paint_dot(ui, theme::warning());
+                ui.label(
+                    RichText::new("文档不完整")
+                        .size(9.0)
+                        .color(theme::warning()),
+                );
+            } else if doc.is_some() {
                 paint_dot(ui, theme::success());
-                ui.label(RichText::new("已就绪").size(9.0).color(theme::success()));
+                ui.label(
+                    RichText::new("framework.md")
+                        .size(9.0)
+                        .color(theme::success()),
+                );
+            } else if missing {
+                paint_dot(ui, theme::warning());
+                ui.label(RichText::new("等待文档").size(9.0).color(theme::warning()));
             } else {
                 paint_dot(ui, theme::text_faint());
-                ui.label(RichText::new("待分析").size(9.0).color(theme::text_faint()));
+                ui.label(RichText::new("未生成").size(9.0).color(theme::text_faint()));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ai_ghost_button(ui, "刷新") {
                     *refresh = true;
                 }
+                if doc.is_some() && ai_ghost_button(ui, "打开") {
+                    *open = true;
+                }
             });
         });
         ui.label(
-            RichText::new("从已保存源码推断分层、调度、框架和设计模式")
+            RichText::new("内容来自 framework.md（stm32-embedded-dev S3）")
                 .size(9.0)
                 .color(theme::text_faint()),
         );
@@ -750,437 +925,474 @@ fn ai_architecture_panel(
             ui.add(Label::new(RichText::new(error).size(9.5).color(theme::error())).wrap());
             ui.add_space(4.0);
         }
-        if busy && report.is_none() {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(
-                    RichText::new("正在扫描工程源文件，稍后自动显示…")
-                        .size(10.0)
-                        .color(theme::text_dim()),
-                );
-            });
-            return;
-        }
-        let Some(report) = report else {
-            ui.add_space(10.0);
-            ui.label(
-                RichText::new("还没有架构分析结果。打开工程或点击“刷新”开始分析。")
-                    .size(10.0)
-                    .color(theme::text_dim()),
+        if let Some(path) = path {
+            ui.add(
+                Label::new(
+                    RichText::new(crate::util::display_path(path))
+                        .size(8.5)
+                        .color(theme::text_faint()),
+                )
+                .wrap(),
             );
+            ui.add_space(4.0);
+        }
+
+        let Some(doc) = doc else {
+            Frame::new()
+                .fill(theme::with_alpha(theme::warning(), 11))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    theme::with_alpha(theme::warning(), 55),
+                ))
+                .corner_radius(8)
+                .inner_margin(Margin::symmetric(10, 9))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(
+                        RichText::new(if error.is_some() {
+                            "无法读取 framework.md"
+                        } else {
+                            "等待 framework.md"
+                        })
+                        .size(13.0)
+                        .strong()
+                        .color(theme::warning()),
+                    );
+                    ui.add(
+                        Label::new(
+                            RichText::new(
+                                "工程根目录或 docs/ 下还没有 framework.md。该窗口不再使用启发式架构分析；请先生成文档，生成后会自动加载。",
+                            )
+                            .size(9.5)
+                            .color(theme::text_dim()),
+                        )
+                        .wrap(),
+                    );
+                    if missing {
+                        ui.add_space(7.0);
+                        ui.label(
+                            RichText::new(
+                                "可以点击下面的按钮让 AI 按 stm32-embedded-dev skill 的 S3 流程生成，或在你的 skill 工作流中生成。",
+                            )
+                            .size(8.8)
+                            .color(theme::text_faint()),
+                        );
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add(theme::primary_button("让 AI 生成 framework.md"))
+                                .clicked()
+                            {
+                                *generate = true;
+                            }
+                            if ai_ghost_button(ui, "刷新") {
+                                *refresh = true;
+                            }
+                        });
+                    }
+                });
             return;
         };
 
         let height = ui.available_height().max(60.0);
         ScrollArea::vertical()
-            .id_salt("simple_embedded_ai_architecture_scroll")
+            .id_salt("simple_embedded_ai_framework_scroll")
             .auto_shrink([false, false])
             .max_height(height)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                arch_stats(ui, report);
-                ui.add_space(9.0);
-
-                ai_section(ui, "分层架构");
-                if report.layers.is_empty() {
-                    arch_empty_line(ui, "未识别到分层目录");
-                } else {
-                    for layer in &report.layers {
-                        arch_layer_row(ui, layer);
-                    }
-                }
-                ui.add_space(9.0);
-
-                ai_section(ui, "调度模式");
-                Frame::new()
-                    .fill(theme::with_alpha(theme::accent(), 14))
-                    .stroke(Stroke::new(1.0_f32, theme::with_alpha(theme::accent(), 65)))
-                    .corner_radius(8)
-                    .inner_margin(Margin::symmetric(9, 7))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.label(
-                            RichText::new(&report.schedule.kind)
-                                .size(12.5)
-                                .strong()
-                                .color(theme::accent()),
-                        );
-                        ui.add(
-                            Label::new(
-                                RichText::new(&report.schedule.summary)
-                                    .size(9.5)
-                                    .color(theme::text_dim()),
-                            )
-                            .wrap(),
-                        );
-                        if !report.schedule.evidence.is_empty() {
-                            ui.add_space(4.0);
-                            for evidence in &report.schedule.evidence {
-                                arch_bullet(ui, evidence);
-                            }
-                        }
-                    });
-                ui.add_space(9.0);
-
-                if !report.framework.is_empty() {
-                    ai_section(ui, "执行框架");
-                    let names = report
-                        .framework
-                        .iter()
-                        .map(|item| item.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join("  ·  ");
-                    let details = report
-                        .framework
-                        .iter()
-                        .filter(|item| !item.evidence.is_empty())
-                        .map(|item| format!("{}：{}", item.name, item.evidence))
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                ui.label(
+                    RichText::new(&doc.title)
+                        .size(14.0)
+                        .strong()
+                        .color(theme::text()),
+                );
+                let missing_sections = doc.missing_sections();
+                if !missing_sections.is_empty() {
                     Frame::new()
-                        .fill(theme::with_alpha(theme::accent(), 11))
-                        .stroke(Stroke::new(1.0_f32, theme::with_alpha(theme::accent(), 45)))
-                        .corner_radius(5)
-                        .inner_margin(Margin::symmetric(7, 4))
+                        .fill(theme::with_alpha(theme::warning(), 11))
+                        .stroke(Stroke::new(
+                            1.0_f32,
+                            theme::with_alpha(theme::warning(), 55),
+                        ))
+                        .corner_radius(6)
+                        .inner_margin(Margin::symmetric(8, 6))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.horizontal(|ui| {
-                                paint_dot(ui, theme::accent());
-                                let response = ui.add(
-                                    Label::new(
-                                        RichText::new(names)
-                                            .size(9.8)
-                                            .strong()
-                                            .color(theme::text()),
-                                    )
-                                    .wrap(),
-                                );
-                                if !details.is_empty() {
-                                    response.on_hover_text(details);
-                                }
-                            });
-                        });
-                    ui.add_space(9.0);
-                }
-
-                ai_section(ui, "设计模式");
-                if report.patterns.is_empty() {
-                    arch_empty_line(ui, "未匹配到明显设计模式");
-                } else {
-                    for pattern in &report.patterns {
-                        arch_pattern_row(ui, pattern);
-                    }
-                }
-                ui.add_space(9.0);
-
-                if !report.flow.is_empty() {
-                    ai_section(ui, "函数调度图");
-                    for stage in &report.flow {
-                        ui.label(
-                            RichText::new(&stage.title)
-                                .size(9.5)
-                                .strong()
-                                .color(theme::text_dim()),
-                        );
-                        let separator = match stage.title.as_str() {
-                            "启动" => "  →  ",
-                            "主循环" => "  ·  ",
-                            _ => "  ｜  ",
-                        };
-                        let mut line = stage.nodes.join(separator);
-                        if stage.title == "主循环" {
-                            line = format!("while(1) · {line}");
-                        }
-                        Frame::new()
-                            .fill(theme::with_alpha(theme::surface(), 120))
-                            .corner_radius(5)
-                            .inner_margin(Margin::symmetric(7, 4))
-                            .show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.add(
-                                    Label::new(RichText::new(line).size(9.0).color(theme::text()))
-                                        .wrap(),
-                                );
-                            });
-                        ui.add_space(5.0);
-                    }
-                    ui.add_space(4.0);
-                }
-
-                ai_section(ui, "中断与任务");
-                if report.interrupts.is_empty() && report.tasks.is_empty() {
-                    arch_empty_line(ui, "未发现 IRQHandler 或 RTOS 任务");
-                } else {
-                    for interrupt in &report.interrupts {
-                        arch_interrupt_row(ui, interrupt, root, jump);
-                    }
-                    for task in &report.tasks {
-                        arch_task_row(ui, task, root, jump);
-                    }
-                }
-                ui.add_space(9.0);
-
-                if !report.roots.is_empty() {
-                    ai_section(ui, "调度入口");
-                    for root in &report.roots {
-                        ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new(&root.name)
-                                    .size(9.8)
+                                RichText::new("framework.md 不完整")
+                                    .size(10.0)
                                     .strong()
-                                    .color(theme::text()),
+                                    .color(theme::warning()),
                             );
-                            arch_badge(ui, &root.kind, theme::text_faint());
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if root.count > 0 {
-                                    ui.label(
-                                        RichText::new(format!("{} 个调用", root.count))
-                                            .size(8.5)
-                                            .color(theme::text_faint()),
-                                    );
-                                }
-                            });
-                        });
-                        if !root.callees.is_empty() {
                             ui.add(
                                 Label::new(
-                                    RichText::new(format!("→ {}", root.callees.join("、")))
-                                        .size(8.8)
-                                        .color(theme::text_dim()),
+                                    RichText::new(format!(
+                                        "缺少：{}。可能是上一次生成被输出长度截断；补全前不会用启发式结果替代。",
+                                        missing_sections.join("、")
+                                    ))
+                                    .size(8.8)
+                                    .color(theme::text_dim()),
                                 )
                                 .wrap(),
                             );
-                        }
-                        ui.add_space(3.0);
-                    }
-                }
-
-                if !report.notes.is_empty() {
+                            ui.add_space(4.0);
+                            if ui
+                                .add(theme::primary_button("让 AI 补全 framework.md"))
+                                .clicked()
+                            {
+                                *generate = true;
+                            }
+                        });
                     ui.add_space(7.0);
-                    for note in &report.notes {
-                        ui.add(
-                            Label::new(RichText::new(note).size(8.5).color(theme::text_faint()))
-                                .wrap(),
+                }
+                ui.add_space(7.0);
+
+                framework_section(
+                    ui,
+                    "00",
+                    "分层架构",
+                    doc.section_any(&["层级表", "分层架构"]),
+                    1,
+                );
+                framework_section(ui, "01", "执行范式", doc.section("执行范式"), 2);
+                framework_section(ui, "02", "调度模式", doc.section("调度模式"), 3);
+                framework_section(
+                    ui,
+                    "03",
+                    "设计模式",
+                    doc.section_any(&["设计模式清单", "设计模式"]),
+                    4,
+                );
+
+                ai_section(ui, "函数调度图");
+                framework_part(ui, "调用方向图", doc.section("调用方向图"), 5);
+                framework_part(ui, "关键事件上下文链", doc.section("关键事件上下文链"), 6);
+                ui.add_space(9.0);
+
+                ai_section(ui, "调度入口");
+                framework_part(ui, "启动调用链", doc.section("启动调用链"), 7);
+                ui.add_space(9.0);
+
+                ai_section(ui, "中断与任务");
+                if let Some(section) = doc.section("中断来源与抢占关系") {
+                    render_framework_body(ui, &section.body, 8);
+                } else {
+                    framework_missing_section(ui);
+                }
+                ui.label(
+                    RichText::new("任务与时间变量表见 02 调度模式。")
+                        .size(8.5)
+                        .color(theme::text_faint()),
+                );
+                ui.add_space(9.0);
+
+                arch_section(ui, "04", "调度甘特图");
+                if let Some(gantt) = &doc.gantt {
+                    if !gantt.title.is_empty() {
+                        ui.label(
+                            RichText::new(&gantt.title)
+                                .size(9.0)
+                                .color(theme::text_dim()),
                         );
                     }
+                    arch_gantt(ui, gantt);
+                    ui.label(
+                        RichText::new(&gantt.note)
+                            .size(8.5)
+                            .color(theme::text_faint()),
+                    );
+                } else if let Some(section) = doc.section("调度时间线") {
+                    render_framework_body(ui, &section.body, 9);
+                } else {
+                    framework_missing_section(ui);
                 }
+                ui.add_space(8.0);
+
+                ui.label(
+                    RichText::new("点击右上角“打开”查看完整 framework.md 和 Mermaid 图源。")
+                        .size(8.5)
+                        .color(theme::text_faint()),
+                );
                 ui.add_space(6.0);
             });
     });
 }
 
-fn arch_stats(ui: &mut Ui, report: &ArchitectureReport) {
-    let gap = 4.0;
-    let content = ((ui.available_width() - gap * 3.0 - 48.0) / 4.0).max(42.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = gap;
-        for (value, label) in [
-            (report.file_count, "应用文件"),
-            (report.function_count, "应用函数"),
-            (report.edge_count, "调用边"),
-            (report.interrupts.len(), "中断"),
-        ] {
-            Frame::new()
-                .fill(theme::with_alpha(theme::surface(), 150))
-                .stroke(Stroke::new(1.0_f32, theme::border_soft()))
-                .corner_radius(6)
-                .inner_margin(Margin::symmetric(6, 4))
-                .show(ui, |ui| {
-                    ui.set_width(content);
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            RichText::new(value.to_string())
-                                .size(14.0)
-                                .strong()
-                                .color(theme::text()),
-                        );
-                        ui.label(RichText::new(label).size(8.5).color(theme::text_faint()));
-                    });
-                });
-        }
-    });
+fn framework_section(
+    ui: &mut Ui,
+    number: &str,
+    title: &str,
+    section: Option<&crate::framework::FrameworkSection>,
+    seed: usize,
+) {
+    arch_section(ui, number, title);
+    match section {
+        Some(section) => render_framework_body(ui, &section.body, seed),
+        None => framework_missing_section(ui),
+    }
+    ui.add_space(9.0);
 }
 
-fn arch_layer_row(ui: &mut Ui, layer: &crate::architecture::LayerInfo) {
-    let color = arch_layer_color(&layer.key);
+fn framework_part(
+    ui: &mut Ui,
+    title: &str,
+    section: Option<&crate::framework::FrameworkSection>,
+    seed: usize,
+) {
+    ui.label(
+        RichText::new(title)
+            .size(9.5)
+            .strong()
+            .color(theme::text_dim()),
+    );
+    match section {
+        Some(section) => render_framework_body(ui, &section.body, seed),
+        None => framework_missing_section(ui),
+    }
+    ui.add_space(6.0);
+}
+
+fn framework_missing_section(ui: &mut Ui) {
+    ui.label(
+        RichText::new("framework.md 未包含该小节。")
+            .size(8.8)
+            .color(theme::text_faint()),
+    );
+}
+
+fn render_framework_body(ui: &mut Ui, body: &str, seed: usize) {
+    if body.trim().is_empty() {
+        framework_missing_section(ui);
+        return;
+    }
+    let lines = body.lines().collect::<Vec<_>>();
+    let mut prose = String::new();
+    let mut index = 0usize;
+    let mut prose_index = 0usize;
+    let mut table_index = 0usize;
+    let mut in_fence = false;
+    while index < lines.len() {
+        let line = lines[index];
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            prose.push_str(line);
+            prose.push('\n');
+            index += 1;
+            continue;
+        }
+        if !in_fence && is_framework_table_start(&lines, index) {
+            if !prose.trim().is_empty() {
+                render_markdown(ui, &prose, seed * 100 + prose_index, false);
+                prose_index += 1;
+                prose.clear();
+            }
+            let start = index;
+            index += 1;
+            while index < lines.len() && lines[index].trim_start().starts_with('|') {
+                index += 1;
+            }
+            render_framework_table(ui, &lines[start..index].join("\n"), seed, table_index);
+            table_index += 1;
+            ui.add_space(3.0);
+            continue;
+        }
+        prose.push_str(line);
+        prose.push('\n');
+        index += 1;
+    }
+    if !prose.trim().is_empty() {
+        render_markdown(ui, &prose, seed * 100 + prose_index, false);
+    }
+}
+
+fn is_framework_table_start(lines: &[&str], index: usize) -> bool {
+    let Some(line) = lines.get(index) else {
+        return false;
+    };
+    if !line.trim_start().starts_with('|') {
+        return false;
+    }
+    let Some(separator) = lines.get(index + 1) else {
+        return false;
+    };
+    let separator = separator.trim();
+    separator.starts_with('|')
+        && separator.contains("---")
+        && separator
+            .chars()
+            .all(|character| matches!(character, '|' | '-' | ':' | ' ' | '\t'))
+}
+
+fn render_framework_table(ui: &mut Ui, text: &str, seed: usize, table_index: usize) {
     Frame::new()
         .fill(theme::with_alpha(theme::surface(), 110))
-        .stroke(Stroke::new(1.0_f32, theme::with_alpha(color, 45)))
-        .corner_radius(6)
-        .inner_margin(Margin::symmetric(7, 4))
+        .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+        .corner_radius(5)
+        .inner_margin(Margin::symmetric(5, 4))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                paint_dot(ui, color);
-                ui.label(
-                    RichText::new(&layer.name)
-                        .size(10.0)
-                        .strong()
-                        .color(theme::text()),
-                )
-                .on_hover_text(&layer.role);
-                let counts = if layer.functions > 0 {
-                    format!("{} 文件 · {} 函数", layer.files, layer.functions)
-                } else {
-                    format!("{} 文件", layer.files)
-                };
-                ui.label(RichText::new(counts).size(8.5).color(theme::text_dim()));
-            });
-            if !layer.examples.is_empty() {
-                ui.add(
-                    Label::new(
-                        RichText::new(format!("例：{}", layer.examples.join("、")))
-                            .size(8.5)
-                            .color(theme::text_faint()),
-                    )
-                    .wrap(),
-                );
-            }
+            ScrollArea::horizontal()
+                .id_salt(("simple_embedded_framework_table", seed, table_index))
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.add(
+                        Label::new(
+                            RichText::new(text)
+                                .font(FontId::monospace(9.2))
+                                .color(theme::text()),
+                        )
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                    );
+                });
         });
-    ui.add_space(4.0);
 }
-
-fn arch_pattern_row(ui: &mut Ui, pattern: &crate::architecture::PatternInfo) {
-    let color = arch_confidence_color(&pattern.confidence);
+fn arch_section(ui: &mut Ui, number: &str, title: &str) {
     ui.horizontal(|ui| {
+        Frame::new()
+            .fill(theme::with_alpha(theme::accent(), 24))
+            .stroke(Stroke::new(1.0_f32, theme::with_alpha(theme::accent(), 75)))
+            .corner_radius(4)
+            .inner_margin(Margin::symmetric(5, 1))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(number)
+                        .size(8.5)
+                        .strong()
+                        .color(theme::accent()),
+                );
+            });
         ui.label(
-            RichText::new(&pattern.name)
-                .size(9.8)
+            RichText::new(title)
+                .size(11.0)
                 .strong()
                 .color(theme::text()),
         );
-        arch_badge(ui, &pattern.confidence, color);
     });
-    if !pattern.evidence.is_empty() {
-        ui.add(
-            Label::new(
-                RichText::new(&pattern.evidence)
-                    .size(8.5)
-                    .color(theme::text_faint()),
-            )
-            .wrap(),
-        );
-    }
-    ui.add_space(3.0);
+    ui.add_space(5.0);
 }
 
-fn arch_interrupt_row(
-    ui: &mut Ui,
-    interrupt: &crate::architecture::InterruptInfo,
-    root: Option<&Path>,
-    jump: &mut Option<(PathBuf, usize)>,
-) {
-    ui.horizontal(|ui| {
-        let response = ui.add(
-            Label::new(
-                RichText::new(&interrupt.handler)
-                    .size(9.6)
-                    .color(theme::accent()),
-            )
-            .sense(Sense::click()),
+#[allow(clippy::too_many_arguments)]
+fn arch_gantt(ui: &mut Ui, chart: &GanttChart) {
+    let width = ui.available_width();
+    let label_width = 74.0;
+    let track_x = label_width + 8.0;
+    let track_width = (width - track_x - 4.0).max(80.0);
+    let row_height = 15.0;
+    let row_gap = 4.0;
+    let header_height = 13.0;
+    let height = header_height + chart.rows.len() as f32 * (row_height + row_gap);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+    let painter = ui.painter();
+    let label_font = FontId::proportional(8.0);
+    let tick_font = FontId::proportional(7.0);
+    let details = chart
+        .rows
+        .iter()
+        .map(|row| {
+            let start = row
+                .segments
+                .first()
+                .map(|segment| segment.start * 100.0)
+                .unwrap_or(0.0);
+            let end = row
+                .segments
+                .last()
+                .map(|segment| segment.end * 100.0)
+                .unwrap_or(0.0);
+            if row.section.is_empty() {
+                format!("{}：{start:.0}%–{end:.0}%", row.label)
+            } else {
+                format!("{} / {}：{start:.0}%–{end:.0}%", row.section, row.label)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !details.is_empty() {
+        response.on_hover_text(details);
+    }
+
+    for index in 0..=4 {
+        let x = rect.left() + track_x + track_width * index as f32 / 4.0;
+        painter.line_segment(
+            [
+                egui::pos2(x, rect.top() + header_height - 2.0),
+                egui::pos2(x, rect.bottom()),
+            ],
+            Stroke::new(0.5_f32, theme::border_soft()),
         );
-        if response.clicked() {
-            if let Some(root) = root {
-                *jump = Some((root.join(&interrupt.file), interrupt.line));
+        painter.text(
+            egui::pos2(x, rect.top()),
+            Align2::CENTER_TOP,
+            format!("{index}"),
+            tick_font.clone(),
+            theme::text_faint(),
+        );
+    }
+
+    for (index, row) in chart.rows.iter().enumerate() {
+        let y = rect.top() + header_height + index as f32 * (row_height + row_gap);
+        painter.text(
+            egui::pos2(rect.left(), y + row_height / 2.0),
+            Align2::LEFT_CENTER,
+            truncate_chars(&row.label, 10),
+            label_font.clone(),
+            theme::text_dim(),
+        );
+        let track = Rect::from_min_size(
+            egui::pos2(rect.left() + track_x, y + 2.0),
+            egui::vec2(track_width, row_height - 4.0),
+        );
+        painter.rect_filled(
+            track,
+            CornerRadius::same(3),
+            theme::with_alpha(theme::surface(), 120),
+        );
+        let color = match row.kind {
+            GanttKind::Main => theme::accent(),
+            GanttKind::Tick => theme::success(),
+            GanttKind::Interrupt => theme::warning(),
+            GanttKind::Task => theme::info(),
+            GanttKind::Event => theme::text_dim(),
+        };
+        for segment in &row.segments {
+            let start = segment.start.clamp(0.0, 1.0);
+            let end = segment.end.clamp(start, 1.0);
+            let bar = Rect::from_min_max(
+                egui::pos2(track.left() + track.width() * start, track.top() + 2.0),
+                egui::pos2(track.left() + track.width() * end, track.bottom() - 2.0),
+            );
+            if bar.width() < 1.0 {
+                continue;
+            }
+            painter.rect_filled(bar, CornerRadius::same(2), color);
+        }
+    }
+
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 2.0);
+        for (kind, label) in [
+            (GanttKind::Main, "主循环"),
+            (GanttKind::Tick, "节拍"),
+            (GanttKind::Interrupt, "中断"),
+            (GanttKind::Task, "任务"),
+            (GanttKind::Event, "事件"),
+        ] {
+            if chart.rows.iter().any(|row| row.kind == kind) {
+                let color = match kind {
+                    GanttKind::Main => theme::accent(),
+                    GanttKind::Tick => theme::success(),
+                    GanttKind::Interrupt => theme::warning(),
+                    GanttKind::Task => theme::info(),
+                    GanttKind::Event => theme::text_dim(),
+                };
+                paint_dot(ui, color);
+                ui.label(RichText::new(label).size(8.0).color(theme::text_faint()));
             }
         }
-        response.on_hover_text(format!("跳转到 {}:{}", interrupt.file, interrupt.line));
-        arch_badge(ui, &interrupt.peripheral, theme::info());
     });
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(format!("{}:{}", short_rel(&interrupt.file), interrupt.line))
-                .size(8.3)
-                .color(theme::text_faint()),
-        );
-        if let Some(priority) = &interrupt.priority {
-            arch_badge(ui, &format!("NVIC {priority}"), theme::warning());
-        }
-    });
-    if !interrupt.calls.is_empty() {
-        ui.add(
-            Label::new(
-                RichText::new(format!("→ {}", interrupt.calls.join("、")))
-                    .size(8.5)
-                    .color(theme::text_dim()),
-            )
-            .wrap(),
-        );
-    }
-    ui.add_space(4.0);
-}
-
-fn arch_task_row(
-    ui: &mut Ui,
-    task: &crate::architecture::TaskInfo,
-    root: Option<&Path>,
-    jump: &mut Option<(PathBuf, usize)>,
-) {
-    ui.horizontal(|ui| {
-        let response = ui.add(
-            Label::new(RichText::new(&task.name).size(9.6).color(theme::accent()))
-                .sense(Sense::click()),
-        );
-        if response.clicked() {
-            if let Some(root) = root {
-                *jump = Some((root.join(&task.file), task.line));
-            }
-        }
-        response.on_hover_text(format!("跳转到 {}:{}", task.file, task.line));
-        arch_badge(ui, &task.api, theme::success());
-    });
-    let mut detail = format!("{}:{}", short_rel(&task.file), task.line);
-    if !task.detail.is_empty() {
-        detail.push_str(" · ");
-        detail.push_str(&task.detail);
-    }
-    ui.add(Label::new(RichText::new(detail).size(8.3).color(theme::text_faint())).wrap());
-    ui.add_space(4.0);
-}
-
-fn arch_badge(ui: &mut Ui, text: &str, color: Color32) {
-    Frame::new()
-        .fill(theme::with_alpha(color, 18))
-        .stroke(Stroke::new(1.0_f32, theme::with_alpha(color, 70)))
-        .corner_radius(4)
-        .inner_margin(Margin::symmetric(5, 1))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).size(8.3).color(color));
-        });
-}
-
-fn arch_bullet(ui: &mut Ui, text: &str) {
-    ui.horizontal(|ui| {
-        paint_dot(ui, theme::text_faint());
-        ui.add(Label::new(RichText::new(text).size(8.8).color(theme::text_dim())).wrap());
-    });
-}
-
-fn arch_empty_line(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(9.0).color(theme::text_faint()));
-}
-
-fn arch_confidence_color(confidence: &str) -> Color32 {
-    match confidence {
-        "高" => theme::success(),
-        "中" => theme::warning(),
-        _ => theme::text_faint(),
-    }
-}
-
-fn arch_layer_color(key: &str) -> Color32 {
-    match key {
-        "app" => theme::accent(),
-        "bsp" => theme::warning(),
-        "hal" => theme::success(),
-        "cmsis" => theme::info(),
-        _ => theme::text_dim(),
-    }
-}
-
-fn short_rel(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
 }
 
 fn reveal_at(elapsed: f32, index: usize) -> f32 {
@@ -2311,6 +2523,41 @@ impl Lcg {
     fn next(&mut self) -> f32 {
         self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         ((self.0 >> 8) & 0x00FF_FFFF) as f32 / 16_777_216.0
+    }
+}
+
+fn ai_resource_list(ui: &mut Ui, entries: &[crate::ai::ResourceEntry]) {
+    for entry in entries.iter().take(8) {
+        let response = Frame::new()
+            .fill(theme::with_alpha(theme::surface(), 100))
+            .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+            .corner_radius(5)
+            .inner_margin(Margin::symmetric(7, 4))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new(&entry.name).size(9.5).color(theme::text()));
+                ui.label(
+                    RichText::new(format!(
+                        "{} 个文件 · {} · {}",
+                        entry.files,
+                        crate::memory::format_size(entry.bytes),
+                        entry.note
+                    ))
+                    .size(8.3)
+                    .color(theme::text_faint()),
+                );
+            });
+        response
+            .response
+            .on_hover_text(crate::util::display_path(&entry.path));
+        ui.add_space(3.0);
+    }
+    if entries.len() > 8 {
+        ui.label(
+            RichText::new(format!("另有 {} 项未展开", entries.len() - 8))
+                .size(8.5)
+                .color(theme::text_faint()),
+        );
     }
 }
 

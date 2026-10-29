@@ -47,7 +47,11 @@ pub struct ChatMessage {
 pub enum AiStreamEvent {
     Reasoning(String),
     Content(String),
-    Done,
+    /// `truncated` is true when the provider hit its output limit and the
+    /// continuation retries were exhausted. The UI must not apply edits then.
+    Done {
+        truncated: bool,
+    },
     Error(String),
 }
 
@@ -110,6 +114,481 @@ pub fn embedded_skill() -> SkillBundle {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AiResourceKind {
+    Skill,
+    Reference,
+}
+
+impl AiResourceKind {
+    pub fn directory(self) -> PathBuf {
+        match self {
+            Self::Skill => crate::config::ai_skills_dir(),
+            Self::Reference => crate::config::ai_references_dir(),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Skill => "Skill",
+            Self::Reference => "参考资料",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ResourceEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub files: usize,
+    pub bytes: u64,
+    pub note: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ResourceBundle {
+    pub text: String,
+    pub files: usize,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ImportOutcome {
+    pub imported: usize,
+    pub extracted_pdfs: usize,
+    pub warnings: Vec<String>,
+}
+
+const MAX_EXTRA_SKILL_BYTES: usize = 48_000;
+const MAX_REFERENCE_BYTES: usize = 96_000;
+const MAX_RESOURCE_FILE_BYTES: usize = 32_000;
+const MAX_RESOURCE_FILES: usize = 80;
+const MAX_PDF_BYTES: u64 = 64 * 1024 * 1024;
+
+/// List the immediate children of a user resource directory for the settings
+/// dialog. Folders are counted recursively but only their summary is returned.
+pub fn scan_resources(kind: AiResourceKind) -> Vec<ResourceEntry> {
+    let directory = kind.directory();
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            let (files, bytes) = count_resource_files(&path, 0, 5_000);
+            if files == 0 {
+                continue;
+            }
+            let has_skill = path.join("SKILL.md").is_file();
+            result.push(ResourceEntry {
+                name,
+                path,
+                files,
+                bytes,
+                note: if has_skill {
+                    "含 SKILL.md".to_owned()
+                } else {
+                    "文件夹".to_owned()
+                },
+            });
+        } else if file_type.is_file() {
+            if name.to_ascii_lowercase().ends_with(".pdf.txt") {
+                let original = path.with_file_name(&name[..name.len() - 4]);
+                if original.is_file() {
+                    // The sidecar is an implementation detail; list the PDF.
+                    continue;
+                }
+            }
+            let bytes = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+            result.push(ResourceEntry {
+                name: name.clone(),
+                path,
+                files: 1,
+                bytes,
+                note: resource_note(&name),
+            });
+        }
+    }
+    result.sort_by_key(|entry| entry.name.to_ascii_lowercase());
+    result
+}
+
+/// Load imported skills for the system prompt. The result is bounded so a
+/// large imported document cannot push the project context out of the model.
+pub fn load_extra_skills() -> ResourceBundle {
+    load_resource_bundle(AiResourceKind::Skill, MAX_EXTRA_SKILL_BYTES)
+}
+
+pub fn load_references() -> ResourceBundle {
+    load_resource_bundle(AiResourceKind::Reference, MAX_REFERENCE_BYTES)
+}
+
+fn load_resource_bundle(kind: AiResourceKind, max_bytes: usize) -> ResourceBundle {
+    load_resource_dir(&kind.directory(), kind, max_bytes)
+}
+
+fn load_resource_dir(directory: &Path, kind: AiResourceKind, max_bytes: usize) -> ResourceBundle {
+    let mut files = Vec::new();
+    collect_resource_files(directory, &mut files, 0);
+    files.sort();
+    files.truncate(MAX_RESOURCE_FILES);
+    let mut bundle = ResourceBundle::default();
+    for file in files {
+        if bundle.text.len() >= max_bytes {
+            break;
+        }
+        let name = file
+            .strip_prefix(directory)
+            .unwrap_or(&file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if file
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        {
+            if !pdf_sidecar(&file).is_file() {
+                bundle.warnings.push(format!(
+                    "{name}：PDF 尚未提取文本，请重新导入或转换为 Markdown"
+                ));
+            }
+            continue;
+        }
+        if !is_resource_text(&file) {
+            continue;
+        }
+        let Ok(loaded) = read_text_file(&file) else {
+            bundle.warnings.push(format!("{name}：无法读取，已跳过"));
+            continue;
+        };
+        let body = truncate_chars(&loaded.text, MAX_RESOURCE_FILE_BYTES);
+        bundle.text.push_str("\n\n### ");
+        bundle.text.push_str(if kind == AiResourceKind::Skill {
+            "额外 skill"
+        } else {
+            "参考资料"
+        });
+        bundle.text.push_str(": ");
+        bundle.text.push_str(&name);
+        bundle.text.push('\n');
+        bundle.text.push_str(&body);
+        bundle.files += 1;
+        if bundle.text.len() > max_bytes {
+            truncate_to_boundary(&mut bundle.text, max_bytes);
+            bundle.text.push_str("\n\n[用户导入资料过长，已截断]");
+            break;
+        }
+    }
+    bundle
+}
+
+fn collect_resource_files(directory: &Path, files: &mut Vec<PathBuf>, depth: usize) {
+    if depth > 5 || files.len() >= MAX_RESOURCE_FILES {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let mut entries = entries.flatten().collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            collect_resource_files(&path, files, depth + 1);
+        } else if file_type.is_file() {
+            files.push(path);
+            if files.len() >= MAX_RESOURCE_FILES {
+                return;
+            }
+        }
+    }
+}
+
+pub fn is_resource_text(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        matches!(
+            extension.to_string_lossy().to_ascii_lowercase().as_str(),
+            "md" | "markdown"
+                | "txt"
+                | "rst"
+                | "c"
+                | "h"
+                | "cc"
+                | "cpp"
+                | "cxx"
+                | "hpp"
+                | "hh"
+                | "hxx"
+                | "json"
+                | "csv"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "ini"
+                | "log"
+                | "s"
+                | "asm"
+                | "ld"
+                | "dts"
+                | "dtsi"
+                | "ioc"
+        )
+    })
+}
+
+fn resource_note(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".pdf") {
+        "PDF".to_owned()
+    } else if lower.ends_with(".md") || lower.ends_with(".markdown") {
+        "Markdown".to_owned()
+    } else if lower.ends_with(".txt") {
+        "文本".to_owned()
+    } else {
+        "文件".to_owned()
+    }
+}
+
+fn pdf_sidecar(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "document.pdf".to_owned());
+    path.with_file_name(format!("{name}.txt"))
+}
+
+fn count_resource_files(directory: &Path, depth: usize, cap: usize) -> (usize, u64) {
+    if depth > 5 {
+        return (0, 0);
+    }
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return (0, 0);
+    };
+    for entry in entries.flatten() {
+        if count >= cap {
+            break;
+        }
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            let (nested_files, nested_bytes) = count_resource_files(&path, depth + 1, cap - count);
+            count += nested_files;
+            bytes += nested_bytes;
+        } else if file_type.is_file() {
+            count += 1;
+            bytes += entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+        }
+    }
+    (count, bytes)
+}
+
+/// Copy imported files/folders into the user resource directory and extract
+/// PDF text into sidecar `.txt` files. Returning warnings instead of failing
+/// lets the caller import several documents when one of them is unsupported.
+pub fn import_resources(
+    kind: AiResourceKind,
+    sources: &[PathBuf],
+) -> Result<ImportOutcome, String> {
+    import_resources_into(&kind.directory(), sources)
+}
+
+fn import_resources_into(directory: &Path, sources: &[PathBuf]) -> Result<ImportOutcome, String> {
+    std::fs::create_dir_all(directory)
+        .map_err(|err| format!("无法创建 {}：{err}", display_path(directory)))?;
+    let mut outcome = ImportOutcome::default();
+    for source in sources {
+        if !source.exists() {
+            outcome
+                .warnings
+                .push(format!("{} 不存在，已跳过", display_path(source)));
+            continue;
+        }
+        let destination = unique_resource_path(directory, source);
+        if source.is_dir() {
+            copy_resource_dir(source, &destination, &mut outcome)?;
+        } else {
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|err| format!("无法创建 {}：{err}", display_path(parent)))?;
+            }
+            std::fs::copy(source, &destination)
+                .map_err(|err| format!("复制 {} 失败：{err}", display_path(source)))?;
+        }
+        outcome.imported += 1;
+        extract_pdfs(&destination, &mut outcome);
+    }
+    Ok(outcome)
+}
+
+fn copy_resource_dir(
+    source: &Path,
+    destination: &Path,
+    outcome: &mut ImportOutcome,
+) -> Result<(), String> {
+    std::fs::create_dir_all(destination)
+        .map_err(|err| format!("无法创建 {}：{err}", display_path(destination)))?;
+    let Ok(entries) = std::fs::read_dir(source) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            outcome
+                .warnings
+                .push(format!("跳过符号链接 {}", display_path(&path)));
+            continue;
+        }
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_resource_dir(&path, &target, outcome)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&path, &target)
+                .map_err(|err| format!("复制 {} 失败：{err}", display_path(&path)))?;
+        }
+    }
+    Ok(())
+}
+
+fn extract_pdfs(path: &Path, outcome: &mut ImportOutcome) {
+    if path.is_dir() {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            extract_pdfs(&entry.path(), outcome);
+        }
+        return;
+    }
+    if !path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    {
+        return;
+    }
+    let sidecar = pdf_sidecar(path);
+    if sidecar.is_file() {
+        return;
+    }
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) if bytes.len() as u64 <= MAX_PDF_BYTES => bytes,
+        Ok(_) => {
+            outcome.warnings.push(format!(
+                "{}：PDF 超过 64 MB，未提取文本",
+                display_path(path)
+            ));
+            return;
+        }
+        Err(err) => {
+            outcome
+                .warnings
+                .push(format!("{}：读取 PDF 失败：{err}", display_path(path)));
+            return;
+        }
+    };
+    let extracted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pdf_extract::extract_text_from_mem(&bytes)
+    }));
+    match extracted {
+        Ok(Ok(text)) if !text.trim().is_empty() => {
+            let text = truncate_chars(&text, 400_000);
+            if let Err(err) = crate::util::write_text_file(
+                &sidecar,
+                &text,
+                crate::util::LineEnding::Lf,
+                false,
+                crate::util::TextEncoding::Utf8,
+            ) {
+                outcome
+                    .warnings
+                    .push(format!("{}：写入提取文本失败：{err}", display_path(path)));
+            } else {
+                outcome.extracted_pdfs += 1;
+            }
+        }
+        Ok(Ok(_)) => outcome.warnings.push(format!(
+            "{}：PDF 没有可提取文本（可能是扫描件）",
+            display_path(path)
+        )),
+        Ok(Err(err)) => outcome
+            .warnings
+            .push(format!("{}：PDF 文本提取失败：{err}", display_path(path))),
+        Err(_) => outcome.warnings.push(format!(
+            "{}：PDF 解析异常，已保留原文件",
+            display_path(path)
+        )),
+    }
+}
+
+fn unique_resource_path(directory: &Path, source: &Path) -> PathBuf {
+    let name = source
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "resource".to_owned());
+    let candidate = directory.join(&name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let (stem, extension) = if source.is_dir() {
+        (name.clone(), String::new())
+    } else {
+        match name.rsplit_once('.') {
+            Some((stem, extension)) => (stem.to_owned(), format!(".{extension}")),
+            None => (name.clone(), String::new()),
+        }
+    };
+    for index in 1..10_000 {
+        let suffix = if index == 1 {
+            " - 副本".to_owned()
+        } else {
+            format!(" - 副本 ({index})")
+        };
+        let candidate = directory.join(format!("{stem}{suffix}{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    directory.join(format!("{stem} - 副本{extension}"))
+}
+
+fn truncate_to_boundary(text: &mut String, max: usize) {
+    if text.len() <= max {
+        return;
+    }
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+}
+
 pub struct Context<'a> {
     pub root: &'a Path,
     pub project_name: &'a str,
@@ -122,6 +601,8 @@ pub struct Context<'a> {
     pub library_dirs: &'a [String],
     pub defines: &'a [String],
     pub skill: &'a SkillBundle,
+    pub extra_skills: &'a ResourceBundle,
+    pub references: &'a ResourceBundle,
 }
 
 /// Find `.opencode/skills/stm32-embedded-dev/SKILL.md` in the project, an
@@ -245,6 +726,30 @@ fn collect_markdown(
     Ok(())
 }
 
+fn append_resource_section(prompt: &mut String, title: &str, note: &str, text: &str, max: usize) {
+    if text.trim().is_empty() {
+        return;
+    }
+    // Keep enough room for the project context and the file-edit protocol.
+    let available = MAX_SYSTEM_PROMPT_BYTES.saturating_sub(prompt.len() + 80_000);
+    let budget = max.min(available);
+    if budget < 1_000 {
+        return;
+    }
+    prompt.push_str(title);
+    prompt.push_str(note);
+    if text.len() <= budget {
+        prompt.push_str(text);
+        return;
+    }
+    let mut end = budget;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    prompt.push_str(&text[..end]);
+    prompt.push_str("\n\n[用户导入资料过长，已截断]");
+}
+
 /// Build the system prompt sent with every AI request.
 pub fn build_system_prompt(context: &Context<'_>) -> String {
     let mut prompt = String::new();
@@ -257,6 +762,20 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
     );
     prompt.push_str("## 已加载 Skill\n\n");
     prompt.push_str(&context.skill.text);
+    append_resource_section(
+        &mut prompt,
+        "\n\n## 用户导入的额外 Skill\n\n",
+        "以下 Skill 由用户额外导入，用于补充领域知识；与 stm32-embedded-dev 冲突时，以专用 STM32 skill 和用户当前指令为准。\n",
+        &context.extra_skills.text,
+        MAX_EXTRA_SKILL_BYTES,
+    );
+    append_resource_section(
+        &mut prompt,
+        "\n\n## 用户导入的参考资料\n\n",
+        "以下资料包括芯片手册、HAL 使用说明、例程等，仅作为事实参考；与工程代码冲突时以工程现状和用户确认为准，不确定时标注待核对。\n",
+        &context.references.text,
+        MAX_REFERENCE_BYTES,
+    );
     prompt.push_str("\n\n## 工程上下文\n\n");
     let _ = writeln!(prompt, "- 工程名：{}", context.project_name);
     let _ = writeln!(prompt, "- 根目录：{}", display_path(context.root));
@@ -326,6 +845,16 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
         "dts",
         &mut appended,
     );
+    if let Some(framework) = crate::framework::find(context.root) {
+        append_file(
+            &mut prompt,
+            context.root,
+            &framework,
+            80_000,
+            "markdown",
+            &mut appended,
+        );
+    }
     if let Some(active) = context.active_file {
         append_file(
             &mut prompt,
@@ -398,18 +927,18 @@ pub fn build_system_prompt(context: &Context<'_>) -> String {
     prompt.push_str(
         "\n\n## 文件修改协议（重要）\n\n\
          你运行在 Simple embedded 的 AI 模式中，IDE 会执行你给出的文件修改。不要声称无法写入磁盘，也不要把完整代码只放在普通 Markdown 代码块里让用户手动复制。\n\n\
-         新建或整体覆盖文件，使用：\n\n\
-         ```se-file path=相对路径\n\
+         新建或整体覆盖文件，使用四个反引号（内容里可以安全包含普通的三反引号 Markdown 代码块，例如 framework.md 的 Mermaid 图）：\n\n\
+         ````se-file path=相对路径\n\
          <完整文件内容>\n\
-         ```\n\n\
-         局部修改（优先使用），使用：\n\n\
-         ```se-replace path=相对路径\n\
+         ````\n\n\
+         局部修改（优先使用），使用四个反引号：\n\n\
+         ````se-replace path=相对路径\n\
          <<<<<<< SEARCH\n\
          <当前文件中完全一致的原文，包含缩进和换行>\n\
          =======\n\
          <替换后的文本>\n\
          >>>>>>> REPLACE\n\
-         ```\n\n\
+         ````\n\n\
          规则：路径必须相对工程根目录，禁止绝对路径、`..`、`build` / `Debug` / `Release` / `out` / `target` 等生成目录；一次最多修改 20 个文件；SEARCH 必须能在当前文件中唯一匹配；不要修改 `.simple-embedded` 工程配置。IDE 会生成差异，只有用户点击“应用全部”后才会写入，写入前会备份到用户目录。skill 中要求输出代码块的步骤在 AI 模式下改用上述格式，解释文字照常输出。\n",
     );
     prompt.push_str(
@@ -848,119 +1377,173 @@ pub fn chat_stream(
             "content": message.content,
         }));
     }
-    let body = json!({
-        "model": config.model.trim(),
-        "messages": api_messages,
-        "temperature": 0.2,
-        "stream": true,
-    });
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(600))
         .build();
-    let response = agent
-        .post(&url)
-        .set("Accept", "text/event-stream")
-        .set("Content-Type", "application/json")
-        .set(
-            "Authorization",
-            &format!("Bearer {}", config.api_key.trim()),
-        )
-        .send_json(body);
-    match response {
-        Ok(response) => {
-            let content_type = response
-                .header("Content-Type")
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if content_type.contains("text/event-stream") {
-                let reader = BufReader::new(response.into_reader());
-                for line in reader.lines() {
-                    let line = match line {
-                        Ok(line) => line,
-                        Err(err) => {
-                            let _ =
-                                sender.send(AiStreamEvent::Error(format!("读取 AI 流失败：{err}")));
+    let mut continuation = 0usize;
+    loop {
+        let body = json!({
+            "model": config.model.trim(),
+            "messages": &api_messages,
+            "temperature": 0.2,
+            "stream": true,
+        });
+        let response = agent
+            .post(&url)
+            .set("Accept", "text/event-stream")
+            .set("Content-Type", "application/json")
+            .set(
+                "Authorization",
+                &format!("Bearer {}", config.api_key.trim()),
+            )
+            .send_json(body);
+        match response {
+            Ok(response) => {
+                let content_type = response
+                    .header("Content-Type")
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if content_type.contains("text/event-stream") {
+                    let mut finish_reason = None;
+                    let mut response_content = String::new();
+                    let mut saw_done = false;
+                    let reader = BufReader::new(response.into_reader());
+                    for line in reader.lines() {
+                        let line = match line {
+                            Ok(line) => line,
+                            Err(err) => {
+                                let _ = sender
+                                    .send(AiStreamEvent::Error(format!("读取 AI 流失败：{err}")));
+                                return;
+                            }
+                        };
+                        let Some(data) = line.trim_start().strip_prefix("data:") else {
+                            continue;
+                        };
+                        let data = data.trim();
+                        if data == "[DONE]" {
+                            saw_done = true;
+                            break;
+                        }
+                        if data.is_empty() {
+                            continue;
+                        }
+                        let value: Value = match serde_json::from_str(data) {
+                            Ok(value) => value,
+                            Err(_) => continue,
+                        };
+                        if let Some(error) = value.get("error") {
+                            let message = error
+                                .pointer("/message")
+                                .and_then(Value::as_str)
+                                .unwrap_or("AI 流返回错误");
+                            let _ = sender.send(AiStreamEvent::Error(message.to_owned()));
                             return;
                         }
-                    };
-                    let Some(data) = line.trim_start().strip_prefix("data:") else {
-                        continue;
-                    };
-                    let data = data.trim();
-                    if data == "[DONE]" {
-                        let _ = sender.send(AiStreamEvent::Done);
-                        return;
-                    }
-                    if data.is_empty() {
-                        continue;
-                    }
-                    let value: Value = match serde_json::from_str(data) {
-                        Ok(value) => value,
-                        Err(_) => continue,
-                    };
-                    if let Some(error) = value.get("error") {
-                        let message = error
-                            .pointer("/message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("AI 流返回错误");
-                        let _ = sender.send(AiStreamEvent::Error(message.to_owned()));
-                        return;
-                    }
-                    let (reasoning, content) = stream_parts(&value);
-                    if let Some(reasoning) = reasoning {
-                        if sender.send(AiStreamEvent::Reasoning(reasoning)).is_err() {
-                            return;
+                        if let Some(reason) = stream_finish_reason(&value) {
+                            finish_reason = Some(reason);
                         }
-                    }
-                    if let Some(content) = content {
-                        if sender.send(AiStreamEvent::Content(content)).is_err() {
-                            return;
-                        }
-                    }
-                }
-                let _ = sender.send(AiStreamEvent::Done);
-            } else {
-                match response.into_json::<Value>() {
-                    Ok(value) => {
                         let (reasoning, content) = stream_parts(&value);
                         if let Some(reasoning) = reasoning {
-                            let _ = sender.send(AiStreamEvent::Reasoning(reasoning));
+                            if sender.send(AiStreamEvent::Reasoning(reasoning)).is_err() {
+                                return;
+                            }
                         }
                         if let Some(content) = content {
-                            let _ = sender.send(AiStreamEvent::Content(content));
+                            response_content.push_str(&content);
+                            if sender.send(AiStreamEvent::Content(content)).is_err() {
+                                return;
+                            }
                         }
-                        let _ = sender.send(AiStreamEvent::Done);
                     }
-                    Err(err) => {
-                        let _ = sender
-                            .send(AiStreamEvent::Error(format!("API 返回内容无法解析：{err}")));
+                    if matches!(
+                        finish_reason.as_deref(),
+                        Some("length") | Some("max_tokens")
+                    ) {
+                        if continuation < MAX_STREAM_CONTINUATIONS {
+                            continuation += 1;
+                            if response_content.is_empty() {
+                                let _ = sender.send(AiStreamEvent::Done { truncated: true });
+                                return;
+                            }
+                            api_messages.push(json!({
+                                "role": "assistant",
+                                "content": response_content,
+                            }));
+                            api_messages.push(json!({
+                                "role": "user",
+                                "content": STREAM_CONTINUE_PROMPT,
+                            }));
+                            continue;
+                        }
+                        let _ = sender.send(AiStreamEvent::Done { truncated: true });
+                        return;
                     }
+                    let truncated = match finish_reason.as_deref() {
+                        Some("stop") => false,
+                        Some(_) => true,
+                        None => !saw_done,
+                    };
+                    let _ = sender.send(AiStreamEvent::Done { truncated });
+                    return;
+                } else {
+                    match response.into_json::<Value>() {
+                        Ok(value) => {
+                            let (reasoning, content) = stream_parts(&value);
+                            if let Some(reasoning) = reasoning {
+                                let _ = sender.send(AiStreamEvent::Reasoning(reasoning));
+                            }
+                            if let Some(content) = content {
+                                let _ = sender.send(AiStreamEvent::Content(content));
+                            }
+                            let _ = sender.send(AiStreamEvent::Done { truncated: false });
+                        }
+                        Err(err) => {
+                            let _ = sender
+                                .send(AiStreamEvent::Error(format!("API 返回内容无法解析：{err}")));
+                        }
+                    }
+                    return;
                 }
             }
-        }
-        Err(ureq::Error::Status(code, response)) => {
-            let body = response.into_string().unwrap_or_default();
-            let message = api_error_message(&body);
-            if (code == 400 || code == 422) && message.to_ascii_lowercase().contains("stream") {
-                match chat(config, system_prompt, messages) {
-                    Ok(content) => {
-                        let _ = sender.send(AiStreamEvent::Content(content));
-                        let _ = sender.send(AiStreamEvent::Done);
+            Err(ureq::Error::Status(code, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                let message = api_error_message(&body);
+                if (code == 400 || code == 422) && message.to_ascii_lowercase().contains("stream") {
+                    match chat(config, system_prompt, messages) {
+                        Ok(content) => {
+                            let _ = sender.send(AiStreamEvent::Content(content));
+                            let _ = sender.send(AiStreamEvent::Done { truncated: false });
+                        }
+                        Err(err) => {
+                            let _ = sender.send(AiStreamEvent::Error(err));
+                        }
                     }
-                    Err(err) => {
-                        let _ = sender.send(AiStreamEvent::Error(err));
-                    }
+                } else {
+                    let _ = sender.send(AiStreamEvent::Error(format!(
+                        "API 请求失败（HTTP {code}）：{message}"
+                    )));
                 }
-            } else {
-                let _ = sender.send(AiStreamEvent::Error(format!(
-                    "API 请求失败（HTTP {code}）：{message}"
-                )));
+                return;
             }
-        }
-        Err(err) => {
-            let _ = sender.send(AiStreamEvent::Error(format!("AI 网络请求失败：{err}")));
+            Err(err) => {
+                let _ = sender.send(AiStreamEvent::Error(format!("AI 网络请求失败：{err}")));
+                return;
+            }
         }
     }
+}
+
+const MAX_STREAM_CONTINUATIONS: usize = 8;
+const STREAM_CONTINUE_PROMPT: &str =
+    "上一条回复因输出长度限制被截断。请严格从中断处继续输出剩余内容，不要重复已经输出的字符或代码块，不要重新开始文件，不要添加解释；如果正在写 se-file 代码块，请先补全代码和结束围栏。";
+
+fn stream_finish_reason(value: &Value) -> Option<String> {
+    value
+        .pointer("/choices/0/finish_reason")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn stream_parts(value: &Value) -> (Option<String>, Option<String>) {
@@ -1064,8 +1647,24 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
-            let mut request = [0u8; 4096];
-            let _ = socket.read(&mut request);
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 1024];
+            loop {
+                let read = socket.read(&mut buffer).unwrap_or(0);
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+                if request.len() > 16 * 1024 {
+                    break;
+                }
+            }
+            // Let the client finish writing its tiny JSON body before the
+            // mock server replies and closes the socket.
+            std::thread::sleep(Duration::from_millis(5));
             let response = concat!(
                 "HTTP/1.1 200 OK\r\n",
                 "Content-Type: text/event-stream\r\n",
@@ -1087,13 +1686,86 @@ mod tests {
         chat_stream(&config, "system", &[], sender);
         server.join().unwrap();
         let events = receiver.try_iter().collect::<Vec<_>>();
-        assert!(events.iter().any(|event| {
-            matches!(event, AiStreamEvent::Reasoning(text) if text.as_str() == "think ")
-        }));
-        assert!(events.iter().any(|event| {
-            matches!(event, AiStreamEvent::Content(text) if text.as_str() == "answer")
-        }));
-        assert!(matches!(events.last(), Some(AiStreamEvent::Done)));
+        assert!(
+            events.iter().any(|event| {
+                matches!(event, AiStreamEvent::Reasoning(text) if text.as_str() == "think ")
+            }),
+            "events: {events:?}"
+        );
+        assert!(
+            events.iter().any(|event| {
+                matches!(event, AiStreamEvent::Content(text) if text.as_str() == "answer")
+            }),
+            "events: {events:?}"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(AiStreamEvent::Done { truncated: false })
+        ));
+    }
+
+    #[test]
+    fn continues_when_provider_reports_length() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for attempt in 0..2 {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                loop {
+                    let read = socket.read(&mut buffer).unwrap_or(0);
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(5));
+                let body = if attempt == 0 {
+                    concat!(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"length\"}]}\n\n",
+                        "data: [DONE]\n\n"
+                    )
+                } else {
+                    concat!(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\" rest\"},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n"
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}"
+                );
+                socket.write_all(response.as_bytes()).unwrap();
+                socket.flush().unwrap();
+            }
+        });
+        let config = AiConfig {
+            api_key: "test".to_owned(),
+            base_url: format!("http://{address}/v1"),
+            model: "test".to_owned(),
+        };
+        let (sender, receiver) = mpsc::channel();
+        chat_stream(&config, "system", &[], sender);
+        server.join().unwrap();
+        let events = receiver.try_iter().collect::<Vec<_>>();
+        let content = events
+            .iter()
+            .filter_map(|event| match event {
+                AiStreamEvent::Content(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(content, "partial rest");
+        assert!(matches!(
+            events.last(),
+            Some(AiStreamEvent::Done { truncated: false })
+        ));
     }
 
     #[test]
@@ -1148,6 +1820,14 @@ mod tests {
             device: Some("STM32G431CBTx".to_owned()),
             ..ProjectMeta::default()
         };
+        let extra_skills = ResourceBundle {
+            text: "extra skill marker".to_owned(),
+            ..ResourceBundle::default()
+        };
+        let references = ResourceBundle {
+            text: "reference marker".to_owned(),
+            ..ResourceBundle::default()
+        };
         let context = Context {
             root: dir.path(),
             project_name: "demo",
@@ -1160,6 +1840,8 @@ mod tests {
             library_dirs: &[],
             defines: &[],
             skill: &bundle,
+            extra_skills: &extra_skills,
+            references: &references,
         };
         let prompt = build_system_prompt(&context);
         assert!(prompt.contains("STM32G431CBTx"));
@@ -1169,5 +1851,58 @@ mod tests {
         assert!(prompt.contains("gpio_marker"));
         assert!(prompt.contains("se-file"));
         assert!(prompt.contains("se-replace"));
+        assert!(prompt.contains("用户导入的额外 Skill"));
+        assert!(prompt.contains("extra skill marker"));
+        assert!(prompt.contains("用户导入的参考资料"));
+        assert!(prompt.contains("reference marker"));
+    }
+
+    #[test]
+    fn loads_imported_skill_and_reference_text() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("hal-notes/SKILL.md"),
+            "# HAL notes\nuse HAL_UART_Transmit\n",
+        );
+        let bundle = load_resource_dir(dir.path(), AiResourceKind::Skill, MAX_EXTRA_SKILL_BYTES);
+        assert_eq!(bundle.files, 1);
+        assert!(bundle.text.contains("HAL_UART_Transmit"));
+        assert!(bundle.text.contains("hal-notes/SKILL.md"));
+    }
+
+    #[test]
+    fn imported_pdf_text_sidecar_keeps_original_extension() {
+        let path = Path::new("rm0008.pdf");
+        assert_eq!(
+            pdf_sidecar(path).file_name().unwrap().to_string_lossy(),
+            "rm0008.pdf.txt"
+        );
+    }
+
+    #[test]
+    fn unique_resource_names_avoid_overwriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("manual.pdf");
+        write(&source, "pdf placeholder");
+        let first = unique_resource_path(&dir.path().join("imports"), &source);
+        assert_eq!(first.file_name().unwrap(), "manual.pdf");
+        std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+        std::fs::write(&first, "existing").unwrap();
+        let second = unique_resource_path(&dir.path().join("imports"), &source);
+        assert_eq!(second.file_name().unwrap(), "manual - 副本.pdf");
+    }
+
+    #[test]
+    fn imports_files_and_folders_into_resource_directory() {
+        let source = tempfile::tempdir().unwrap();
+        write(&source.path().join("hal.md"), "# HAL\n");
+        write(&source.path().join("skill/SKILL.md"), "# Skill\n");
+        let destination = tempfile::tempdir().unwrap();
+        let imported = source.path().join("hal.md");
+        let skill = source.path().join("skill");
+        let outcome = import_resources_into(destination.path(), &[imported, skill]).unwrap();
+        assert_eq!(outcome.imported, 2);
+        assert!(destination.path().join("hal.md").is_file());
+        assert!(destination.path().join("skill/SKILL.md").is_file());
     }
 }

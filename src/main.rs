@@ -3,7 +3,6 @@
 mod ai;
 mod ai_edit;
 mod app;
-mod architecture;
 mod arraygen;
 mod brackets;
 mod build;
@@ -18,6 +17,7 @@ mod file_tree;
 mod flash;
 mod fold;
 mod formatting;
+mod framework;
 mod git;
 mod hexview;
 mod highlight;

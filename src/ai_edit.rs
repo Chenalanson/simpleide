@@ -174,38 +174,69 @@ pub fn merge_edits(edits: Vec<AiEdit>) -> Vec<AiEdit> {
     merged
 }
 
+/// Detect an edit fence that never received its closing ```. Providers that
+/// stop at an output-token limit often leave the last file block half-written;
+/// applying it would overwrite the file with truncated content.
+pub fn incomplete_edit_block(text: &str) -> bool {
+    let mut open_fence: Option<usize> = None;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let ticks = trimmed.chars().take_while(|ch| *ch == '`').count();
+        if let Some(open) = open_fence {
+            if ticks >= open && trimmed[ticks..].trim().is_empty() {
+                open_fence = None;
+            }
+            continue;
+        }
+        if ticks < 3 {
+            continue;
+        }
+        let tag = trimmed[ticks..].trim_start();
+        let tag = tag.split_whitespace().next().unwrap_or("");
+        if matches!(tag, "se-file" | "se-write" | "se-replace") {
+            open_fence = Some(ticks);
+        }
+    }
+    open_fence.is_some()
+}
+
 pub fn parse_edits(text: &str) -> ParsedEdits {
     let mut cleaned = String::new();
     let mut edits = Vec::new();
-    let mut lines = text.split_inclusive('\n');
-    while let Some(line) = lines.next() {
+    let lines = text.split_inclusive('\n').collect::<Vec<_>>();
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = lines[index];
         let trimmed = line.trim_start();
-        let Some((tag, attrs)) = fence_header(trimmed) else {
+        let Some((fence_len, tag, attrs)) = fence_header(trimmed) else {
             cleaned.push_str(line);
+            index += 1;
             continue;
         };
         if !matches!(tag, "se-file" | "se-write" | "se-replace") {
             cleaned.push_str(line);
-            continue;
-        }
-        let mut body = String::new();
-        let mut closed = false;
-        for body_line in lines.by_ref() {
-            if body_line.trim_start().starts_with("```") {
-                closed = true;
-                break;
-            }
-            body.push_str(body_line);
-        }
-        if !closed {
-            // Do not guess where a malformed block ends; keep it visible and
-            // let the user ask the model again instead of proposing a huge
-            // accidental overwrite.
-            cleaned.push_str(line);
-            cleaned.push_str(&body);
+            index += 1;
             continue;
         }
         let path = parse_path_attr(attrs).unwrap_or_default();
+        // Markdown files commonly contain their own triple-backtick Mermaid
+        // blocks. For the legacy three-backtick form, take the last fence
+        // before the next edit block so an inner diagram does not cut the file.
+        let close = if fence_len == 3 && path.to_ascii_lowercase().ends_with(".md") {
+            find_last_fence(&lines, index + 1, fence_len)
+        } else {
+            find_first_fence(&lines, index + 1, fence_len)
+        };
+        let Some(close) = close else {
+            // Do not guess where a malformed block ends; keep it visible and
+            // let the user ask the model again instead of proposing a huge
+            // accidental overwrite.
+            for line in &lines[index..] {
+                cleaned.push_str(line);
+            }
+            break;
+        };
+        let body = lines[index + 1..close].concat();
         if tag == "se-replace" {
             edits.push(AiEdit::replace(path, parse_pairs(&body)));
         } else {
@@ -214,6 +245,7 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
         if !cleaned.ends_with('\n') && !cleaned.is_empty() {
             cleaned.push('\n');
         }
+        index = close + 1;
     }
     ParsedEdits {
         text: cleaned,
@@ -221,15 +253,40 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
     }
 }
 
-fn fence_header(line: &str) -> Option<(&str, &str)> {
-    let rest = line.strip_prefix("```")?;
-    let rest = rest.trim_start();
+fn find_first_fence(lines: &[&str], start: usize, fence_len: usize) -> Option<usize> {
+    (start..lines.len()).find(|index| is_closing_fence(lines[*index], fence_len))
+}
+
+fn find_last_fence(lines: &[&str], start: usize, fence_len: usize) -> Option<usize> {
+    let limit = (start..lines.len())
+        .find(|index| {
+            fence_header(lines[*index].trim_start())
+                .is_some_and(|(_, tag, _)| matches!(tag, "se-file" | "se-write" | "se-replace"))
+        })
+        .unwrap_or(lines.len());
+    (start..limit)
+        .rev()
+        .find(|index| is_closing_fence(lines[*index], fence_len))
+}
+
+fn is_closing_fence(line: &str, fence_len: usize) -> bool {
+    let trimmed = line.trim_start();
+    let ticks = trimmed.chars().take_while(|ch| *ch == '`').count();
+    ticks >= fence_len && trimmed[ticks..].trim().is_empty()
+}
+
+fn fence_header(line: &str) -> Option<(usize, &str, &str)> {
+    let ticks = line.chars().take_while(|ch| *ch == '`').count();
+    if ticks < 3 {
+        return None;
+    }
+    let rest = line[ticks..].trim_start();
     let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
     let tag = &rest[..end];
     if !tag.starts_with("se-") {
         return None;
     }
-    Some((tag, rest[end..].trim()))
+    Some((ticks, tag, rest[end..].trim()))
 }
 
 fn parse_path_attr(attrs: &str) -> Option<String> {
@@ -487,5 +544,39 @@ mod tests {
         assert!(edit.base_hash.is_none());
         assert_eq!(edit.resolved.as_deref(), Some("/ {\n};\n"));
         assert!(edit.diff.iter().all(|line| line.tag == DiffTag::Add));
+    }
+
+    #[test]
+    fn detects_unclosed_edit_fence() {
+        assert!(incomplete_edit_block(
+            "```se-file path=framework.md\n# incomplete\n"
+        ));
+        assert!(incomplete_edit_block(
+            "```se-replace path=main.c\n<<<<<<< SEARCH\na\n"
+        ));
+        assert!(!incomplete_edit_block(
+            "```se-file path=main.c\nint main(void) {}\n```\n"
+        ));
+        assert!(!incomplete_edit_block("普通回复\n```c\nint x;\n```\n"));
+    }
+
+    #[test]
+    fn legacy_three_backtick_markdown_keeps_inner_fences() {
+        let reply = "```se-file path=docs/framework.md\n# Doc\n\n```mermaid\ngantt\n```\n\n## 2. 软件架构\n- 前后台\n```\n";
+        let parsed = parse_edits(reply);
+        assert_eq!(parsed.edits.len(), 1);
+        assert!(parsed.edits[0].content.contains("## 2. 软件架构"));
+        assert!(parsed.edits[0].content.contains("```mermaid"));
+    }
+
+    #[test]
+    fn four_backtick_file_can_contain_markdown_fences() {
+        let reply = "````se-file path=framework.md\n# Doc\n\n```mermaid\ngantt\n```\n\n````\n";
+        let parsed = parse_edits(reply);
+        assert_eq!(parsed.edits.len(), 1);
+        assert_eq!(parsed.edits[0].path, "framework.md");
+        assert!(parsed.edits[0].content.contains("```mermaid"));
+        assert!(parsed.edits[0].content.contains("gantt"));
+        assert!(!incomplete_edit_block(reply));
     }
 }

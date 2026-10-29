@@ -1564,6 +1564,17 @@ pub fn settings_path() -> PathBuf {
     config_dir().join("settings.json")
 }
 
+/// User-wide imported AI skills. Each immediate child is either a skill folder
+/// (usually containing SKILL.md) or a standalone Markdown/text file.
+pub fn ai_skills_dir() -> PathBuf {
+    config_dir().join("ai").join("skills")
+}
+
+/// User-wide reference material (chip manuals, HAL guides, examples).
+pub fn ai_references_dir() -> PathBuf {
+    config_dir().join("ai").join("references")
+}
+
 fn config_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {

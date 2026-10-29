@@ -780,12 +780,18 @@ struct AiState {
     skill_builtin: bool,
     fog_texture: Option<egui::TextureHandle>,
     window_layered: bool,
-    architecture: Option<crate::architecture::ArchitectureReport>,
-    architecture_receiver:
-        Option<Receiver<Result<crate::architecture::ArchitectureReport, String>>>,
-    architecture_root: Option<PathBuf>,
-    architecture_error: Option<String>,
-    architecture_dirty: bool,
+    framework: Option<crate::framework::FrameworkDoc>,
+    framework_path: Option<PathBuf>,
+    framework_error: Option<String>,
+    framework_checked_at: Option<Instant>,
+    framework_mtime: Option<SystemTime>,
+    framework_missing: bool,
+    extra_skills: Vec<crate::ai::ResourceEntry>,
+    extra_references: Vec<crate::ai::ResourceEntry>,
+    import_receiver: Option<Receiver<Result<crate::ai::ImportOutcome, String>>>,
+    import_kind: Option<crate::ai::AiResourceKind>,
+    import_status: Option<String>,
+    import_error: Option<String>,
 }
 
 struct AiSettingsDraft {
@@ -1121,6 +1127,9 @@ pub struct App {
     report: ReportState,
     ai: AiState,
     ai_settings_draft: Option<AiSettingsDraft>,
+    /// Zoom factor to restore when leaving AI mode. Kept outside `AiState` so
+    /// switching projects cannot lose the user's normal editor zoom.
+    ai_zoom_before: Option<f32>,
     hex: HexState,
     array: ArrayState,
     debug: DebugState,
@@ -1227,6 +1236,7 @@ impl App {
             report: ReportState::default(),
             ai: AiState::default(),
             ai_settings_draft: None,
+            ai_zoom_before: None,
             hex: HexState::default(),
             array: ArrayState::default(),
             debug: DebugState::default(),
@@ -4160,9 +4170,6 @@ impl App {
                 if same_root {
                     self.relations.index = Some(Arc::new(index));
                     self.relations.error = None;
-                    if self.ai.enabled {
-                        self.refresh_ai_architecture();
-                    }
                 }
                 self.relations.receiver = None;
                 ctx.request_repaint();
@@ -4342,7 +4349,7 @@ impl App {
         self.ai.context_file = self.active_document().map(|doc| doc.path.clone());
         self.ai.focus_input = true;
         self.refresh_ai_skill();
-        self.refresh_ai_architecture();
+        self.refresh_ai_framework(true);
         self.ai.transition = Some(AiTransition {
             started: Instant::now(),
             from: self.last_editor_rect.unwrap_or(egui::Rect::NOTHING),
@@ -4388,90 +4395,237 @@ impl App {
         }
     }
 
-    fn refresh_ai_architecture(&mut self) {
-        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
-            self.ai.architecture = None;
-            self.ai.architecture_receiver = None;
-            self.ai.architecture_root = None;
-            self.ai.architecture_error = None;
-            self.ai.architecture_dirty = false;
-            return;
-        };
-        if self.ai.architecture_receiver.is_some() {
-            self.ai.architecture_dirty = true;
+    fn refresh_ai_resources(&mut self) {
+        self.ai.extra_skills = crate::ai::scan_resources(crate::ai::AiResourceKind::Skill);
+        self.ai.extra_references = crate::ai::scan_resources(crate::ai::AiResourceKind::Reference);
+    }
+
+    fn start_ai_import(&mut self, kind: crate::ai::AiResourceKind, sources: Vec<PathBuf>) {
+        if sources.is_empty() {
             return;
         }
-        let relation = self.relations.index.clone();
-        let respect_gitignore = self.settings.respect_gitignore;
-        let ignore_patterns = self.settings.ignore_patterns.clone();
+        if self.ai.import_receiver.is_some() {
+            self.ai.import_status = Some("上一项导入仍在进行，请稍候…".to_owned());
+            return;
+        }
         let (sender, receiver) = mpsc::channel();
-        self.ai.architecture_receiver = Some(receiver);
-        self.ai.architecture_root = Some(root.clone());
-        self.ai.architecture_error = None;
-        self.ai.architecture_dirty = false;
+        self.ai.import_receiver = Some(receiver);
+        self.ai.import_kind = Some(kind);
+        self.ai.import_status = Some(format!("正在导入 {}（PDF 会自动提取文本）…", kind.label()));
+        self.ai.import_error = None;
         let spawned = std::thread::Builder::new()
-            .name("simple-embedded-architecture".to_owned())
+            .name("simple-embedded-ai-import".to_owned())
             .spawn(move || {
-                let ignore = IgnoreRules::load(&root, respect_gitignore, &ignore_patterns);
-                let result = crate::architecture::analyze(&root, relation.as_deref(), &ignore);
+                let result = crate::ai::import_resources(kind, &sources);
                 let _ = sender.send(result);
             });
         if let Err(err) = spawned {
-            self.ai.architecture_receiver = None;
-            self.ai.architecture_error = Some(format!("无法启动架构分析：{err}"));
+            self.ai.import_receiver = None;
+            self.ai.import_kind = None;
+            self.ai.import_status = None;
+            self.ai.import_error = Some(format!("无法启动导入线程：{err}"));
         }
     }
 
-    fn poll_ai_architecture(&mut self, ctx: &egui::Context) {
+    fn poll_ai_import(&mut self, ctx: &egui::Context) {
         let received = self
             .ai
-            .architecture_receiver
+            .import_receiver
             .as_ref()
             .map(|receiver| receiver.try_recv());
         match received {
-            Some(Ok(Ok(report))) => {
-                let same_root = self.project.as_ref().is_some_and(|project| {
-                    self.ai
-                        .architecture_root
-                        .as_ref()
-                        .is_some_and(|root| same_path(root, &project.root))
-                });
-                if same_root {
-                    self.ai.architecture = Some(report);
-                    self.ai.architecture_error = None;
+            Some(Ok(Ok(outcome))) => {
+                let kind = self.ai.import_kind.take();
+                self.ai.import_receiver = None;
+                self.refresh_ai_resources();
+                let label = kind.map_or("资源", |kind| kind.label());
+                let mut status = format!(
+                    "已导入 {label}：{} 项{}",
+                    outcome.imported,
+                    if outcome.extracted_pdfs > 0 {
+                        format!("，提取 PDF {} 篇", outcome.extracted_pdfs)
+                    } else {
+                        String::new()
+                    }
+                );
+                if !outcome.warnings.is_empty() {
+                    status.push_str(&format!(
+                        "；{} 条提示：{}",
+                        outcome.warnings.len(),
+                        outcome
+                            .warnings
+                            .iter()
+                            .take(3)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join("；")
+                    ));
+                    self.set_toast(
+                        format!("导入完成，但有 {} 条提示", outcome.warnings.len()),
+                        Severity::Warning,
+                    );
                 } else {
-                    self.ai.architecture = None;
+                    self.set_toast("AI 资源导入完成", Severity::Success);
                 }
-                self.ai.architecture_receiver = None;
-                if self.ai.architecture_dirty {
-                    self.ai.architecture_dirty = false;
-                    self.refresh_ai_architecture();
-                }
+                self.ai.import_status = Some(status);
+                self.ai.import_error = None;
                 ctx.request_repaint();
             }
             Some(Ok(Err(err))) => {
-                self.ai.architecture_receiver = None;
-                self.ai.architecture_error = Some(err);
-                if self.ai.architecture_dirty {
-                    self.ai.architecture_dirty = false;
-                    self.refresh_ai_architecture();
-                }
+                self.ai.import_receiver = None;
+                self.ai.import_kind = None;
+                self.ai.import_status = None;
+                self.ai.import_error = Some(err);
                 ctx.request_repaint();
             }
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
-                self.ai.architecture_receiver = None;
-                self.ai.architecture_error = Some("架构分析线程已结束".to_owned());
-                if self.ai.architecture_dirty {
-                    self.ai.architecture_dirty = false;
-                    self.refresh_ai_architecture();
-                }
+                self.ai.import_receiver = None;
+                self.ai.import_kind = None;
+                self.ai.import_status = None;
+                self.ai.import_error = Some("AI 资源导入线程已结束".to_owned());
                 ctx.request_repaint();
             }
             Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
-                ctx.request_repaint_after(Duration::from_millis(120));
+                ctx.request_repaint_after(Duration::from_millis(150));
             }
             None => {}
         }
+    }
+
+    fn import_ai_skill_folder(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("导入 Skill 文件夹")
+            .pick_folder()
+        {
+            self.start_ai_import(crate::ai::AiResourceKind::Skill, vec![path]);
+        }
+    }
+
+    fn import_ai_skill_files(&mut self) {
+        if let Some(paths) = rfd::FileDialog::new()
+            .set_title("导入 Skill 文件")
+            .add_filter("Skill", &["md", "markdown", "txt"])
+            .pick_files()
+        {
+            self.start_ai_import(crate::ai::AiResourceKind::Skill, paths);
+        }
+    }
+
+    fn import_ai_reference_files(&mut self) {
+        if let Some(paths) = rfd::FileDialog::new()
+            .set_title("导入参考资料")
+            .add_filter(
+                "参考资料",
+                &[
+                    "pdf", "md", "markdown", "txt", "rst", "c", "h", "cpp", "hpp", "json", "csv",
+                    "yaml", "yml", "toml", "log",
+                ],
+            )
+            .pick_files()
+        {
+            self.start_ai_import(crate::ai::AiResourceKind::Reference, paths);
+        }
+    }
+
+    fn import_ai_reference_folder(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("导入参考资料文件夹")
+            .pick_folder()
+        {
+            self.start_ai_import(crate::ai::AiResourceKind::Reference, vec![path]);
+        }
+    }
+
+    fn open_ai_resource_dir(&self, kind: crate::ai::AiResourceKind) {
+        let directory = kind.directory();
+        if let Err(err) = std::fs::create_dir_all(&directory) {
+            eprintln!("Could not create {}: {err}", directory.display());
+            return;
+        }
+        util::open_in_file_manager(&directory);
+    }
+
+    fn refresh_ai_framework(&mut self, force: bool) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.ai.framework = None;
+            self.ai.framework_path = None;
+            self.ai.framework_error = None;
+            self.ai.framework_mtime = None;
+            self.ai.framework_missing = false;
+            self.ai.framework_checked_at = None;
+            return;
+        };
+        let checked_at = Instant::now();
+        self.ai.framework_checked_at = Some(checked_at);
+        let existing = if force {
+            None
+        } else {
+            self.ai
+                .framework_path
+                .as_ref()
+                .filter(|path| path.is_file())
+                .cloned()
+        };
+        let Some(path) = existing.or_else(|| crate::framework::find(&root)) else {
+            self.ai.framework = None;
+            self.ai.framework_path = None;
+            self.ai.framework_error = None;
+            self.ai.framework_mtime = None;
+            self.ai.framework_missing = true;
+            return;
+        };
+        let mtime = std::fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        let same = self.ai.framework_path.as_ref() == Some(&path)
+            && self.ai.framework_mtime == mtime
+            && (self.ai.framework.is_some() || self.ai.framework_error.is_some());
+        if !force && same {
+            self.ai.framework_missing = false;
+            return;
+        }
+        match crate::framework::load(&path) {
+            Ok(doc) => {
+                self.ai.framework = Some(doc);
+                self.ai.framework_path = Some(path);
+                self.ai.framework_error = None;
+                self.ai.framework_mtime = mtime;
+                self.ai.framework_missing = false;
+            }
+            Err(err) => {
+                self.ai.framework = None;
+                self.ai.framework_path = Some(path);
+                self.ai.framework_error = Some(err);
+                self.ai.framework_mtime = mtime;
+                self.ai.framework_missing = false;
+            }
+        }
+    }
+
+    fn poll_ai_framework(&mut self, ctx: &egui::Context) {
+        let due = self
+            .ai
+            .framework_checked_at
+            .is_none_or(|checked| checked.elapsed() >= Duration::from_millis(800));
+        if due {
+            self.refresh_ai_framework(false);
+        }
+        ctx.request_repaint_after(Duration::from_millis(800));
+    }
+
+    fn request_ai_framework(&mut self) {
+        self.ai.input = "请使用 stm32-embedded-dev skill 的 S3 架构确认和 framework-template.md，分析当前工程并生成/补全工程根目录的 framework.md。必须包含三章：1 分层架构；2 软件架构（2.1 执行范式、2.2 调度模式、2.3 设计模式）；3 运行视图（3.1 启动调用链、3.2 主循环调度时间线 Mermaid gantt、3.3 中断来源与抢占关系表、3.4 关键事件上下文链）。如果 framework.md 已存在但不完整，只补全缺失章节，保留已有正确内容，不要整份重写；不要改其他代码。输出较长时优先使用 se-replace 按小节补全。".to_owned();
+        self.ai.focus_input = true;
+        self.send_ai_message();
+    }
+
+    fn open_ai_framework(&mut self) {
+        let Some(path) = self.ai.framework_path.clone() else {
+            return;
+        };
+        self.exit_ai_mode();
+        self.open_file(path);
+        self.focus_editor = true;
     }
 
     fn open_ai_settings(&mut self) {
@@ -4479,6 +4633,7 @@ impl App {
             return;
         }
         self.refresh_ai_skill();
+        self.refresh_ai_resources();
         self.ai_settings_draft = Some(AiSettingsDraft {
             api_key: self.settings.ai_api_key.clone(),
             base_url: self.settings.ai_base_url.clone(),
@@ -4528,6 +4683,8 @@ impl App {
             .as_ref()
             .map(|project| project.name.clone())
             .unwrap_or_default();
+        let extra_skills = crate::ai::load_extra_skills();
+        let references = crate::ai::load_references();
         let system_prompt = crate::ai::build_system_prompt(&crate::ai::Context {
             root: &root,
             project_name: &project_name,
@@ -4540,6 +4697,8 @@ impl App {
             library_dirs: self.effective_library_dirs(),
             defines: self.effective_defines(),
             skill: &skill,
+            extra_skills: &extra_skills,
+            references: &references,
         });
         self.ai
             .messages
@@ -4625,7 +4784,7 @@ impl App {
         }
     }
 
-    fn finish_ai_stream(&mut self, interrupted: bool) {
+    fn finish_ai_stream(&mut self, interrupted: bool, truncated: bool) {
         let Some(index) = self
             .ai
             .messages
@@ -4636,14 +4795,21 @@ impl App {
         };
         let raw = self.ai.messages[index].content.clone();
         let reasoning = self.ai.messages[index].reasoning.clone();
-        if interrupted {
+        if interrupted || truncated || crate::ai_edit::incomplete_edit_block(&raw) {
+            let reason = if truncated {
+                "[AI 输出达到长度上限，已停止；未应用任何文件修改]"
+            } else if interrupted {
+                "[AI 输出中断；未应用任何文件修改]"
+            } else {
+                "[文件修改块不完整；为避免写入截断内容，未应用任何修改]"
+            };
             let message = &mut self.ai.messages[index];
             message.streaming = false;
             message.error = true;
             message.content = if raw.trim().is_empty() {
-                "AI 输出中断，未收到内容".to_owned()
+                format!("AI 输出不完整，未收到可用内容。{reason}")
             } else {
-                format!("{raw}\n\n[AI 输出中断]")
+                format!("{raw}\n\n{reason}")
             };
             return;
         }
@@ -4680,6 +4846,7 @@ impl App {
     }
 
     fn poll_ai(&mut self, ctx: &egui::Context) {
+        self.poll_ai_import(ctx);
         let mut events = Vec::new();
         let mut disconnected = false;
         if let Some(receiver) = &self.ai.receiver {
@@ -4701,7 +4868,7 @@ impl App {
             return;
         }
 
-        let mut done = false;
+        let mut done_truncated = None;
         let mut errored = false;
         for event in events {
             match event {
@@ -4727,8 +4894,8 @@ impl App {
                         message.content.push_str(&delta);
                     }
                 }
-                crate::ai::AiStreamEvent::Done => {
-                    done = true;
+                crate::ai::AiStreamEvent::Done { truncated } => {
+                    done_truncated = Some(truncated);
                     break;
                 }
                 crate::ai::AiStreamEvent::Error(err) => {
@@ -4754,17 +4921,17 @@ impl App {
                 }
             }
         }
-        if done {
+        if let Some(truncated) = done_truncated {
             self.ai.receiver = None;
             self.ai.sending = false;
-            self.finish_ai_stream(false);
+            self.finish_ai_stream(false, truncated);
         } else if errored {
             self.ai.receiver = None;
             self.ai.sending = false;
         } else if disconnected {
             self.ai.receiver = None;
             self.ai.sending = false;
-            self.finish_ai_stream(true);
+            self.finish_ai_stream(true, false);
         } else if self.ai.receiver.is_some() {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
@@ -4954,6 +5121,7 @@ impl App {
         self.symbols.scanned = false;
         self.relations = RelationState::default();
         self.start_relations_scan();
+        self.refresh_ai_framework(true);
         self.find.dirty = true;
         self.set_toast(
             format!(
@@ -7870,7 +8038,11 @@ impl App {
             }
         }
         if open_settings {
-            self.open_settings();
+            if self.ai.enabled {
+                self.open_ai_settings();
+            } else {
+                self.open_settings();
+            }
         }
         if bookmark_toggle {
             self.toggle_bookmark();
@@ -9417,6 +9589,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         crate::apply_pending_icons();
         let ctx = ui.ctx().clone();
+        if !self.ai.enabled {
+            if let Some(previous) = self.ai_zoom_before.take() {
+                ctx.set_zoom_factor(previous);
+            }
+        }
         if self.build.poll() {
             self.report_link_problem();
         }

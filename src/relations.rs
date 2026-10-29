@@ -407,12 +407,6 @@ fn is_generated_dir(relative: &Path) -> bool {
     })
 }
 
-/// Whole-file variant of [`sanitize_lines`], used by the architecture view.
-/// Comments and string literals become spaces while line numbers stay stable.
-pub(crate) fn sanitize_source(text: &str) -> String {
-    sanitize_lines(text).join("\n")
-}
-
 /// Replace comments and string/char literals with spaces while preserving
 /// line breaks and character positions. Braces and identifiers in comments
 /// therefore do not affect the lightweight function parser.
