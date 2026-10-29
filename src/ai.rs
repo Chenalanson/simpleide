@@ -1028,6 +1028,7 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
          T1–T5 使用模板 A–E，T6 其他操作使用模板 F，T7 代码风格使用模板 G，T8 系统整体感知使用模板 H。模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载，删除文件用 se-delete 承载；\
          用户要求阅读/理解新导入或别人的工程、分析架构、重新生成或替换 framework.md，或工程明显不是默认 APP/MID/BSP 结构时，先按 T8 盘点实际目录/构建/入口/RTOS/厂商代码和现有文档，判断“默认/兼容/外来/混合”，不要直接套默认架构；T8 默认不改代码/不移动目录，替换或重构前用 se-ask 确认；\
          凡是需要用户选择、确认、授权或回答的内容，必须输出四反引号的 se-ask 卡片（问题 + 2–8 个选项或自由回答），禁止只在正文末尾写问句等待用户回复；只读的 se-list / se-read 不需要用户授权，缺文件时直接读取，禁止问“请允许我读取”；\
+         每次回复必须有正文；禁止只输出思考过程，或只写“下一轮会输出/立即写出”却不给正文。检索轮至少给简短说明和 se-read；承诺的文件、代码或结论必须在同一轮或紧接着的下一轮实际输出；\
          用户提到代码风格、优化、code_style.md、模块封装或代码审查时，先读取工程根目录 code_style.md 并优先遵守；T4 必须先给诊断假设和可观测验证（串口或 LED/GPIO/watch），不得跳过验证；\
          缺少某个目录或文件正文时，先用 se-list / se-read 请求 IDE 读取，不要声称无法遍历磁盘，也不要猜测未读取的代码；\
          不要自创分点或省略不适用的 N/A 行。\
@@ -2230,6 +2231,8 @@ pub fn chat_stream(
         .timeout(Duration::from_secs(600))
         .build();
     let mut continuation = 0usize;
+    let mut empty_content_continuations = 0usize;
+    let mut saw_reasoning = false;
     loop {
         let body = json!({
             "model": config.model.trim(),
@@ -2294,6 +2297,9 @@ pub fn chat_stream(
                         }
                         let (reasoning, content) = stream_parts(&value);
                         if let Some(reasoning) = reasoning {
+                            if !reasoning.trim().is_empty() {
+                                saw_reasoning = true;
+                            }
                             if sender.send(AiStreamEvent::Reasoning(reasoning)).is_err() {
                                 return;
                             }
@@ -2304,6 +2310,25 @@ pub fn chat_stream(
                                 return;
                             }
                         }
+                    }
+                    // Reasoning models sometimes spend the whole response on
+                    // reasoning_content and return no content at all. Retry
+                    // with an explicit "stop thinking, answer now" prompt so
+                    // the user does not get an empty bubble.
+                    if response_content.trim().is_empty() && saw_reasoning {
+                        if empty_content_continuations < MAX_EMPTY_CONTENT_CONTINUATIONS {
+                            empty_content_continuations += 1;
+                            api_messages.push(json!({
+                                "role": "user",
+                                "content": EMPTY_CONTENT_CONTINUE_PROMPT,
+                            }));
+                            continue;
+                        }
+                        let _ = sender.send(AiStreamEvent::Error(
+                            "模型只返回了思考过程，没有输出正文；已自动重试，请重新发送或让模型直接输出正文。"
+                                .to_owned(),
+                        ));
+                        return;
                     }
                     if matches!(
                         finish_reason.as_deref(),
@@ -2384,8 +2409,11 @@ pub fn chat_stream(
 }
 
 const MAX_STREAM_CONTINUATIONS: usize = 8;
+const MAX_EMPTY_CONTENT_CONTINUATIONS: usize = 2;
 const STREAM_CONTINUE_PROMPT: &str =
     "上一条回复因输出长度限制被截断。请严格从中断处继续输出剩余内容，不要重复已经输出的字符或代码块，不要重新开始文件，不要添加解释；如果正在写 se-file 代码块，请先补全代码和结束围栏。";
+const EMPTY_CONTENT_CONTINUE_PROMPT: &str =
+    "你上一条回复只输出了思考过程，没有输出正文。请立即停止继续思考，直接输出你承诺的最终正文和协议块（se-file / se-replace / se-ask / se-build 等）；不要只描述下一步，不要重复思考过程。";
 
 fn stream_finish_reason(value: &Value) -> Option<String> {
     value
@@ -2663,6 +2691,76 @@ mod tests {
             })
             .collect::<String>();
         assert_eq!(content, "partial rest");
+        assert!(matches!(
+            events.last(),
+            Some(AiStreamEvent::Done { truncated: false })
+        ));
+    }
+
+    #[test]
+    fn continues_when_only_reasoning_was_returned() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for attempt in 0..2 {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                loop {
+                    let read = socket.read(&mut buffer).unwrap_or(0);
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(5));
+                let body = if attempt == 0 {
+                    concat!(
+                        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking only\"},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n"
+                    )
+                } else {
+                    concat!(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"final files\"},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n"
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}"
+                );
+                socket.write_all(response.as_bytes()).unwrap();
+                socket.flush().unwrap();
+            }
+        });
+        let config = AiConfig {
+            api_key: "test".to_owned(),
+            base_url: format!("http://{address}/v1"),
+            model: "test".to_owned(),
+        };
+        let (sender, receiver) = mpsc::channel();
+        chat_stream(&config, "system", &[], sender);
+        server.join().unwrap();
+        let events = receiver.try_iter().collect::<Vec<_>>();
+        let content = events
+            .iter()
+            .filter_map(|event| match event {
+                AiStreamEvent::Content(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(content, "final files");
+        assert!(events.iter().any(
+            |event| matches!(event, AiStreamEvent::Reasoning(text) if text == "thinking only")
+        ));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, AiStreamEvent::Error(_))));
         assert!(matches!(
             events.last(),
             Some(AiStreamEvent::Done { truncated: false })

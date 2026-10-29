@@ -824,6 +824,10 @@ struct AiCliCheck {
 struct AiChatMessage {
     role: String,
     content: String,
+    /// Optional richer body sent to the model while the UI keeps `content`
+    /// short. Used for retrieval results so the chat does not show huge file
+    /// dumps but the very next model turn still sees the real text.
+    model_content: Option<String>,
     reasoning: String,
     streaming: bool,
     error: bool,
@@ -866,6 +870,7 @@ impl AiChatMessage {
         Self {
             role: role.to_owned(),
             content,
+            model_content: None,
             reasoning: String::new(),
             streaming: false,
             error,
@@ -1077,6 +1082,7 @@ struct AiState {
     cli_rounds: usize,
     fs_rounds: usize,
     pending_retrieval: Option<String>,
+    pending_user_model_content: Option<String>,
     context_stats: Option<crate::ai::ContextBuildStats>,
 }
 
@@ -5343,6 +5349,7 @@ impl App {
         self.ai.receiver = None;
         self.ai.fs_rounds = 0;
         self.ai.pending_retrieval = None;
+        self.ai.pending_user_model_content = None;
         self.save_ai_chat();
     }
 
@@ -5535,9 +5542,11 @@ impl App {
             }
         }
         if push_user {
-            self.ai
-                .messages
-                .push(AiChatMessage::text("user", text, false));
+            let mut message = AiChatMessage::text("user", text, false);
+            message.model_content = self.ai.pending_user_model_content.take();
+            self.ai.messages.push(message);
+        } else {
+            self.ai.pending_user_model_content = None;
         }
         // Keep the recent conversation, but do not let a few long code
         // answers grow every follow-up request without bound.
@@ -5551,7 +5560,10 @@ impl App {
             .filter(|message| !message.error)
             .take(12)
         {
-            let content = crate::ai::truncate_chars(&message.content, 12_000);
+            let content = crate::ai::truncate_chars(
+                message.model_content.as_deref().unwrap_or(&message.content),
+                12_000,
+            );
             let chars = content.chars().count();
             if !history.is_empty() && history_chars + chars > 48_000 {
                 break;
@@ -5571,6 +5583,7 @@ impl App {
         self.ai.messages.push(AiChatMessage {
             role: "assistant".to_owned(),
             content: String::new(),
+            model_content: None,
             reasoning: String::new(),
             streaming: true,
             error: false,
@@ -6039,6 +6052,7 @@ impl App {
         // Keep the real contents for the next request even when auto-continue
         // is blocked; the next user message will carry them into the prompt.
         self.ai.pending_retrieval = Some(outcome.report.clone());
+        self.ai.pending_user_model_content = Some(outcome.report.clone());
         if blocked || limit_reached {
             return;
         }
