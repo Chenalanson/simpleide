@@ -40,6 +40,8 @@ struct WorkbenchActions {
     open_settings: bool,
     open_cli: bool,
     rebuild_index: bool,
+    learn_style: bool,
+    open_style: bool,
     refresh_skill: bool,
     orb_clicked: bool,
     orb_double_clicked: bool,
@@ -249,6 +251,12 @@ impl App {
         }
         if workbench.rebuild_index {
             self.start_context_index_scan();
+        }
+        if workbench.learn_style {
+            self.request_code_style_learning();
+        }
+        if workbench.open_style {
+            self.open_code_style();
         }
         if send {
             self.send_ai_message();
@@ -733,6 +741,42 @@ impl App {
                     }
                     ui.label(
                         RichText::new("只把相关片段发给模型；framework.md 和关键文件仍完整附带。")
+                            .size(8.2)
+                            .color(theme::text_faint()),
+                    );
+
+                    ui.add_space(10.0);
+                    ai_section(ui, "代码风格");
+                    if let Some(project) = &self.project {
+                        let style_path = project.root.join("code_style.md");
+                        ai_kv(
+                            ui,
+                            "文档",
+                            if style_path.is_file() {
+                                "code_style.md"
+                            } else {
+                                "未生成"
+                            },
+                        );
+                        let samples = project.root.join("code_style_samples");
+                        ai_kv(
+                            ui,
+                            "样例",
+                            if samples.is_dir() {
+                                "code_style_samples/"
+                            } else {
+                                "建议放 code_style_samples/"
+                            },
+                        );
+                        if ui.add(theme::secondary_button("学习代码风格")).clicked() {
+                            actions.learn_style = true;
+                        }
+                        if style_path.is_file() && ai_ghost_button(ui, "打开") {
+                            actions.open_style = true;
+                        }
+                    }
+                    ui.label(
+                        RichText::new("AI 编码优先遵守 code_style.md；样例目录只用于学习，不会自动复制。")
                             .size(8.2)
                             .color(theme::text_faint()),
                     );

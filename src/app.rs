@@ -4864,6 +4864,51 @@ impl App {
         }
     }
 
+    fn request_code_style_learning(&mut self) {
+        if self.ai.sending {
+            self.set_toast("AI 正在生成回复，请稍后再学习代码风格", Severity::Info);
+            return;
+        }
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Warning);
+            return;
+        };
+        let samples = root.join("code_style_samples");
+        let sample_hint = if samples.is_dir() {
+            "工程根目录的 code_style_samples/".to_owned()
+        } else {
+            "工程根目录的代码样例（建议放到 code_style_samples/）".to_owned()
+        };
+        let prompt = format!(
+            "请按 T7 代码风格任务处理：\n\
+             1. 扫描 {sample_hint}、用户上传到工程根目录的 .c/.h，以及现有 APP/MID/BSP/Core 源码；\n\
+             2. 归纳文件头、命名、缩进/括号、注释、类型/宏、错误码、日志、模块封装/分层、中断/调度和优化偏好；\n\
+             3. 生成或更新工程根目录的 code_style.md（用 se-file），包含正例、反例和用户自查清单；样例不足要明确标注，不要编造；\n\
+             4. 先给样例来源和规则摘要，再写 code_style.md；本次不要修改业务代码；\n\
+             5. 最后给出容易犯错的检查清单和极致优化建议（目标/约束/测量方法）。"
+        );
+        if self.send_ai_text(prompt) {
+            self.set_toast("已请求 AI 学习代码风格并生成 code_style.md", Severity::Info);
+        }
+    }
+
+    fn open_code_style(&mut self) {
+        let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
+            self.set_toast("请先打开工程", Severity::Warning);
+            return;
+        };
+        let path = root.join("code_style.md");
+        if !path.is_file() {
+            self.set_toast(
+                "还没有 code_style.md，请先点击“学习代码风格”",
+                Severity::Info,
+            );
+            return;
+        }
+        self.exit_ai_mode();
+        self.open_file(path);
+    }
+
     fn export_ai_evolution(&mut self) {
         let Some(root) = self.project.as_ref().map(|project| project.root.clone()) else {
             self.set_toast("请先打开工程，再导出 evolution-user.md", Severity::Warning);

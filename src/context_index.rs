@@ -273,6 +273,9 @@ fn skip_dir(name: &str) -> bool {
             | "node_modules"
             | "tools"
             | "dist"
+            | "code_style_samples"
+            | "style-samples"
+            | "style_samples"
             | ".git"
             | ".simple-embedded"
             | ".opencode"
@@ -520,10 +523,17 @@ mod tests {
             &dir.path().join("demo.ai-chat.md"),
             "chat marker should not be indexed\n",
         );
+        write(
+            &dir.path().join("code_style_samples/style_marker.c"),
+            "void style_marker(void) {}\n",
+        );
         let index = ContextIndex::build(dir.path());
-        let hits = index.search("generated marker chat", 8);
+        let hits = index.search("generated marker chat style", 8);
         assert!(hits.iter().all(|hit| !hit.path.contains("build/")));
         assert!(hits.iter().all(|hit| !hit.path.contains("ai-chat")));
+        assert!(hits
+            .iter()
+            .all(|hit| !hit.path.contains("code_style_samples")));
     }
 
     #[test]

@@ -18,8 +18,8 @@ use crate::project_meta::ProjectMeta;
 use crate::util::{display_path, read_text_file};
 
 const SKILL_ID: &str = "stm32-embedded-dev";
-const MAX_SKILL_BYTES: usize = 160_000;
-const MAX_SYSTEM_PROMPT_BYTES: usize = 220_000;
+const MAX_SKILL_BYTES: usize = 190_000;
+const MAX_SYSTEM_PROMPT_BYTES: usize = 240_000;
 const MAX_TREE_FILES: usize = 400;
 /// Reserve enough room for the edit protocol and output requirements at the end
 /// of the system prompt. Project files must not crowd them out.
@@ -122,6 +122,18 @@ const EMBEDDED_SKILL_FILES: &[(&str, &str)] = &[
     (
         "references/serial-cli.md",
         include_str!("../.opencode/skills/stm32-embedded-dev/references/serial-cli.md"),
+    ),
+    (
+        "references/code-style.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/code-style.md"),
+    ),
+    (
+        "references/diagnostics.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/diagnostics.md"),
+    ),
+    (
+        "references/consulting-design.md",
+        include_str!("../.opencode/skills/stm32-embedded-dev/references/consulting-design.md"),
     ),
 ];
 
@@ -1000,8 +1012,9 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
     let mut prompt = String::new();
     prompt.push_str(
         "你是 Simple embedded 的 AI 助手，正在协助 STM32 嵌入式开发。\n\
-         必须优先遵循已加载的 stm32-embedded-dev skill：先按第 1 节判定 T1–T6 任务类型，再按第 3 节对应固定模板的小节编号、标题和表格输出；\
-         T1–T5 使用模板 A–E，T6 其他操作使用模板 F。模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载，删除文件用 se-delete 承载；\
+         必须优先遵循已加载的 stm32-embedded-dev skill：先按第 1 节判定 T1–T7 任务类型，再按第 3 节对应固定模板的小节编号、标题和表格输出；\
+         T1–T5 使用模板 A–E，T6 其他操作使用模板 F，T7 代码风格使用模板 G。模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载，删除文件用 se-delete 承载；\
+         用户提到代码风格、优化、code_style.md、模块封装或代码审查时，先读取工程根目录 code_style.md 并优先遵守；T4 必须先给诊断假设和可观测验证（串口或 LED/GPIO/watch），不得跳过验证；\
          不要自创分点或省略不适用的 N/A 行。\
          硬件资源变化先更新/新建 hardware.dts 台账；现有工程只做最小改动，不重写已有初始化，不修改已验证的引脚、时钟和句柄。\
          手册级事实（AF、IRQn、DMA 映射、地址、电气极限）不确定时用 TODO/待核对表标注，不要编造。\n\n",
@@ -1183,6 +1196,42 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
             "markdown",
             &mut appended,
         );
+    }
+    // User code style has a higher priority than the default code rules for
+    // this project. Always attach it when present.
+    let code_style = context.root.join("code_style.md");
+    if code_style.is_file() {
+        prompt.push_str("\n### 用户代码风格（最高优先级）\n");
+        prompt.push_str(
+            "> 编码、模块封装和优化必须优先遵守 code_style.md；与默认 code-rules 冲突时以用户风格为准，但不得违反安全、硬件事实和当前指令。\n",
+        );
+        append_file_clipped(
+            &mut prompt,
+            context.root,
+            &code_style,
+            60_000,
+            "markdown",
+            &mut appended,
+        );
+    }
+    if style_requested(context.query) {
+        let samples = style_sample_files(context.root);
+        if !samples.is_empty() {
+            prompt.push_str("\n### 代码风格样例（用于学习，不要直接复制进业务目录）\n");
+            for path in samples {
+                if prompt.len() > MAX_SYSTEM_PROMPT_BYTES - PROMPT_PROTOCOL_RESERVE {
+                    break;
+                }
+                append_file(
+                    &mut prompt,
+                    context.root,
+                    &path,
+                    40_000,
+                    fence_language(&path),
+                    &mut appended,
+                );
+            }
+        }
     }
     let index_hits = context
         .index
@@ -1672,6 +1721,75 @@ fn first_file_with_extension(root: &Path, extension: &str) -> Option<PathBuf> {
             && path
                 .extension()
                 .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+    })
+}
+
+fn style_requested(query: &str) -> bool {
+    let lower = query.to_ascii_lowercase();
+    query.contains("代码风格")
+        || query.contains("风格")
+        || query.contains("优化")
+        || lower.contains("code_style")
+        || lower.contains("code style")
+        || lower.contains("style")
+}
+
+/// Sample files for T7. Convention: put uploads in `code_style_samples/` at the
+/// project root (or drop `.c`/`.h` samples in the root itself). Only attached
+/// when the user is asking about style, so normal requests stay small.
+fn style_sample_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for directory in ["code_style_samples", "style-samples", "style_samples"] {
+        collect_style_files(root, &root.join(directory), 0, &mut files);
+    }
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && is_style_source(&path) {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    files.dedup();
+    files.truncate(32);
+    files
+}
+
+fn collect_style_files(root: &Path, directory: &Path, depth: usize, files: &mut Vec<PathBuf>) {
+    if depth > 3 || files.len() >= 64 || !directory.is_dir() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let mut entries = entries.flatten().collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if files.len() >= 64 {
+            break;
+        }
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            if !skip_source_dir(relative) {
+                collect_style_files(root, &path, depth + 1, files);
+            }
+        } else if file_type.is_file() && is_style_source(&path) {
+            files.push(path);
+        }
+    }
+}
+
+fn is_style_source(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        matches!(
+            extension.to_string_lossy().to_ascii_lowercase().as_str(),
+            "c" | "h" | "cc" | "cpp" | "cxx" | "hpp"
+        )
     })
 }
 
@@ -2309,9 +2427,52 @@ mod tests {
         assert!(bundle.text.contains("references/software-arch.md"));
         assert!(bundle.text.contains("references/other-operations.md"));
         assert!(bundle.text.contains("references/serial-cli.md"));
+        assert!(bundle.text.contains("references/code-style.md"));
+        assert!(bundle.text.contains("references/diagnostics.md"));
+        assert!(bundle.text.contains("references/consulting-design.md"));
+        assert!(bundle.text.contains("T7 代码风格"));
+        assert!(bundle.text.contains("code_style.md"));
         assert!(bundle.text.contains("se-cli"));
         assert!(bundle.text.contains("evolution.md"));
-        assert!(bundle.files.len() >= 12);
+        assert!(bundle.files.len() >= 15);
+    }
+
+    #[test]
+    fn collects_code_style_samples_and_detects_style_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("code_style_samples/app/bsp_led.c"),
+            "void bsp_led_init(void) {}\n",
+        );
+        write(
+            &dir.path().join("code_style_samples/app/bsp_led.h"),
+            "#pragma once\n",
+        );
+        write(&dir.path().join("uploaded.c"), "void uploaded(void) {}\n");
+        write(
+            &dir.path().join("code_style_samples/build/generated.c"),
+            "void generated(void) {}\n",
+        );
+        write(
+            &dir.path().join("code_style_samples/readme.md"),
+            "not source\n",
+        );
+
+        let samples = style_sample_files(dir.path());
+        let names = samples
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"bsp_led.c".to_owned()));
+        assert!(names.contains(&"bsp_led.h".to_owned()));
+        assert!(names.contains(&"uploaded.c".to_owned()));
+        assert!(!names.contains(&"generated.c".to_owned()));
+        assert!(!names.contains(&"readme.md".to_owned()));
+
+        assert!(style_requested("学习我的代码风格"));
+        assert!(style_requested("按 code_style.md 优化"));
+        assert!(style_requested("code style review"));
+        assert!(!style_requested("配置 USART1 引脚"));
     }
 
     #[test]
@@ -2587,6 +2748,10 @@ mod tests {
             &dir.path().join("APP/app_init.c"),
             "void app_init_marker(void) {}\n",
         );
+        write(
+            &dir.path().join("code_style.md"),
+            "# Style\n\n- code_style_marker: 4 spaces, bsp_ prefix.\n",
+        );
         let meta = ProjectMeta {
             device: Some("STM32G431CBTx".to_owned()),
             ..ProjectMeta::default()
@@ -2625,6 +2790,7 @@ mod tests {
         assert!(prompt.contains("gpio_marker"));
         assert!(prompt.contains("framework.md 自动引用文件"));
         assert!(prompt.contains("app_init_marker"));
+        assert!(prompt.contains("code_style_marker"));
         assert!(prompt.contains("se-file"));
         assert!(prompt.contains("se-replace"));
         assert!(prompt.contains("se-cli"));
