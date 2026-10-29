@@ -730,6 +730,40 @@ enum AiEditStatus {
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AiBuildStatus {
+    #[default]
+    Waiting,
+    Running,
+    Success,
+    Failed,
+    Cancelled,
+    Error,
+}
+
+impl AiBuildStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Waiting => "等待构建",
+            Self::Running => "构建中",
+            Self::Success => "构建通过",
+            Self::Failed => "构建失败",
+            Self::Cancelled => "已停止",
+            Self::Error => "无法构建",
+        }
+    }
+}
+
+struct AiBuildCheck {
+    message_index: usize,
+    started: bool,
+    log_start: usize,
+    rounds: usize,
+    pending_report: Option<String>,
+}
+
+const MAX_AI_BUILD_ROUNDS: usize = 5;
+
 #[derive(Clone, Debug)]
 struct AiChatMessage {
     role: String,
@@ -750,6 +784,10 @@ struct AiChatMessage {
     ask_status: AiEditStatus,
     ask_error: Option<String>,
     ask_answer: Option<String>,
+    build_requested: bool,
+    build_status: AiBuildStatus,
+    build_summary: Option<String>,
+    build_output: Option<String>,
     evolutions: Vec<String>,
     evolution_status: AiEditStatus,
     evolution_error: Option<String>,
@@ -776,6 +814,10 @@ impl AiChatMessage {
             ask_status: AiEditStatus::Pending,
             ask_error: None,
             ask_answer: None,
+            build_requested: false,
+            build_status: AiBuildStatus::Waiting,
+            build_summary: None,
+            build_output: None,
             evolutions: Vec::new(),
             evolution_status: AiEditStatus::Pending,
             evolution_error: None,
@@ -803,6 +845,14 @@ impl AiChatMessage {
                 for option in &ask.options {
                     content.push_str(&format!("   - {option}\n"));
                 }
+            }
+        }
+        if self.build_requested {
+            content.push_str("\n\n### AI 构建验证（历史记录）\n\n");
+            content.push_str(&format!("结果：{}\n", self.build_status.label()));
+            if let Some(summary) = &self.build_summary {
+                content.push_str(summary);
+                content.push('\n');
             }
         }
         if !self.edits.is_empty() {
@@ -879,6 +929,8 @@ struct AiState {
     orb_clicks: Vec<Instant>,
     chat_path: Option<PathBuf>,
     chat_error: Option<String>,
+    build_check: Option<AiBuildCheck>,
+    build_rounds: usize,
 }
 
 struct AiSettingsDraft {
@@ -4449,6 +4501,17 @@ impl App {
     }
 
     fn exit_ai_mode(&mut self) {
+        if let Some(index) = self
+            .ai
+            .build_check
+            .as_ref()
+            .map(|check| check.message_index)
+        {
+            self.detach_ai_build_check(
+                index,
+                "已退出 AI 模式；构建继续在后台运行，验证结果不会自动回传",
+            );
+        }
         self.abort_ai_stream("已退出 AI 模式，本次输出中断");
         self.save_ai_chat();
         self.ai.enabled = false;
@@ -4776,6 +4839,14 @@ impl App {
     }
 
     fn clear_ai_chat(&mut self) {
+        if let Some(index) = self
+            .ai
+            .build_check
+            .as_ref()
+            .map(|check| check.message_index)
+        {
+            self.cancel_ai_build_check(index, "对话已清空，构建验证已停止");
+        }
         self.ai.messages.clear();
         self.ai.input.clear();
         self.ai.sending = false;
@@ -4873,6 +4944,14 @@ impl App {
     }
 
     fn send_ai_text(&mut self, text: String) -> bool {
+        self.start_ai_request(text, true, false)
+    }
+
+    fn send_ai_answer(&mut self, text: String) -> bool {
+        self.start_ai_request(text, true, true)
+    }
+
+    fn start_ai_request(&mut self, text: String, push_user: bool, keep_build: bool) -> bool {
         if self.ai.sending {
             return false;
         }
@@ -4894,6 +4973,17 @@ impl App {
         if let Err(err) = self.save_all_dirty() {
             self.set_toast(format!("发送前保存失败：{err}"), Severity::Error);
             return false;
+        }
+        if !keep_build {
+            if let Some(index) = self
+                .ai
+                .build_check
+                .as_ref()
+                .map(|check| check.message_index)
+            {
+                self.cancel_ai_build_check(index, "新的用户消息已取代构建验证");
+            }
+            self.ai.build_rounds = 0;
         }
         // Prefer the skill checked out in the project (or a global skills
         // folder), then fall back to the copy compiled into the executable.
@@ -4933,9 +5023,11 @@ impl App {
                 message.ask_error = None;
             }
         }
-        self.ai
-            .messages
-            .push(AiChatMessage::text("user", text, false));
+        if push_user {
+            self.ai
+                .messages
+                .push(AiChatMessage::text("user", text, false));
+        }
         // Keep the recent conversation, but do not let a few long code
         // answers grow every follow-up request without bound.
         let mut history = Vec::new();
@@ -4984,6 +5076,10 @@ impl App {
             ask_status: AiEditStatus::Pending,
             ask_error: None,
             ask_answer: None,
+            build_requested: false,
+            build_status: AiBuildStatus::Waiting,
+            build_summary: None,
+            build_output: None,
             evolutions: Vec::new(),
             evolution_status: AiEditStatus::Pending,
             evolution_error: None,
@@ -5066,6 +5162,7 @@ impl App {
         let mut edits = crate::ai_edit::merge_edits(parsed.edits);
         let mut deletes = parsed.deletes;
         let mut asks = parsed.asks;
+        let build = parsed.build;
         let evolutions = parsed.evolutions;
         if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
             for edit in &mut edits {
@@ -5107,29 +5204,41 @@ impl App {
                 }
             }
         }
-        let content =
-            if text.is_empty() && (!edits.is_empty() || !deletes.is_empty() || !asks.is_empty()) {
-                let mut parts = Vec::new();
-                if !edits.is_empty() {
-                    parts.push(format!("{} 个文件修改", edits.len()));
-                }
-                if !deletes.is_empty() {
-                    parts.push(format!("{} 个文件删除", deletes.len()));
-                }
-                if !asks.is_empty() {
-                    parts.push(format!("{} 个确认问题", asks.len()));
-                }
-                format!("已准备 {}，请查看下方卡片并分别确认。", parts.join("、"))
-            } else if text.is_empty() && !evolutions.is_empty() {
-                format!(
-                    "已准备 {} 条技能进化规则，请确认后保存到用户 evolution.md。",
-                    evolutions.len()
-                )
-            } else if text.is_empty() && !reasoning.trim().is_empty() {
-                "（模型只返回了思考过程，没有正文）".to_owned()
-            } else {
-                text
-            };
+        let content = if text.is_empty()
+            && build
+            && edits.is_empty()
+            && deletes.is_empty()
+            && asks.is_empty()
+        {
+            "已请求构建验证；IDE 会运行当前工程的构建命令，并把真实输出自动发送给 AI。".to_owned()
+        } else if text.is_empty()
+            && (!edits.is_empty() || !deletes.is_empty() || !asks.is_empty() || build)
+        {
+            let mut parts = Vec::new();
+            if !edits.is_empty() {
+                parts.push(format!("{} 个文件修改", edits.len()));
+            }
+            if !deletes.is_empty() {
+                parts.push(format!("{} 个文件删除", deletes.len()));
+            }
+            if !asks.is_empty() {
+                parts.push(format!("{} 个确认问题", asks.len()));
+            }
+            if build {
+                parts.push("构建验证".to_owned());
+            }
+            format!("已准备 {}，请查看下方卡片并分别确认。", parts.join("、"))
+        } else if text.is_empty() && !evolutions.is_empty() {
+            format!(
+                "已准备 {} 条技能进化规则，请确认后保存到用户 evolution.md。",
+                evolutions.len()
+            )
+        } else if text.is_empty() && !reasoning.trim().is_empty() {
+            "（模型只返回了思考过程，没有正文）".to_owned()
+        } else {
+            text
+        };
+        let build_waiting = build && (!edits.is_empty() || !deletes.is_empty() || !asks.is_empty());
         let ask_drafts = asks
             .iter()
             .map(crate::ai_ask::AiAskDraft::new)
@@ -5149,6 +5258,16 @@ impl App {
         message.ask_status = AiEditStatus::Pending;
         message.ask_error = None;
         message.ask_answer = None;
+        message.build_requested = build;
+        message.build_status = AiBuildStatus::Waiting;
+        message.build_summary = build.then(|| {
+            if build_waiting {
+                "等待应用修改或回答确认问题后自动构建".to_owned()
+            } else {
+                "准备构建".to_owned()
+            }
+        });
+        message.build_output = None;
         message.evolutions = evolutions;
         message.evolution_status = AiEditStatus::Pending;
         message.evolution_error = None;
@@ -5157,7 +5276,194 @@ impl App {
             message.error = true;
             message.content = "模型返回了空内容".to_owned();
         }
+        if build {
+            let build_rounds = self.ai.build_rounds;
+            if self.ai.build_check.is_some() {
+                if let Some(message) = self.ai.messages.get_mut(index) {
+                    message.build_status = AiBuildStatus::Error;
+                    message.build_summary =
+                        Some("已有构建验证任务正在进行，请等待其完成".to_owned());
+                }
+            } else {
+                self.ai.build_check = Some(AiBuildCheck {
+                    message_index: index,
+                    started: false,
+                    log_start: 0,
+                    rounds: build_rounds,
+                    pending_report: None,
+                });
+            }
+        }
         self.save_ai_chat();
+    }
+
+    fn try_start_ai_build(&mut self, check: &mut AiBuildCheck) {
+        if self.build_config_uses_micropython() {
+            if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                message.build_status = AiBuildStatus::Error;
+                message.build_summary = Some("MicroPython 模式不支持构建验证".to_owned());
+            }
+            return;
+        }
+        let log_start = self.build.log.len();
+        self.start_task(TaskKind::Build);
+        if self.build.is_running() {
+            check.started = true;
+            check.log_start = log_start;
+            if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                message.build_status = AiBuildStatus::Running;
+                message.build_summary = Some("构建中…".to_owned());
+            }
+            self.set_toast("AI 构建验证已启动", Severity::Info);
+        } else if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+            message.build_status = AiBuildStatus::Error;
+            message.build_summary =
+                Some("无法启动构建，请检查 配置 → 构建 中的 Build 命令和工具链".to_owned());
+        }
+    }
+
+    fn build_ai_report(&self, check: &AiBuildCheck) -> (AiBuildStatus, String, String) {
+        let outcome = self
+            .build
+            .last()
+            .map(|last| last.outcome.clone())
+            .unwrap_or_else(|| BuildOutcome::Error("构建结果不可用".to_owned()));
+        let duration = self.build.last().map(|last| last.duration);
+        let start = check.log_start.min(self.build.log.len());
+        let lines = (start..self.build.log.len())
+            .filter_map(|index| self.build.log.line_at(index))
+            .collect::<Vec<_>>();
+        build_ai_report_from(&outcome, duration, &lines)
+    }
+
+    fn poll_ai_build(&mut self) {
+        let Some(mut check) = self.ai.build_check.take() else {
+            return;
+        };
+        if !self.ai.enabled {
+            self.ai.build_check = Some(check);
+            return;
+        }
+        if self.ai.messages.get(check.message_index).is_none() {
+            return;
+        }
+        if !check.started && check.pending_report.is_none() {
+            let waiting = self
+                .ai
+                .messages
+                .get(check.message_index)
+                .is_some_and(|message| {
+                    (message.edit_status == AiEditStatus::Pending && !message.edits.is_empty())
+                        || (message.delete_status == AiEditStatus::Pending
+                            && !message.deletes.is_empty())
+                        || (message.ask_status == AiEditStatus::Pending && !message.asks.is_empty())
+                });
+            if waiting {
+                if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                    message.build_status = AiBuildStatus::Waiting;
+                    message.build_summary = Some("等待应用修改或回答确认问题后自动构建".to_owned());
+                }
+                self.ai.build_check = Some(check);
+                return;
+            }
+            if self.build.is_running() {
+                if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                    message.build_status = AiBuildStatus::Waiting;
+                    message.build_summary = Some("等待当前构建任务结束".to_owned());
+                }
+                self.ai.build_check = Some(check);
+                return;
+            }
+            self.try_start_ai_build(&mut check);
+            if check.started {
+                self.ai.build_check = Some(check);
+                return;
+            }
+            // Starting failed; keep the card visible but clear the pending check.
+            return;
+        }
+        if check.started {
+            if self.build.is_running() {
+                if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                    message.build_status = AiBuildStatus::Running;
+                }
+                self.ai.build_check = Some(check);
+                return;
+            }
+            let (status, summary, report) = self.build_ai_report(&check);
+            if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                message.build_status = status;
+                message.build_summary = Some(summary);
+                message.build_output = Some(report.clone());
+            }
+            if status == AiBuildStatus::Cancelled {
+                self.save_ai_chat();
+                return;
+            }
+            check.started = false;
+            check.pending_report = Some(report);
+        }
+        let Some(report) = check.pending_report.take() else {
+            self.ai.build_check = Some(check);
+            return;
+        };
+        if self.ai.sending {
+            check.pending_report = Some(report);
+            self.ai.build_check = Some(check);
+            return;
+        }
+        let can_send = check.rounds < MAX_AI_BUILD_ROUNDS;
+        self.ai
+            .messages
+            .push(AiChatMessage::text("user", report.clone(), false));
+        if can_send {
+            if self.start_ai_request(report, false, true) {
+                check.rounds += 1;
+                self.ai.build_rounds = self.ai.build_rounds.saturating_add(1);
+            } else if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+                message.build_summary =
+                    Some("构建结果已生成，但自动发送失败，请手动继续".to_owned());
+            }
+        } else if let Some(message) = self.ai.messages.get_mut(check.message_index) {
+            message.build_summary =
+                Some("构建结果已生成；已达到自动验证轮次上限，请手动继续".to_owned());
+        }
+        self.save_ai_chat();
+    }
+
+    fn cancel_ai_build_check(&mut self, index: usize, reason: &str) {
+        let Some(check) = self.ai.build_check.take() else {
+            return;
+        };
+        if check.message_index != index {
+            self.ai.build_check = Some(check);
+            return;
+        }
+        if check.started && self.build.is_running() {
+            self.build.abort();
+        }
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            message.build_status = AiBuildStatus::Cancelled;
+            message.build_summary = Some(reason.to_owned());
+        }
+    }
+
+    fn stop_ai_build(&mut self, index: usize) {
+        self.cancel_ai_build_check(index, "构建验证已停止");
+    }
+
+    fn detach_ai_build_check(&mut self, index: usize, reason: &str) {
+        let Some(check) = self.ai.build_check.take() else {
+            return;
+        };
+        if check.message_index != index {
+            self.ai.build_check = Some(check);
+            return;
+        }
+        if let Some(message) = self.ai.messages.get_mut(index) {
+            message.build_status = AiBuildStatus::Cancelled;
+            message.build_summary = Some(reason.to_owned());
+        }
     }
 
     fn poll_ai(&mut self, ctx: &egui::Context) {
@@ -5260,6 +5566,7 @@ impl App {
                 message.apply_error = None;
             }
         }
+        self.cancel_ai_build_check(index, "前置文件修改已取消，构建验证已停止");
     }
 
     fn cancel_ai_deletes(&mut self, index: usize) {
@@ -5269,6 +5576,7 @@ impl App {
                 message.delete_error = None;
             }
         }
+        self.cancel_ai_build_check(index, "前置文件删除已取消，构建验证已停止");
     }
 
     fn submit_ai_answers(&mut self, index: usize) {
@@ -5293,7 +5601,7 @@ impl App {
             }
             return;
         };
-        if self.send_ai_text(answer.clone()) {
+        if self.send_ai_answer(answer.clone()) {
             if let Some(message) = self.ai.messages.get_mut(index) {
                 message.ask_status = AiEditStatus::Applied;
                 message.ask_error = None;
@@ -5311,6 +5619,7 @@ impl App {
                 message.ask_error = None;
             }
         }
+        self.cancel_ai_build_check(index, "前置确认问题已取消，构建验证已停止");
     }
 
     fn apply_ai_evolutions(&mut self, index: usize) {
@@ -10327,6 +10636,7 @@ impl eframe::App for App {
         if self.build.poll() {
             self.report_link_problem();
         }
+        self.poll_ai_build();
         self.poll_lsp(&ctx);
         self.poll_relations(&ctx);
         self.poll_install_system(&ctx);
@@ -10552,10 +10862,97 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if !self.ai.messages.is_empty() || self.ai.chat_path.is_some() {
+            if let Some(index) = self
+                .ai
+                .build_check
+                .as_ref()
+                .map(|check| check.message_index)
+            {
+                self.cancel_ai_build_check(index, "应用退出，构建验证已停止");
+            }
             self.abort_ai_stream("应用退出，本次输出中断");
             self.save_ai_chat();
         }
     }
+}
+
+fn build_ai_report_from(
+    outcome: &BuildOutcome,
+    duration: Option<Duration>,
+    lines: &[&crate::log::LogLine],
+) -> (AiBuildStatus, String, String) {
+    let mut error_lines = Vec::new();
+    let mut warning_lines = Vec::new();
+    let mut tail = Vec::new();
+    for line in lines {
+        match line.severity {
+            Severity::Error => error_lines.push(line.plain.clone()),
+            Severity::Warning => warning_lines.push(line.plain.clone()),
+            _ => {}
+        }
+        tail.push(line.plain.clone());
+        if tail.len() > 120 {
+            tail.remove(0);
+        }
+    }
+    let (status, summary) = match outcome {
+        BuildOutcome::Success => (
+            AiBuildStatus::Success,
+            format!(
+                "构建通过{} · {} 错误 / {} 警告",
+                duration
+                    .map(|value| format!(" · 用时 {}", format_duration(value)))
+                    .unwrap_or_default(),
+                error_lines.len(),
+                warning_lines.len()
+            ),
+        ),
+        BuildOutcome::Failed(Some(code)) => (
+            AiBuildStatus::Failed,
+            format!(
+                "构建失败（退出码 {code}） · {} 错误 / {} 警告",
+                error_lines.len(),
+                warning_lines.len()
+            ),
+        ),
+        BuildOutcome::Failed(None) => (AiBuildStatus::Failed, "构建失败 · 进程被终止".to_owned()),
+        BuildOutcome::Cancelled => (AiBuildStatus::Cancelled, "构建已停止".to_owned()),
+        BuildOutcome::Error(err) => (AiBuildStatus::Error, format!("构建无法执行：{err}")),
+    };
+    let mut report = String::new();
+    report.push_str("【AI 构建验证结果】\n");
+    report.push_str(&format!("结果：{summary}\n"));
+    if let Some(duration) = duration {
+        report.push_str(&format!("用时：{}\n", format_duration(duration)));
+    }
+    if !error_lines.is_empty() || !warning_lines.is_empty() {
+        report.push_str("\n错误 / 警告：\n");
+        for line in error_lines.iter().chain(warning_lines.iter()).take(200) {
+            report.push_str(line);
+            report.push('\n');
+        }
+    }
+    let tail_count = if matches!(outcome, BuildOutcome::Success) {
+        30
+    } else {
+        80
+    };
+    if !tail.is_empty() {
+        report.push_str("\n构建输出（末尾）：\n");
+        let from = tail.len().saturating_sub(tail_count);
+        for line in &tail[from..] {
+            report.push_str(line);
+            report.push('\n');
+        }
+    }
+    if !matches!(outcome, BuildOutcome::Success) {
+        report.push_str(
+            "\n请根据真实构建输出处理：如果失败，修复后再次输出 se-build；只有无错误时才可结束，不要伪造构建结果。\n",
+        );
+    } else {
+        report.push_str("\n构建已通过。请确认 warning 是否需要处理，然后给出最终总结。\n");
+    }
+    (status, summary, crate::ai::truncate_chars(&report, 30_000))
 }
 
 fn toast_life(severity: Severity) -> Duration {
@@ -12349,5 +12746,62 @@ mod tests {
         let program = build.join("firmware.elf");
         std::fs::write(&program, b"\x7fELF").unwrap();
         assert_eq!(detect_debug_program(dir.path()), Some(program));
+    }
+
+    fn log_line(text: &str, severity: Severity) -> crate::log::LogLine {
+        crate::log::LogLine {
+            spans: Vec::new(),
+            severity,
+            plain: text.to_owned(),
+            location: None,
+        }
+    }
+
+    #[test]
+    fn build_report_includes_success_output() {
+        let lines = [
+            log_line("arm-none-eabi-gcc ...", Severity::Command),
+            log_line("Build complete", Severity::Success),
+        ];
+        let refs = lines.iter().collect::<Vec<_>>();
+        let (status, summary, report) = build_ai_report_from(
+            &BuildOutcome::Success,
+            Some(Duration::from_millis(1200)),
+            &refs,
+        );
+        assert_eq!(status, AiBuildStatus::Success);
+        assert!(summary.contains("构建通过"));
+        assert!(report.contains("【AI 构建验证结果】"));
+        assert!(report.contains("Build complete"));
+        assert!(report.contains("构建已通过"));
+    }
+
+    #[test]
+    fn build_report_prioritizes_errors_and_requests_another_build() {
+        let lines = [
+            log_line("main.c:12: error: expected ';'", Severity::Error),
+            log_line("main.c:15: warning: unused variable", Severity::Warning),
+            log_line("make: *** [all] Error 1", Severity::Error),
+        ];
+        let refs = lines.iter().collect::<Vec<_>>();
+        let (status, summary, report) = build_ai_report_from(
+            &BuildOutcome::Failed(Some(2)),
+            Some(Duration::from_millis(800)),
+            &refs,
+        );
+        assert_eq!(status, AiBuildStatus::Failed);
+        assert!(summary.contains("退出码 2"));
+        assert!(report.contains("expected ';'"));
+        assert!(report.contains("unused variable"));
+        assert!(report.contains("再次输出 se-build"));
+    }
+
+    #[test]
+    fn build_report_marks_cancelled_build() {
+        let lines = [log_line("terminated", Severity::Warning)];
+        let refs = lines.iter().collect::<Vec<_>>();
+        let (status, summary, _) = build_ai_report_from(&BuildOutcome::Cancelled, None, &refs);
+        assert_eq!(status, AiBuildStatus::Cancelled);
+        assert!(summary.contains("构建已停止"));
     }
 }

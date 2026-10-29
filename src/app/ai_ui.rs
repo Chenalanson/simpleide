@@ -12,7 +12,7 @@ use eframe::egui::{
     Rect, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, UiBuilder,
 };
 
-use super::{AiChatMessage, AiEditStatus, App};
+use super::{AiBuildStatus, AiChatMessage, AiEditStatus, App};
 use crate::framework::{FrameworkDoc, GanttChart, GanttKind};
 use crate::log::Severity;
 use crate::theme;
@@ -48,6 +48,7 @@ struct AiCardRequests {
     cancel_deletes: Option<usize>,
     submit_answers: Option<usize>,
     cancel_asks: Option<usize>,
+    stop_build: Option<usize>,
     apply_evolutions: Option<usize>,
     cancel_evolutions: Option<usize>,
 }
@@ -276,8 +277,18 @@ impl App {
                         || (message.evolution_status == AiEditStatus::Pending
                             && !message.evolutions.is_empty())
                 });
+                let building = self.ai.build_check.is_some()
+                    && self.ai.messages.iter().any(|message| {
+                        message.build_requested
+                            && matches!(
+                                message.build_status,
+                                AiBuildStatus::Waiting | AiBuildStatus::Running
+                            )
+                    });
                 let (status, color) = if self.ai.sending {
                     ("生成中", theme::accent())
+                } else if building {
+                    ("构建验证", theme::accent())
                 } else if pending {
                     ("待确认", theme::warning())
                 } else if self.ai.messages.is_empty() {
@@ -342,6 +353,10 @@ impl App {
         }
         if let Some(index) = requests.cancel_asks {
             self.cancel_ai_asks(index);
+            ui.ctx().request_repaint();
+        }
+        if let Some(index) = requests.stop_build {
+            self.stop_ai_build(index);
             ui.ctx().request_repaint();
         }
         if let Some(index) = requests.apply_evolutions {
@@ -1750,10 +1765,16 @@ fn ai_message(
     requests: &mut AiCardRequests,
 ) {
     let user = message.role == "user";
+    let build_report = user && message.content.starts_with("【AI 构建验证结果】");
     let (fill, border) = if message.error {
         (
             theme::with_alpha(theme::error(), 22),
             theme::with_alpha(theme::error(), 110),
+        )
+    } else if build_report {
+        (
+            theme::with_alpha(theme::warning(), 16),
+            theme::with_alpha(theme::warning(), 70),
         )
     } else if user {
         (
@@ -1773,6 +1794,8 @@ fn ai_message(
             ui.horizontal(|ui| {
                 let (role, color) = if message.error {
                     ("错误", theme::error())
+                } else if build_report {
+                    ("构建", theme::warning())
                 } else if user {
                     ("你", theme::accent())
                 } else {
@@ -1858,6 +1881,10 @@ fn ai_message(
                         &mut requests.cancel_deletes,
                     );
                 }
+                if message.build_requested {
+                    ui.add_space(7.0);
+                    ai_build_card(ui, &*message, index, &mut requests.stop_build);
+                }
                 if !message.evolutions.is_empty() {
                     ui.add_space(7.0);
                     ai_evolution_card(
@@ -1867,6 +1894,98 @@ fn ai_message(
                         &mut requests.apply_evolutions,
                         &mut requests.cancel_evolutions,
                     );
+                }
+            }
+        });
+}
+
+fn ai_build_card(
+    ui: &mut Ui,
+    message: &AiChatMessage,
+    message_index: usize,
+    stop: &mut Option<usize>,
+) {
+    let color = match message.build_status {
+        AiBuildStatus::Waiting => theme::warning(),
+        AiBuildStatus::Running => theme::accent(),
+        AiBuildStatus::Success => theme::success(),
+        AiBuildStatus::Failed | AiBuildStatus::Error => theme::error(),
+        AiBuildStatus::Cancelled => theme::text_faint(),
+    };
+    Frame::new()
+        .fill(theme::with_alpha(color, 9))
+        .stroke(Stroke::new(1.0_f32, theme::with_alpha(color, 85)))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                paint_dot(ui, color);
+                ui.label(
+                    RichText::new("AI 构建验证")
+                        .size(10.5)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.label(
+                    RichText::new(message.build_status.label())
+                        .size(9.5)
+                        .color(color),
+                );
+                if message.build_status == AiBuildStatus::Running {
+                    ui.spinner();
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(theme::secondary_button("停止")).clicked() {
+                            *stop = Some(message_index);
+                        }
+                    });
+                }
+            });
+            if let Some(summary) = &message.build_summary {
+                ui.add_space(2.0);
+                ui.add(
+                    Label::new(RichText::new(summary).size(9.0).color(theme::text_dim())).wrap(),
+                );
+            }
+            if let Some(output) = &message.build_output {
+                let id = ui.make_persistent_id(("simple_embedded_ai_build_output", message_index));
+                let mut open = ui
+                    .data_mut(|data| data.get_persisted::<bool>(id))
+                    .unwrap_or(matches!(
+                        message.build_status,
+                        AiBuildStatus::Failed | AiBuildStatus::Error
+                    ));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ai_ghost_button(ui, if open { "收起输出" } else { "构建输出" }) {
+                        open = !open;
+                        ui.data_mut(|data| data.insert_persisted(id, open));
+                    }
+                });
+                if open {
+                    Frame::new()
+                        .fill(theme::editor_bg())
+                        .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+                        .corner_radius(6)
+                        .inner_margin(Margin::symmetric(7, 5))
+                        .show(ui, |ui| {
+                            ScrollArea::vertical()
+                                .id_salt(("simple_embedded_ai_build_output_scroll", message_index))
+                                .auto_shrink([false, true])
+                                .max_height(220.0)
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.add(
+                                        Label::new(
+                                            RichText::new(output)
+                                                .monospace()
+                                                .size(8.8)
+                                                .color(theme::text_dim()),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                        });
                 }
             }
         });

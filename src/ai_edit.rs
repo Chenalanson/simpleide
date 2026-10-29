@@ -55,6 +55,7 @@ pub struct ParsedEdits {
     pub edits: Vec<AiEdit>,
     pub deletes: Vec<AiDelete>,
     pub asks: Vec<crate::ai_ask::AiAsk>,
+    pub build: bool,
     pub evolutions: Vec<String>,
 }
 
@@ -272,7 +273,13 @@ pub fn incomplete_edit_block(text: &str) -> bool {
         let tag = tag.split_whitespace().next().unwrap_or("");
         if matches!(
             tag,
-            "se-file" | "se-write" | "se-replace" | "se-delete" | "se-ask" | "se-evolve"
+            "se-file"
+                | "se-write"
+                | "se-replace"
+                | "se-delete"
+                | "se-ask"
+                | "se-build"
+                | "se-evolve"
         ) {
             open_fence = Some(ticks);
         }
@@ -285,6 +292,7 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
     let mut edits = Vec::new();
     let mut deletes = Vec::new();
     let mut asks = Vec::new();
+    let mut build = false;
     let mut evolutions = Vec::new();
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let mut index = 0usize;
@@ -298,7 +306,13 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
         };
         if !matches!(
             tag,
-            "se-file" | "se-write" | "se-replace" | "se-delete" | "se-ask" | "se-evolve"
+            "se-file"
+                | "se-write"
+                | "se-replace"
+                | "se-delete"
+                | "se-ask"
+                | "se-build"
+                | "se-evolve"
         ) {
             cleaned.push_str(line);
             index += 1;
@@ -325,6 +339,8 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
         let body = lines[index + 1..close].concat();
         if tag == "se-evolve" {
             evolutions.extend(parse_evolution_rules(&body));
+        } else if tag == "se-build" {
+            build = true;
         } else if tag == "se-ask" {
             asks.push(crate::ai_ask::parse_ask(attrs, &body));
         } else if tag == "se-delete" {
@@ -345,6 +361,7 @@ pub fn parse_edits(text: &str) -> ParsedEdits {
         edits,
         deletes,
         asks,
+        build,
         evolutions,
     }
 }
@@ -369,7 +386,13 @@ fn find_last_fence(lines: &[&str], start: usize, fence_len: usize) -> Option<usi
             fence_header(lines[*index].trim_start()).is_some_and(|(_, tag, _)| {
                 matches!(
                     tag,
-                    "se-file" | "se-write" | "se-replace" | "se-delete" | "se-ask" | "se-evolve"
+                    "se-file"
+                        | "se-write"
+                        | "se-replace"
+                        | "se-delete"
+                        | "se-ask"
+                        | "se-build"
+                        | "se-evolve"
                 )
             })
         })
@@ -740,6 +763,17 @@ mod tests {
         assert!(parsed.edits[0].content.contains("```mermaid"));
         assert!(parsed.edits[0].content.contains("gantt"));
         assert!(!incomplete_edit_block(reply));
+    }
+
+    #[test]
+    fn parses_build_request() {
+        let reply = "修改完成。\n````se-build\n````\n";
+        let parsed = parse_edits(reply);
+        assert!(parsed.build);
+        assert!(parsed.edits.is_empty());
+        assert!(!parsed.text.contains("se-build"));
+        assert!(parsed.text.contains("修改完成"));
+        assert!(incomplete_edit_block("````se-build\n"));
     }
 
     #[test]
