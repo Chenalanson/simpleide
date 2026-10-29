@@ -18,7 +18,7 @@ AI 模式（四栏工作台 + 项目架构面板，1 秒淡入，输入/输出�
 
 ![AI 模式](docs/ai.png)
 
-从打开目录到构建、SSH、烧录和常见问题的完整中文教程：[docs/TUTORIAL.md](docs/TUTORIAL.md)。烧录工具（ST-Link、CubeProgrammer、OpenOCD、pyOCD、J-Link、Keil）的详细配置：[docs/FLASH.md](docs/FLASH.md)。动态监测（watchpoint）的时间戳、调用栈和自动启动：[docs/DYNAMIC.md](docs/DYNAMIC.md)。
+按原始模式和 AI 模式分栏、配截图的图文使用教程：[docs/USAGE.md](docs/USAGE.md)。从打开目录到构建、SSH、烧录和常见问题的完整中文教程：[docs/TUTORIAL.md](docs/TUTORIAL.md)。烧录工具（ST-Link、CubeProgrammer、OpenOCD、pyOCD、J-Link、Keil）的详细配置：[docs/FLASH.md](docs/FLASH.md)。动态监测（watchpoint）的时间戳、调用栈和自动启动：[docs/DYNAMIC.md](docs/DYNAMIC.md)。
 
 ## 功能
 

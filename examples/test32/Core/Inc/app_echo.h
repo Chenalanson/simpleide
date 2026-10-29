@@ -1,15 +1,18 @@
 /**
   ******************************************************************************
   * @file    app_echo.h
-  * @brief   USART1 回显通道接口（PC 发什么，单片机回什么）。
-  *          接收：DMA1_Channel5 循环模式 + USART1 空闲(IDLE)中断，无逐字节中断开销；
-  *          发送：DMA1_Channel4 单次模式，主循环只做搬运调度。
-  *          对应 hardware.dts 台账 &uart1 / &dma1 节点与 app-bindings.console。
+  * @brief   USART1 收发通道（MODULES 层）：DMA 循环接收 + IDLE 分段搬运，
+  *          发送侧为 TX 环形缓冲 + 分块 DMA。
+  *
+  *          文件名沿用（工程既有 app_echo_init / app_echo_poll 调用点不变），
+  *          职责由「自动回显」改为「通用收发通道」，供 app_cmd 使用。
+  *
+  * 台账对应：hardware.dts &uart1（rx-dma-buffer-size / rx-ring-size /
+  *          tx-ring-size / tx-chunk-size 四项与本文件宏一一对应，改值先改台账）
   ******************************************************************************
   */
-
-#ifndef __APP_ECHO_H
-#define __APP_ECHO_H
+#ifndef __APP_ECHO_H__
+#define __APP_ECHO_H__
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,39 +20,38 @@ extern "C" {
 
 #include "main.h"
 
-/* ---- 参数宏（与台账 &uart1 同源，改这里不要改函数体） ---- */
-#define APP_ECHO_DMA_RX_SIZE      128U   /* DMA 循环接收缓冲字节数（1 ~ 65535） */
-#define APP_ECHO_RX_RING_SIZE     256U   /* 主环形缓冲字节数（实际可用 255 字节） */
-#define APP_ECHO_TX_CHUNK_SIZE    64U    /* 单次 TX DMA 最大字节数 */
+/* 参数宏：与 hardware.dts &uart1 同源 */
+#define APP_ECHO_DMA_RX_SIZE      128U   /* DMA 循环接收缓冲（字节） */
+#define APP_ECHO_RX_RING_SIZE     256U   /* 接收环形缓冲（字节） */
+#define APP_ECHO_TX_RING_SIZE     256U   /* 发送环形缓冲（字节） */
+#define APP_ECHO_TX_CHUNK_SIZE     64U   /* 单次 TX DMA 最大字节数 */
+#define APP_ECHO_POLL_CHUNK        64U   /* 单轮 poll 交给上层的最多字节数 */
 
-/**
-  * @brief  启动 USART1 回显：启动 DMA 循环接收并使能 IDLE 中断。
-  * @retval HAL_OK 成功；其它为 HAL 错误码（此时不应继续使用回显通道）
-  * @note   必须在 MX_USART1_UART_Init() 之后调用（DMA 句柄在 MspInit 中已链接）。
-  */
+/* 接收数据回调：由业务层（app_cmd）注册，主循环上下文调用 */
+typedef void (*app_echo_rx_handler_t)(const uint8_t *data, uint16_t len);
+
+/* 初始化：启动 RX DMA + IDLE 中断，并挂接 app_led / app_cmd */
 HAL_StatusTypeDef app_echo_init(void);
 
-/**
-  * @brief  主循环轮询：把接收缓冲中的字节通过 TX DMA 回发给 PC。
-  *         无数据或上一块未发完时立即返回，非阻塞。
-  */
+/* 主循环轮询：分发接收数据、推进 TX 分块发送、驱动 LED 闪烁节拍 */
 void app_echo_poll(void);
 
-/**
-  * @brief  USART1 空闲中断服务：把 DMA 缓冲中新增的区间搬进主环形缓冲。
-  * @note   通过 usart1_set_idle_callback() 注册到 PERIPHERAL 层；由
-  *         USART1_IRQHandler → usart1_idle_dispatch() 在 HAL_UART_IRQHandler()
-  *         之前调用；函数内部自行判断并清除 IDLE 标志，非 IDLE 触发时立即返回。
-  */
+/* 发送 len 字节：写入 TX 环形缓冲，由 app_echo_poll 分块 DMA 发出，不阻塞
+ * 返回值：实际入队的字节数（缓冲满时小于 len） */
+uint16_t app_echo_write(const uint8_t *data, uint16_t len);
+
+/* 注册接收数据回调（在 app_echo_init 之后调用） */
+void app_echo_set_rx_handler(app_echo_rx_handler_t handler);
+
+/* IDLE 中断入口：由 PERIPHERAL 层（usart.c）分发表调用 */
 void app_echo_idle_isr(void);
 
-/**
-  * @brief  获取因缓冲满而被丢弃的字节计数（调试观测用，正常运行应保持 0）。
-  */
+/* 观测接口：RX 缓冲溢出次数 / TX 丢弃字节数（正常应恒为 0） */
 uint32_t app_echo_overflow_count(void);
+uint32_t app_echo_tx_drop_count(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* __APP_ECHO_H */
+#endif /* __APP_ECHO_H__ */

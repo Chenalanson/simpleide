@@ -393,6 +393,7 @@ UI 改动后建议：
 ## 文档
 
 - `README.md`：项目定位、功能、依赖和设计取舍
+- `docs/USAGE.md`：按原始模式 / AI 模式分栏的图文速查教程，引用 `docs/screens/` 下的界面截图
 - `docs/TUTORIAL.md`：面向用户的中文操作教程
 - `docs/DYNAMIC.md`：动态监测（watchpoint）教程，含时间戳、调用栈和自动启动
 - `docs/FLASH.md`：烧录配置教程（ST-Link、CubeProgrammer、OpenOCD、pyOCD、J-Link、Keil）

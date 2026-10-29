@@ -24,14 +24,18 @@ test32/
 ├── Core/
 │   ├── Inc/
 │   │   ├── main.h                  # APP/PERIPHERAL 公共宏（LED_* 参数宏，与台账 led_status 同源）
-│   │   ├── app_echo.h              # MODULES：回显接口 + 参数宏（128 / 256 / 64，与台账 &uart1 同源）
+│   │   ├── app_echo.h              # MODULES：收发通道接口 + 参数宏（128 / 256 / 256 / 64，与台账 &uart1 同源）
+│   │   ├── app_led.h               # MODULES：PC13 三态控制接口 + BLINK 范围宏（与台账 led_status 同源）
+│   │   ├── app_cmd.h               # MODULES：指令解析接口（整行解析入口）
 │   │   ├── usart.h                 # PERIPHERAL：huart1 句柄 extern + MX_USART1_UART_Init 声明
 │   │   ├── gpio.h                  # PERIPHERAL：MX_GPIO_Init 声明
 │   │   ├── stm32f1xx_it.h          # PERIPHERAL：中断入口声明（含 DMA1_CH4/CH5）
 │   │   └── stm32f1xx_hal_conf.h    # HAL 模块裁剪（已启用 UART/DMA/GPIO/RCC/FLASH/CORTEX）
 │   └── Src/
 │       ├── main.c                  # APP：初始化编排 + while(1) 调度（LED 节拍、app_echo_poll）
-│       ├── app_echo.c              # MODULES：IDLE 分段搬运 / 环形缓冲 / TX 分块 / 错误恢复
+│       ├── app_echo.c              # MODULES：收发通道（IDLE 分段搬运 / RX+TX 环形缓冲 / TX 分块 / 错误恢复）
+│       ├── app_led.c               # MODULES：PC13 常亮/常灭/非阻塞闪烁（HAL_GetTick 时基）
+│       ├── app_cmd.c               # MODULES：整行解析 + LED_ON/LED_OFF/BLINK 指令与回复
 │       ├── usart.c                 # PERIPHERAL：MX_USART1_UART_Init + HAL_UART_MspInit（引脚/DMA/NVIC）
 │       ├── gpio.c                  # PERIPHERAL：MX_GPIO_Init（PC13 推挽输出）
 │       ├── stm32f1xx_it.c          # PERIPHERAL：向量入口（SysTick / USART1 / DMA1_CH4 / DMA1_CH5）
@@ -77,14 +81,16 @@ flowchart TD
 
 ### 1.4 模块依赖矩阵
 
-| 模块(行) \ 依赖(列) | MODULES-echo (`app_echo.c`) | PERIPH-usart1 (`usart.c`) | PERIPH-gpio (`gpio.c`) | PERIPH-it (`stm32f1xx_it.c`) | HAL-UART | HAL-DMA / NVIC | HAL-GPIO |
-|---|---|---|---|---|---|---|---|
-| APP `main.c` | `app_echo_init()` / `app_echo_poll()` | `MX_USART1_UART_Init()` | `MX_GPIO_Init()` | — | `HAL_GetTick()`（间接） | — | `HAL_GPIO_WritePin` / `HAL_GPIO_TogglePin` |
-| MODULES `app_echo.c` | — | `huart1`（extern 句柄） | — | — | `HAL_UART_Receive_DMA` / `HAL_UART_Transmit_DMA` / `__HAL_UART_ENABLE_IT` | `__HAL_DMA_GET_COUNTER` | — |
-| PERIPH `usart.c` | — | — | — | — | `HAL_UART_Init` | `HAL_DMA_Init` / `__HAL_LINKDMA` / `HAL_NVIC_SetPriority` / `HAL_NVIC_EnableIRQ` | — |
-| PERIPH `gpio.c` | — | — | — | — | — | — | `HAL_GPIO_Init` |
-| PERIPH `stm32f1xx_it.c` | —（经 `usart1_idle_dispatch()` 回调到 `app_echo_idle_isr`，无编译期依赖） | `usart1_idle_dispatch()` / `huart1` | — | — | `HAL_UART_IRQHandler` | `HAL_DMA_IRQHandler` | — |
-| HAL 库 | — | — | — | — | 寄存器访问 | 寄存器访问 | 寄存器访问 |
+| 模块(行) \ 依赖(列) | MODULES-echo (`app_echo.c`) | MODULES-cmd (`app_cmd.c`) | MODULES-led (`app_led.c`) | PERIPH-usart1 (`usart.c`) | PERIPH-gpio (`gpio.c`) | PERIPH-it (`stm32f1xx_it.c`) | HAL-UART | HAL-DMA / NVIC | HAL-GPIO |
+|---|---|---|---|---|---|---|---|---|
+| APP `main.c` | `app_echo_init()` / `app_echo_poll()` | — | — | `MX_USART1_UART_Init()` | `MX_GPIO_Init()` | — | `HAL_GetTick()`（间接） | — | `HAL_GPIO_TogglePin`（旧 1s 节拍，待移除） |
+| MODULES `app_echo.c` | — | `app_cmd_init()` | `app_led_init()` / `app_led_poll()` | `huart1`、`usart1_set_idle_callback()` | — | — | `HAL_UART_Receive_DMA` / `HAL_UART_Transmit_DMA` / `__HAL_UART_ENABLE_IT` / `__HAL_UART_CLEAR_IDLEFLAG` | `__HAL_DMA_GET_COUNTER` | — |
+| MODULES `app_cmd.c` | `app_echo_write()` / `app_echo_set_rx_handler()` | — | `app_led_on()` / `app_led_off()` / `app_led_blink_start()` | — | — | — | — | — | — |
+| MODULES `app_led.c` | — | — | — | — | — | — | `HAL_GetTick()` | — | `HAL_GPIO_WritePin` / `HAL_GPIO_TogglePin` |
+| PERIPH `usart.c` | — | — | — | — | — | — | `HAL_UART_Init` | `HAL_DMA_Init` / `__HAL_LINKDMA` / `HAL_NVIC_SetPriority` / `HAL_NVIC_EnableIRQ` | — |
+| PERIPH `gpio.c` | — | — | — | — | — | — | — | — | `HAL_GPIO_Init` |
+| PERIPH `stm32f1xx_it.c` | —（经 `usart1_idle_dispatch()` 回调到 `app_echo_idle_isr`，无编译期依赖） | — | — | `usart1_idle_dispatch()` / `huart1` | — | — | `HAL_UART_IRQHandler` | `HAL_DMA_IRQHandler` | — |
+| HAL 库 | — | — | — | — | — | — | 寄存器访问 | 寄存器访问 | 寄存器访问 |
 
 ## 2. 软件架构
 
@@ -105,8 +111,10 @@ flowchart TD
 
 | 任务名 | 触发类型(周期/一次性/条件) | 周期 ms | 实现位置(文件:函数) | 状态集 | 数据来源/去向 |
 |---|---|---|---|---|---|
-| LED 翻转节拍 | 周期性（时间戳差 ≥ `LED_BLINK_INTERVAL_MS`） | 1000（半周期；完整翻转周期 2000） | `Core/Src/main.c` : `while(1)` USER CODE 3 | 无状态机，`s_led_last_tick` 仅记录上次命中时刻 | `HAL_GetTick()` → `HAL_GPIO_TogglePin(GPIOC, PIN_13)` |
-| 回显发送调度 | 条件性（环形缓冲非空 且 `s_tx_busy == 0`） | —（每轮循环检查，无固定间隔） | `Core/Src/app_echo.c` : `app_echo_poll()` | `s_tx_busy ∈ {0 空闲, 1 在途}` | `s_rx_ring` → `s_tx_chunk`（≤64 B）→ `HAL_UART_Transmit_DMA` |
+| 命令接收分发 | 条件性（接收环形缓冲非空） | —（每轮循环检查，无固定间隔） | `Core/Src/app_echo.c` : `app_echo_poll()` → `app_cmd_on_rx()` | 无状态机，行缓冲累积 | `s_rx_ring` → `s_rx_tmp`（≤64 B）→ 逐字节入行缓冲 |
+| 命令整行解析 | 一次性（事件触发：收到 '\\n'） | —（由指令到达决定） | `Core/Src/app_cmd.c` : `cmd_handle_line()` | `s_len` / `s_overflow`；指令集 {LED_ON, LED_OFF, BLINK:<ms>} | 行缓冲 → `app_led_on/off/blink_start()` + `app_echo_write()` 回复 |
+| LED 闪烁节拍 | 条件性（`s_mode == APP_LED_MODE_BLINK` 且时间戳差 ≥ `s_period_ms`） | 由 `BLINK:<ms>` 参数决定（1..60000） | `Core/Src/app_led.c` : `app_led_poll()` | `s_mode ∈ {OFF, ON, BLINK}` | `HAL_GetTick()` → `HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13)` |
+| TX 分块发送 | 条件性（`s_tx_ring` 非空 且 `s_tx_busy == 0`） | —（每轮循环检查） | `Core/Src/app_echo.c` : `app_echo_poll()` | `s_tx_busy ∈ {0 空闲, 1 在途}` | `s_tx_ring` → `s_tx_chunk`（≤64 B）→ `HAL_UART_Transmit_DMA` |
 | 接收分段搬运 | 一次性（事件触发：每帧 IDLE 中断一次） | —（由帧间隔决定） | `Core/Src/app_echo.c` : `app_echo_idle_isr()` | `s_dma_last`（DMA 已写入位置） | `s_dma_rx_buf` + `CNDTR` → `s_rx_ring`（含回绕处理） |
 | TX 完成释放 | 一次性（DMA1_CH4 传输完成中断） | — | `Core/Src/app_echo.c` : `HAL_UART_TxCpltCallback()` | `s_tx_busy = 0` | DMA1_CH4 TC → 释放发送权，允许下一块 |
 
@@ -118,8 +126,11 @@ flowchart TD
 | 单例句柄（static 私有实例 + 接口暴露） | `Core/Src/app_echo.c` 全部模块变量 `static`，对外仅 `app_echo_init/poll/idle_isr/overflow_count`；`Core/Src/usart.c` 的 `huart1` | 替代 `extern` 全局变量，防止跨模块直接改内部状态（`module-convention.md` 方式 B） |
 | 回调注册（HAL 弱回调覆盖） | `Core/Src/app_echo.c` : `HAL_UART_TxCpltCallback` / `HAL_UART_ErrorCallback` | 解耦「DMA 传输完成 / 总线错误」事件与业务处理，回调内只做状态释放与接收恢复 |
 | 轻量状态标志串行化（单块在途） | `Core/Src/app_echo.c` : `s_tx_busy` + `s_tx_chunk` | 避免重叠启动 TX DMA 导致数据错乱；单帧超过 64 B 时由下一轮 poll 自动续发 |
+| 命令解释器（行缓冲 + 前缀匹配） | `Core/Src/app_cmd.c` : `s_line` / `cmd_handle_line()` / `cmd_parse_blink()` | 把字节流还原为整行指令，未知指令统一回 `ERR:Unknown cmd` |
+| 模式状态机（LED 三态） | `Core/Src/app_led.c` : `s_mode ∈ {OFF, ON, BLINK}` | 闪烁中收到 ON/OFF 立即切换为常亮/常灭，无需额外停止指令 |
+| 接收回调注册 | `Core/Src/app_echo.c` : `app_echo_set_rx_handler()` | 通道层不依赖业务层，由 `app_cmd_init()` 注册处理函数（D1 单向） |
 
-未使用（当前无对应需求，后续扩展时再登记）：显式 `switch-case` 协议状态机、MID 设备管理器注册表、门面/解释层高级 API。
+未使用（当前无对应需求，后续扩展时再登记）：显式多状态协议状态机（当前指令解析为单跳）、MID 设备管理器注册表、门面/解释层高级 API。
 
 ### 2.4 模块化要点
 
@@ -172,8 +183,11 @@ sequenceDiagram
     Note over U: 115200 8N1；HAL_UART_MspInit 内完成 PA9/PA10 复用配置、DMA1_CH4/CH5 句柄创建与 __HAL_LINKDMA、NVIC 使能（USART1 优先级 0，DMA 优先级 1）
     M->>M: LED 上电熄灭（LED_ACTIVE_LOW 为真则写 SET）
     M->>E: app_echo_init()
+    E->>U: usart1_set_idle_callback(app_echo_idle_isr)
     E->>U: HAL_UART_Receive_DMA(s_dma_rx_buf, 128)（循环模式）
     E->>U: __HAL_UART_ENABLE_IT(UART_IT_IDLE)
+    E->>G: app_led_init()（PC13 输出低电平，熄灭）
+    E->>E: app_cmd_init()（注册 RX 回调 + 入队 "System Ready\\r\\n"）
     E-->>M: HAL_OK（非 HAL_OK → Error_Handler 关中断停机）
     M->>M: while(1)：LED 节拍判断 + app_echo_poll()
 ```
@@ -214,7 +228,7 @@ gantt
 
 ### 3.4 关键事件上下文链
 
-事件 A：PC → 单片机 → PC 回显（正常路径）
+事件 A：PC 下发指令 → LED 动作 + 文本回复（正常路径）
 
 ```mermaid
 sequenceDiagram
@@ -223,17 +237,20 @@ sequenceDiagram
     participant ISR as app_echo_idle_isr（USART1 ISR）
     participant RING as s_rx_ring 环形缓冲
     participant LOOP as app_echo_poll（主循环）
+    participant CMD as app_cmd（行缓冲解析）
+    participant LED as app_led（模式状态机）
     participant TX as DMA1_CH4 + 完成回调
-    PC->>HW: 连续字节流（115200 8N1，无需 CPU 参与）
-    HW->>RING: DMA 循环写入 s_dma_rx_buf（硬件指针推进）
-    PC-->>ISR: 帧间隔 ≥1 字符时间 → IDLE 置位
-    ISR->>ISR: 读 SR → 读 DR 清 IDLE；pos = 128 - CNDTR
-    ISR->>RING: echo_ring_push_range 搬 [s_dma_last, pos)，跨尾部时二次搬运
-    LOOP->>RING: echo_ring_pop 取 ≤64 B 到 s_tx_chunk
-    LOOP->>TX: HAL_UART_Transmit_DMA，置 s_tx_busy = 1
-    TX->>PC: PA9 回发该块
+    PC->>HW: "LED_ON\\n"（115200 8N1，DMA 硬件写入）
+    HW->>RING: DMA 循环写 s_dma_rx_buf → IDLE 搬运入 s_rx_ring
+    LOOP->>RING: echo_ring_pop 取 ≤64 B
+    LOOP->>CMD: s_rx_handler(s_rx_tmp, n)
+    CMD->>CMD: 逐字节累积，遇 '\\n' 调 cmd_handle_line()
+    CMD->>LED: app_led_on()（闪烁中则立即停闪，置高）
+    CMD->>TX: app_echo_write("OK:LED ON\\r\\n")（入 s_tx_ring）
+    LOOP->>TX: HAL_UART_Transmit_DMA（≤64 B），置 s_tx_busy = 1
+    TX->>PC: PA9 回发 "OK:LED ON"
     TX-->>LOOP: TX DMA 完成中断 → HAL_UART_TxCpltCallback → s_tx_busy = 0
-    Note over LOOP: 剩余数据由下一轮 poll 续发（分块串行化）
+    Note over LOOP: 未知指令 → 回 "ERR:Unknown cmd"；BLINK:<ms> → 回复 "OK:BLINK <ms>ms" 后由 app_led_poll 周期翻转
 ```
 
 事件 B：串口错误（ORE/NE/FE）恢复路径
@@ -265,6 +282,9 @@ sequenceDiagram
 | `HAL_UART_IRQHandler()` | ISR（USART1） | 否 | < 10us | — | 同上 |
 | `app_echo_poll()` | 主循环 | 否（`HAL_UART_Transmit_DMA` 仅启动配置） | 无数据 < 2us；触发发送 < 20us | — | 空闲 GPIO 翻转 + 逻辑分析仪 |
 | `echo_ring_pop()` | 主循环（poll 内） | 否 | ≤64 次循环 < 10us | — | 含在 `app_echo_poll` 跨度内 |
+| `app_cmd_on_rx()` | 主循环（poll 内） | 否 | 每字节 < 1us；64 B < 20us | — | 含在 `app_echo_poll` 跨度内 |
+| `cmd_handle_line()` | 主循环（poll 内） | 否（`snprintf` 无浮点） | < 20us[预估] | — | 空闲 GPIO 翻转 + 逻辑分析仪 |
+| `app_led_poll()` | 主循环（poll 内） | 否 | < 1us | — | 含在 `app_echo_poll` 跨度内 |
 | `HAL_UART_TxCpltCallback()` | ISR（DMA1_CH4，优先级 1） | 否 | < 2us | — | 空闲 GPIO 翻转 |
 | LED 节拍判断 | 主循环 | 否 | < 1us | — | Map/反汇编估算 + GPIO 翻转 |
 

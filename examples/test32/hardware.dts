@@ -69,6 +69,7 @@
     app-bindings {
         usage = "业务用途到硬件资源的绑定视图";
         run_led      = <&led_status>;                          /* 运行状态指示 */
+        cmd_led      = <&led_status>;                          /* LED_ON / LED_OFF / BLINK:<ms> 命令目标 */
         debug_port   = <&pin_swd_io_pa13 &pin_swd_clk_pa14>;   /* 在线调试/下载 */
         clock_source = <&pin_hse_in_pd0 &pin_hse_out_pd1>;     /* 系统时钟源 */
         console      = <&uart1>;                               /* USART1：PC ↔ 单片机回显通道 */
@@ -108,9 +109,9 @@
         mode = "output-push-pull";
         speed = "low";
         pull = "none";
-        polarity = "active-low";             /* TODO: 依原理图 PC13 网络核对板载 LED 极性 */
-        usage = "运行状态指示（板载 LED）";
-        note = "PC13 属低驱动能力引脚组，DS 对其输出能力有额外限制，只驱动 LED 不得作电流源或高速信号";
+        polarity = "active-high";            /* TODO: 按用户指令「置高点亮」实现，待原理图 PC13 网络核对 */
+        usage = "运行状态指示：常亮 / 常灭 / 周期闪烁（命令控制）";
+        note = "PC13 属低驱动能力引脚组，只驱动 LED；极性以本节点为准，代码宏须同步";
     };
 
     /* ---- 调试接口 SWD ---- */
@@ -168,14 +169,14 @@
     led_status: led_status {
         compatible = "stm32,gpio";
         status = "okay";
-        usage = "运行状态指示：亮/灭各 1000ms 无限循环";
+        usage = "运行状态指示：默认熄灭，由串口命令 LED_ON / LED_OFF / BLINK:<ms> 控制";
         pinctrl-0 = <&pin_led_pc13>;
         pinctrl-names = "default";
         io-direction = "out";
-        polarity = "active-low";             /* TODO: 与 pin_led_pc13 同步销项 */
-        safe-state = "high";                 /* 上电/复位默认熄灭（低有效则写高电平） */
-        toggle-interval-ms = <1000>;         /* 半周期 1000ms，完整翻转周期 2000ms */
-        note = "代码位置：Core/Src/main.c USER CODE 2/3；参数宏位置：Core/Inc/main.h LED_*";
+        polarity = "active-high";            /* 置高 = 点亮 */
+        safe-state = "low";                  /* 上电/复位默认熄灭 */
+        blink-period-ms-range = "1..60000";  /* BLINK:<ms> 允许范围，代码宏 APP_LED_BLINK_MIN_MS/MAX_MS */
+        note = "代码：Core/Src/app_led.c（app_led_on/off/blink_start/poll）；宏：Core/Inc/app_led.h";
     };
 };
 
@@ -185,7 +186,7 @@
 &uart1 {
     compatible = "stm32,usart";
     status = "okay";
-    usage = "PC ↔ 单片机回显通道：PC 发任意字节，单片机原样回传（echo）";
+    usage = "PC ↔ 单片机命令通道：ASCII 指令以 '\\n' 结束，回复定长文本行（不再自动回显）";
     current-speed = <115200>;
     data-bits = <8>;
     parity = "none";
@@ -199,9 +200,14 @@
     tx-mode = "dma-single-chunk";             /* DMA 单次发送，完成回调释放发送权 */
     rx-dma-buffer-size = <128>;               /* DMA 循环缓冲字节数（CNDTR 为 16 位，上限 65535） */
     rx-ring-size = <256>;                     /* 主环形缓冲字节数 */
+    tx-ring-size = <256>;                     /* [新增] 发送环形缓冲，命令回复与启动信息共用 */
     tx-chunk-size = <64>;                     /* 单次 TX DMA 最大字节数 */
+    line-terminator = "lf";                   /* 指令行结束符 '\\n'，'\\r' 忽略 */
+    command-set = "LED_ON", "LED_OFF", "BLINK:<ms>";
+    boot-message = "System Ready\\r\\n";
+    reply-format = "OK:LED ON\\r\\n / OK:LED OFF\\r\\n / OK:BLINK <ms>ms\\r\\n / ERR:Unknown cmd\\r\\n";
     idle-clear-sequence = "read-sr-then-dr";  /* 已核对：RM USART「Idle line detection」要求读 SR 后读 DR 清 IDLE */
-    note = "初始化沿用 MX_USART1_UART_Init()；DMA 句柄在 HAL_UART_MspInit() 的 USER CODE 区创建后 __HAL_LINKDMA 关联，必须早于 HAL_UART_Init 内部配置；业务代码：Core/Src/app_echo.c；参数宏：Core/Inc/app_echo.h";
+    note = "初始化沿用 MX_USART1_UART_Init()；DMA 句柄在 HAL_UART_MspInit() 创建后 __HAL_LINKDMA 关联；通道：Core/Src/app_echo.c；命令：Core/Src/app_cmd.c；参数宏：Core/Inc/app_echo.h、Core/Inc/app_cmd.h";
 };
 
 /*
@@ -236,7 +242,7 @@
 
 /* ============================================================================
  * 待核对汇总（销项后删除对应行）
- * [ ] PC13 板载 LED 极性 / 限流电阻阻值          —— 依据：原理图 PC13 网络 + BOM
+ * [ ] PC13 极性已按用户指令改为 active-high（置高点亮），待与原理图核对；限流电阻阻值 —— 依据：原理图 PC13 网络 + BOM
  * [ ] PC13 输出能力限制（低驱动能力引脚组）       —— 依据：DS「Pin definitions」PC13~PC15 注释
  * [ ] HSE 晶振实物是否 8MHz                      —— 依据：原理图 Y1 位号
  * [ ] Flash 等待周期 2WS @72MHz 是否满足电压区间   —— 依据：DS Flash 时序表

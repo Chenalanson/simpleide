@@ -20,6 +20,18 @@
       "pack": "",
       "program_file": "${ExecutableName}.hex"
     },
+    "serial": {
+      "port": "",
+      "baud": 115200
+    },
+    "firmware": {
+      "esptool": "esptool",
+      "file": "",
+      "chip": "esp32",
+      "address": "0x1000",
+      "erase": false,
+      "verify": true
+    },
     "build_jobs": 0,
     "ssh_host": "",
     "ssh_port": 22,
@@ -175,5 +187,11 @@
     "watches": [
       "i"
     ]
+  },
+  "cli": {
+    "port": "COM4",
+    "baud": 115200,
+    "line_ending": "CRLF",
+    "timeout_ms": 800
   }
 }
