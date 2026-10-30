@@ -701,13 +701,13 @@ fn render_flow(ui: &mut Ui, flow: &FlowChart, id: Id) {
     let (nodes, edges, size) = layout_flow(flow);
     let available = ui.available_width();
     if size.x <= available + 4.0 {
-        paint_flow(ui, flow, &nodes, &edges, size);
+        paint_flow(ui, &nodes, &edges, size);
     } else {
         ScrollArea::horizontal()
             .id_salt(("mermaid_flow", id))
             .scroll_source(egui::scroll_area::ScrollSource::SCROLL_BAR)
             .auto_shrink([false, true])
-            .show(ui, |ui| paint_flow(ui, flow, &nodes, &edges, size));
+            .show(ui, |ui| paint_flow(ui, &nodes, &edges, size));
         ui.label(
             RichText::new("横向拖动滚动条查看完整图")
                 .size(8.0)
@@ -717,14 +717,8 @@ fn render_flow(ui: &mut Ui, flow: &FlowChart, id: Id) {
     ui.add_space(4.0);
 }
 
-fn paint_flow(
-    ui: &mut Ui,
-    flow: &FlowChart,
-    nodes: &[FlowNodeLayout],
-    edges: &[FlowEdgeLayout],
-    size: Vec2,
-) {
-    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+fn paint_flow(ui: &mut Ui, nodes: &[FlowNodeLayout], edges: &[FlowEdgeLayout], size: Vec2) {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(
         rect,
@@ -736,15 +730,6 @@ fn paint_flow(
     }
     for node in nodes {
         draw_flow_node(painter, node, rect.min);
-    }
-    let details = flow
-        .nodes
-        .iter()
-        .map(|node| format!("{}：{}", node.id, node.label.replace('\n', " / ")))
-        .collect::<Vec<_>>()
-        .join("\n");
-    if !details.is_empty() {
-        response.on_hover_text(details);
     }
 }
 
@@ -1145,14 +1130,14 @@ enum SeqItem {
 }
 
 fn render_sequence(ui: &mut Ui, sequence: &SequenceDiagram, id: Id) {
-    let (participants, items, size) = layout_sequence(sequence);
     let available = ui.available_width();
+    let (participants, items, size) = layout_sequence(sequence, available);
     ScrollArea::horizontal()
         .id_salt(("mermaid_sequence", id))
         .scroll_source(egui::scroll_area::ScrollSource::SCROLL_BAR)
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+            let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
             let painter = ui.painter();
             painter.rect_filled(
                 rect,
@@ -1191,8 +1176,7 @@ fn render_sequence(ui: &mut Ui, sequence: &SequenceDiagram, id: Id) {
                         dotted,
                         cross,
                     } => {
-                        let center_x = (from_x + to_x) / 2.0;
-                        draw_message_text(painter, center_x, rect.top() + *top, lines);
+                        draw_message_text(painter, rect.left() + 8.0, rect.top() + *top, lines);
                         let from = egui::pos2(rect.left() + *from_x, rect.top() + *arrow_y);
                         let to = egui::pos2(rect.left() + *to_x, rect.top() + *arrow_y);
                         let stroke = Stroke::new(1.2_f32, theme::text_faint());
@@ -1282,15 +1266,6 @@ fn render_sequence(ui: &mut Ui, sequence: &SequenceDiagram, id: Id) {
                     );
                 }
             }
-            let details = sequence
-                .participants
-                .iter()
-                .map(|participant| format!("{}：{}", participant.id, participant.label))
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !details.is_empty() {
-                response.on_hover_text(details);
-            }
         });
     if size.x > available + 4.0 {
         ui.label(
@@ -1302,26 +1277,40 @@ fn render_sequence(ui: &mut Ui, sequence: &SequenceDiagram, id: Id) {
     ui.add_space(4.0);
 }
 
-fn layout_sequence(sequence: &SequenceDiagram) -> (Vec<SeqParticipantLayout>, Vec<SeqItem>, Vec2) {
+fn layout_sequence(
+    sequence: &SequenceDiagram,
+    available: f32,
+) -> (Vec<SeqParticipantLayout>, Vec<SeqItem>, Vec2) {
+    let count = sequence.participants.len().max(1);
+    let gap = 10.0;
+    let pad = 10.0;
     let mut widths = Vec::new();
-    let mut labels = Vec::new();
     for participant in &sequence.participants {
-        let lines = wrap_label(&participant.label, 14);
-        let max_width = lines
-            .iter()
-            .map(|line| text_width(line, 8.5))
-            .fold(0.0_f32, f32::max);
-        widths.push((max_width + 20.0).clamp(76.0, 190.0));
-        labels.push(lines);
+        let natural = text_width(&participant.label, 8.5) + 20.0;
+        widths.push(natural.clamp(70.0, 160.0));
     }
-    let gap = 26.0;
-    let pad = 14.0;
+    let sum_widths = widths.iter().sum::<f32>();
+    let usable = (available - pad * 2.0 - gap * (count - 1) as f32).max(40.0);
+    let scale = (usable / sum_widths.max(1.0)).min(1.0);
+    for width in &mut widths {
+        *width = (*width * scale).max(34.0);
+    }
+    let mut labels = Vec::new();
+    for (index, participant) in sequence.participants.iter().enumerate() {
+        let max_chars = ((widths[index] - 8.0) / 5.2).max(3.0) as usize;
+        let header = if participant.label.chars().count() > 8 {
+            participant.id.clone()
+        } else {
+            participant.label.clone()
+        };
+        labels.push(wrap_label(&header, max_chars));
+    }
     let mut x = pad;
     let mut center = HashMap::new();
     let mut layouts = Vec::new();
     for (index, participant) in sequence.participants.iter().enumerate() {
         let width = widths[index];
-        let height = (labels[index].len() as f32 * 12.0 + 12.0).clamp(26.0, 72.0);
+        let height = (labels[index].len() as f32 * 11.0 + 10.0).clamp(24.0, 80.0);
         let rect = Rect::from_min_size(egui::pos2(x, 8.0), egui::vec2(width, height));
         center.insert(participant.id.as_str(), rect.center().x);
         layouts.push(SeqParticipantLayout {
@@ -1332,7 +1321,11 @@ fn layout_sequence(sequence: &SequenceDiagram) -> (Vec<SeqParticipantLayout>, Ve
         x += width + gap;
     }
     let total_width = x - gap + pad;
-    let mut top = 54.0 + labels.iter().map(|lines| lines.len()).max().unwrap_or(1) as f32 * 12.0;
+    let max_header = labels
+        .iter()
+        .map(|lines| (lines.len() as f32 * 11.0 + 10.0).clamp(24.0, 80.0))
+        .fold(0.0_f32, f32::max);
+    let mut top = 8.0 + max_header + 18.0;
     let mut items = Vec::new();
     for event in &sequence.events {
         match event {
@@ -1343,15 +1336,32 @@ fn layout_sequence(sequence: &SequenceDiagram) -> (Vec<SeqParticipantLayout>, Ve
                 dotted,
                 cross,
             } => {
-                let lines = wrap_label(text, 34);
-                let height = lines.len() as f32 * 12.0 + 20.0;
+                let from_label = sequence
+                    .participants
+                    .iter()
+                    .find(|participant| participant.id == *from)
+                    .map(|participant| participant.label.clone())
+                    .unwrap_or_else(|| from.clone());
+                let to_label = sequence
+                    .participants
+                    .iter()
+                    .find(|participant| participant.id == *to)
+                    .map(|participant| participant.label.clone())
+                    .unwrap_or_else(|| to.clone());
+                let combined = if text.trim().is_empty() {
+                    format!("{from_label} → {to_label}")
+                } else {
+                    format!("{from_label} → {to_label}：{text}")
+                };
+                let lines = wrap_label(&combined, 40);
+                let height = lines.len() as f32 * 11.0 + 14.0;
                 let from_x = center.get(from.as_str()).copied().unwrap_or(pad);
                 let to_x = center.get(to.as_str()).copied().unwrap_or(pad);
                 items.push(SeqItem::Message {
                     from_x,
                     to_x,
                     top,
-                    arrow_y: top + lines.len() as f32 * 12.0 + 8.0,
+                    arrow_y: top + lines.len() as f32 * 11.0 + 5.0,
                     lines,
                     dotted: *dotted,
                     cross: *cross,
@@ -1393,7 +1403,7 @@ fn layout_sequence(sequence: &SequenceDiagram) -> (Vec<SeqParticipantLayout>, Ve
     (layouts, items, size)
 }
 
-fn draw_message_text(painter: &egui::Painter, center_x: f32, top: f32, lines: &[String]) {
+fn draw_message_text(painter: &egui::Painter, left: f32, top: f32, lines: &[String]) {
     if lines.is_empty() {
         return;
     }
@@ -1403,18 +1413,15 @@ fn draw_message_text(painter: &egui::Painter, center_x: f32, top: f32, lines: &[
         .fold(0.0_f32, f32::max)
         + 10.0;
     let height = lines.len() as f32 * 11.0 + 4.0;
-    let rect = Rect::from_min_size(
-        egui::pos2(center_x - width / 2.0, top),
-        egui::vec2(width, height),
-    );
+    let rect = Rect::from_min_size(egui::pos2(left, top), egui::vec2(width, height));
     painter.rect_filled(rect, CornerRadius::same(3), theme::panel());
     for (index, line) in lines.iter().enumerate() {
         painter.text(
-            egui::pos2(center_x, top + 2.0 + index as f32 * 11.0 + 5.5),
-            Align2::CENTER_CENTER,
+            egui::pos2(left + 4.0, top + 2.0 + index as f32 * 11.0),
+            Align2::LEFT_TOP,
             line,
             FontId::proportional(8.0),
-            theme::text_dim(),
+            theme::text(),
         );
     }
 }
