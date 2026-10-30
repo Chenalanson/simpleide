@@ -1048,7 +1048,7 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
     let mut prompt = String::new();
     prompt.push_str(
         "你是 Simple embedded 的 AI 助手，正在协助 STM32 嵌入式开发。\n\
-         必须优先遵循已加载的 stm32-embedded-dev skill 的四层模型：L0 执行总则 O1–O13 是不可覆盖的硬约束；L1 按第 1 节判定 T1–T8 并生成任务链；L2 按 references/task-registry.md 的 guard / accept / on_error 执行；L3 按第 3 节模板 A–H 输出。未执行的任务不得写成“已完成”。\
+         必须优先遵循已加载的 stm32-embedded-dev skill 的四层模型：L0 执行总则 O1–O14 是不可覆盖的硬约束；L1 按第 1 节判定 T1–T8 并生成任务链；L2 按 references/task-registry.md 的 guard / accept / on_error 执行；L3 按第 3 节模板 A–H 输出。未执行的任务不得写成“已完成”。\
          L3 输出必须保留对应模板的小节编号、标题和表格维度：T1–T5 使用模板 A–E，T6 其他操作使用模板 F，T7 代码风格使用模板 G，T8 系统整体感知使用模板 H。\
          模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载：已有文件的最小修改必须用 se-replace，新建或整份重写才用 se-file，删除文件用 se-delete 承载；\
          用户要求阅读/理解新导入或别人的工程、分析架构、重新生成或替换 framework.md，或工程明显不是默认 APP/MID/BSP 结构时，先按 T8 盘点实际目录/构建/入口/RTOS/厂商代码和现有文档，判断“默认/兼容/外来/混合”，不要直接套默认架构；T8 默认不改代码/不移动目录，替换或重构前用 se-ask 确认；\
@@ -1446,7 +1446,7 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
          se-list / se-read 是只读操作，不需要用户授权；缺文件时直接读取，禁止在正文问“请允许我读取”。只有写文件、删除、重构、烧录、串口连接等有副作用的动作才用 se-ask 确认。\n\
          只写“本轮读取/读取目标/下一轮读取”的计划或表格不算请求；必须实际输出四反引号的 se-read / se-list 块，且不要放进普通代码块。只写计划时 IDE 不会读取，会自动要求你重写；连续两次仍不输出可执行块就停止自动检索并提示用户。\n\
          一次最多 12 个检索请求，IDE 最多自动继续 6 轮；路径必须相对工程根目录，禁止绝对路径、`..`、build/Debug/Release/out/target、`.simple-embedded`、`.git`、`.opencode` 等生成或配置目录，禁止符号链接和二进制文件。唯一例外：`.opencode/skills/stm32-embedded-dev/` 下的 `.md` 参考文件可以只读 se-read（当某个 skill 文件未加载或被截断时使用）。\n\
-         检索回复只输出 se-list / se-read 和简短说明，不要在同一回复里输出 se-file / se-replace / se-delete；拿到正文后再生成修改。优先按 framework.md 的文件表定位，再 list 目录、read 关键文件，不要重复读取已经出现过的全文。\n\n\
+         检索轮只用于补齐仍然缺失的正文，不是固定要单独占一轮。已经在本轮或之前拿到正文的目标文件不要再 se-read；如果需要修改，直接输出 se-replace / se-file，不要把已经能改的文件拖到下一轮。只有仍缺正文时才输出 se-read / se-list，并且同一文件不得连续读取两次（除非上次读取被截断或文件已被修改）。读完后的下一条回复必须直接落盘（se-replace / se-file / se-delete）或 se-build，禁止再写“我将落盘/接下来修改”却不输出实际块；用户已明确要求执行时，只读回复不算执行。优先按 framework.md 的文件表定位，再 list 目录、read 关键文件，不要重复读取已经出现过的全文。\n\n\
          ## 文件修改协议（重要）\n\n\
          你运行在 Simple embedded 的 AI 模式中，IDE 会执行你给出的文件修改。不要声称无法写入磁盘，也不要把完整代码只放在普通 Markdown 代码块里让用户手动复制。\n\n\
          新建或整体覆盖文件，使用四个反引号（内容里可以安全包含普通的三反引号 Markdown 代码块，例如 framework.md 的 Mermaid 图）：\n\n\
@@ -2510,9 +2510,61 @@ pub(crate) fn looks_like_fs_intent(text: &str) -> bool {
             "需要读取",
             "接下来读取",
             "只读不写",
+            "先补齐",
+            "补齐",
+            "读取正文",
+            "正文：",
+            "先读",
+            "还要读",
+            "读完",
         ]
         .iter()
         .any(|marker| text.contains(marker))
+}
+
+/// Detect an assistant reply that only *promises* to write files instead of
+/// emitting an executable `se-file` / `se-replace` / `se-delete` fence. This is
+/// the write-side counterpart of `looks_like_fs_intent`: without it a model can
+/// say "I will apply the patch now" and end the turn with no card.
+pub(crate) fn looks_like_write_intent(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() || text.contains("已落盘") || text.contains("已应用") {
+        return false;
+    }
+    let lower = text.to_ascii_lowercase();
+    let mentions_write = text.contains("落盘") || text.contains("写盘");
+    let protocol_promise =
+        (lower.contains("se-replace") || lower.contains("se-file") || lower.contains("se-delete"))
+            && [
+                "我将输出",
+                "接下来输出",
+                "马上输出",
+                "立即输出",
+                "下一步输出",
+                "我将给出",
+                "接下来给出",
+            ]
+            .iter()
+            .any(|marker| text.contains(marker));
+    if !mentions_write && !protocol_promise {
+        return false;
+    }
+    [
+        "我将",
+        "接下来",
+        "马上",
+        "即将",
+        "下一步",
+        "准备落盘",
+        "现在落盘",
+        "现在就",
+        "现在开始",
+        "现在我",
+        "待落盘",
+        "先落盘",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
 }
 
 pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
@@ -2665,6 +2717,18 @@ mod tests {
         assert!(!looks_like_fs_intent(
             "修改已完成，编译通过；下一步可以烧录验证。"
         ));
+        assert!(!looks_like_fs_intent("先读取寄存器状态，再判断故障。"));
+    }
+
+    #[test]
+    fn detects_write_promise_without_an_executable_block() {
+        assert!(looks_like_write_intent(
+            "上一轮我说了要落盘 se-replace 但没输出，现在我直接落盘："
+        ));
+        assert!(looks_like_write_intent("接下来修改文件并落盘。"));
+        assert!(looks_like_fs_intent("先补齐这三份头文件与 .ioc 的正文："));
+        assert!(!looks_like_write_intent("修改已完成，编译通过。"));
+        assert!(!looks_like_write_intent("为什么需要 se-replace？"));
         assert!(!looks_like_fs_intent("先读取寄存器状态，再判断故障。"));
     }
 
@@ -3101,6 +3165,7 @@ mod tests {
         assert!(prompt.contains("se-read"));
         assert!(prompt.contains("T8 系统整体感知"));
         assert!(prompt.contains("L0 执行总则"));
+        assert!(prompt.contains("O1–O14"));
         assert!(prompt.contains("references/task-registry.md"));
         assert!(prompt.contains("用户导入的额外 Skill"));
         assert!(prompt.contains("extra skill marker"));

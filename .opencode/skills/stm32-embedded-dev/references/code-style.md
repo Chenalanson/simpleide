@@ -9,7 +9,7 @@
 | 项 | 约定 |
 |---|---|
 | 文件位置 | `<工程根目录>/code_style.md`（固定，不放到 `docs/`） |
-| 优先级 | **L0 O1–O13** > `code-rules.md` / `architecture.md` 强制规则 > `code_style.md`（仅命名/格式/注释/封装习惯）> 通用习惯；`code_style.md` 不得授权违反 O11 的改动，也不得把业务 `.c/.h` 放到工程根目录 |
+| 优先级 | **L0 O1–O14** > `code-rules.md` / `architecture.md` 强制规则 > `code_style.md`（仅命名/格式/注释/封装习惯）> 通用习惯；`code_style.md` 不得授权违反 O11 的改动，也不得把业务 `.c/.h` 放到工程根目录 |
 | 生成/维护方式 | 由 `code_style_write` 任务写入（工具 `se-file`），不得绕过任务裸写；写入前必须 `index_context` + 读取旧文件（O3） |
 | 读取守卫 | T1–T3/T8 在编码前必须用 `read_file` 读取 `code_style.md`；未读取不得开始 `codegen_by_layer` |
 | 二次写入 | 风格审计发现可复用规则时，经用户确认后再走一次 `code_style_write` 增量更新，不直接手改 |

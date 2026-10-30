@@ -26,6 +26,7 @@ description: "STM32 嵌入式开发四层执行器：L0 执行总则（硬守卫
 | O11 | 未授权不改既有逻辑、时钟、引脚、生成代码；改动逐处登记（文件/位置/原值/新值/原因） | 写文件 |
 | O12 | 删除只走 `delete_file`（`se-delete`）：用户明确要求、工程内普通文件、非目录/生成目录/`.simple-embedded`/`.se-workspace`、一次 ≤10 个、先备份 | 删除 |
 | O13 | 串口/运行验证前：`build.build_ok == true` 且（`flash.flashed == true` 或用户确认已运行新固件）；不得把旧固件输出当本轮结果 | serial_cli / regress |
+| O14 | **执行落盘**：用户已确认修改/落盘后，禁止只输出计划、承诺或重复读取；已拿到正文的文件必须直接 `patch_file`/`write_file`，同一文件不得连续 `se-read` 两次（读取被截断或文件已变化除外）；读完后的下一轮必须落盘 | patch_file / write_file / se-read |
 
 **校验只有两种结论**：`PASS` → 下发；`REJECT` → 终止，输出「违规条款 + 违规步骤 + 修复建议」。
 
@@ -41,7 +42,7 @@ description: "STM32 嵌入式开发四层执行器：L0 执行总则（硬守卫
 [2] 匹配：命中模板 T1–T8 → 展开任务链并填充参数
             未命中 → AI 编排：只能从任务库选 id，输出 {chain[], reason, assumptions}
   ↓
-[3] plan_validate（L1 内置校验器）：逐条过 O1–O13，检查每步 guard、顺序、副作用
+[3] plan_validate（L1 内置校验器）：逐条过 O1–O14，检查每步 guard、顺序、副作用
             PASS → [4]；REJECT → 终止并说明违规条款与修复建议，不得下发
   ↓
 [4] 下发待执行任务队列（每步声明 context_in[] / context_out[] / guard / accept）
@@ -80,6 +81,7 @@ description: "STM32 嵌入式开发四层执行器：L0 执行总则（硬守卫
 - 禁止写 `if 芯片==STM32 … else if 芯片==ESP32`：差异压进模板条件或上下文键。
 - 禁止创造未注册任务 id；只能引用 `task-registry.md`。
 - 禁止把「编排结果」当「执行结果」输出；未执行的任务不得写“已完成”。
+- **执行优先（O14）**：用户已确认执行/落盘后，禁止只输出计划、承诺或重复读取；已有正文的文件直接 `patch_file`，仍缺的才 `read_file`。同一文件不得连续 `se-read` 两次（读取被截断或文件已变化除外）；读完后的下一轮必须落盘，不得再写“接下来修改/我将落盘”却不输出实际块。
 
 ## 2. 内部任务（Inner Tasks · 只改上下文）
 
@@ -197,4 +199,4 @@ L3 输出结果 → 用户确认/改意图/补参数 → 回跳处理器写入 c
 | L2 | `references/system-perception.md` | 盘点清单（inventory）、归属标准（ownership_judge）、framework 替换/迁移 |
 | L2 | `references/other-operations.md` | 删除/重命名/移动/配置/文档操作分级与回退 |
 | L2 | `references/consulting-design.md` | 咨询/设计：方案对比、约束、决策记录 |
-| 全局 | `evolution.md` | 长期偏好（只影响风格/流程偏好，不得覆盖 O1–O13） |
+| 全局 | `evolution.md` | 长期偏好（只影响风格/流程偏好，不得覆盖 O1–O14） |

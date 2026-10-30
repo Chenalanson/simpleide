@@ -1091,6 +1091,7 @@ struct AiState {
     cli_rounds: usize,
     fs_rounds: usize,
     fs_intent_retries: usize,
+    write_intent_retries: usize,
     pending_retrieval: Option<String>,
     pending_user_model_content: Option<String>,
     context_stats: Option<crate::ai::ContextBuildStats>,
@@ -5359,6 +5360,7 @@ impl App {
         self.ai.receiver = None;
         self.ai.fs_rounds = 0;
         self.ai.fs_intent_retries = 0;
+        self.ai.write_intent_retries = 0;
         self.ai.pending_retrieval = None;
         self.ai.pending_user_model_content = None;
         self.save_ai_chat();
@@ -5456,12 +5458,14 @@ impl App {
     fn send_ai_text(&mut self, text: String) -> bool {
         self.ai.fs_rounds = 0;
         self.ai.fs_intent_retries = 0;
+        self.ai.write_intent_retries = 0;
         self.start_ai_request(text, true, false)
     }
 
     fn send_ai_answer(&mut self, text: String) -> bool {
         self.ai.fs_rounds = 0;
         self.ai.fs_intent_retries = 0;
+        self.ai.write_intent_retries = 0;
         self.start_ai_request(text, true, true)
     }
 
@@ -5746,6 +5750,15 @@ impl App {
             && !build
             && cli_commands.is_empty()
             && crate::ai::looks_like_fs_intent(&text);
+        let write_intent_without_request = asks.is_empty()
+            && fs_requests.is_empty()
+            && edits.is_empty()
+            && deletes.is_empty()
+            && issues.is_empty()
+            && evolutions.is_empty()
+            && !build
+            && cli_commands.is_empty()
+            && crate::ai::looks_like_write_intent(&text);
         if let Some(root) = self.project.as_ref().map(|project| project.root.clone()) {
             for edit in &mut edits {
                 edit.prepare(&root);
@@ -5993,6 +6006,8 @@ impl App {
         self.save_ai_chat();
         if !fs_requests.is_empty() {
             self.run_ai_fs_requests(index, fs_requests);
+        } else if write_intent_without_request {
+            self.retry_write_intent(index);
         } else if fs_intent_without_request {
             self.retry_fs_intent(index);
         }
@@ -6008,12 +6023,32 @@ impl App {
             return;
         }
         self.ai.fs_intent_retries += 1;
-        let prompt = "你刚才只写了读取计划/表格，没有输出可执行的 se-read / se-list 块（或把它放进了普通代码块），IDE 无法读取。请立即只输出四反引号的 se-read / se-list 块和一句简短说明；不要再写计划，不要再重复思考过程。拿到正文后再输出修改。";
+        let prompt = "你刚才只写了读取计划/表格，没有输出可执行的 se-read / se-list 块（或把它放进了普通代码块），IDE 无法读取。若仍缺正文，立即输出四反引号的 se-read / se-list 块；若目标文件正文已经拿到，立即输出 se-replace / se-file 落盘。不要再写计划，不要再重复思考过程；同一文件不要连续读取两次。";
         if !self.start_ai_request(prompt.to_owned(), true, true) {
             if let Some(message) = self.ai.messages.get_mut(index) {
                 message
                     .content
                     .push_str("\n\n[自动请求读取失败；请检查 AI 设置或手动打开需要读取的文件。]");
+            }
+        }
+    }
+
+    fn retry_write_intent(&mut self, index: usize) {
+        if self.ai.write_intent_retries >= 2 {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message.content.push_str(
+                    "\n\n[已自动要求落盘 2 次，模型仍未输出 se-replace / se-file 块；请重新发送“直接落盘”或手动检查。]",
+                );
+            }
+            return;
+        }
+        self.ai.write_intent_retries += 1;
+        let prompt = "你刚才只写了要落盘/修改的描述，但没有输出可执行的 se-replace / se-file / se-delete 块。请立即输出实际修改块；如果还缺文件正文，先输出 se-read，并在下一轮直接落盘。不要再重复计划，不要再写“接下来修改/我将落盘”却不给块。已有正文的文件不要再次 se-read。";
+        if !self.start_ai_request(prompt.to_owned(), true, true) {
+            if let Some(message) = self.ai.messages.get_mut(index) {
+                message
+                    .content
+                    .push_str("\n\n[自动请求落盘失败；请检查 AI 设置或重新发送“直接落盘”。]");
             }
         }
     }

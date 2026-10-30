@@ -1,11 +1,12 @@
 # 编排模板库（T1–T8 · v2）
 
-> L1 唯一允许「写场景差异」的地方。每个模板 = 匹配条件 + 必备上下文 + 任务链 + 输出模板。任务 id 必须来自 `task-registry.md`；模板未命中时由 AI 从任务库编排，同样要过 `plan_validate`（O1–O13）。
+> L1 唯一允许「写场景差异」的地方。每个模板 = 匹配条件 + 必备上下文 + 任务链 + 输出模板。任务 id 必须来自 `task-registry.md`；模板未命中时由 AI 从任务库编排，同样要过 `plan_validate`（O1–O14）。
 
 ## 通用约定
 
 - `→` 强依赖；`?` 按上下文插入；`[confirm]` = 暂停点（L1 写 `pending_ask`/`pending_confirm`，L3 渲染，回答后生成新链）。
 - **O3 自动前置**：`plan_validate` 在写操作前补 `index_context`，修改前补 `read_file`；补入位置与原因写 `execution.history`，无法补则 REJECT。
+- **O14 执行优先**：用户已确认执行/落盘后，禁止只输出计划、承诺或重复读取；已有正文的文件直接进入 `patch_file`，仍缺正文的才 `read_file`；同一文件不得连续 `se-read` 两次，读完后的下一轮必须落盘。
 - **O13**：`serial_cli`/`regress` 前必须 `build.build_ok=true` 且（`flash.flashed=true` 或 `inputs.firmware_running=true`）；否则先 `flash` 或 `pending_ask`。
 - 每步验收标准（`accept`）见 `task-registry.md` 对应行；不通过 = 该步失败，按 L2 失败策略处理，不得带病继续。
 - `flash` / `debug_start` 当前为“预览 + 用户执行”，不得写成自动完成。
@@ -184,6 +185,6 @@
 ## 未命中模板时的 AI 编排约束
 
 - 只能从 `task-registry.md` 选 id，输出 `{chain[], reason, assumptions}`。
-- 必须声明每步 `context_in`/`context_out`，并保证 O1–O13 可校验。
+- 必须声明每步 `context_in`/`context_out`，并保证 O1–O14 可校验。
 - 任何写操作前必须有 `index_context`；修改前还必须有 `read_file`；任何 flash 前必须有 `build`。
 - `plan_validate` 返回 REJECT 时不得执行，按 O5 交给用户决定是否降级。

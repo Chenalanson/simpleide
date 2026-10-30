@@ -89,7 +89,7 @@
 
 | id | 层 | 用途 | context_in → context_out | 规则 |
 |---|---|---|---|---|
-| `plan_validate` | L1 | 总则校验 O1–O13 | `execution.chain`, `context` → `execution.verdict`, `execution.history` | 每条 O 有结论；REJECT 必须给条款号 + 违规步骤 + 修复建议 |
+| `plan_validate` | L1 | 总则校验 O1–O14 | `execution.chain`, `context` → `execution.verdict`, `execution.history` | 每条 O 有结论；REJECT 必须给条款号 + 违规步骤 + 修复建议 |
 | `snapshot_render` | L3 | 快照渲染（模板 A–H / `pending_ask` 卡片） | `snapshot`, `pending_ask` → 无（只读） | 不得回写 context（O7）；模板小节齐全；提问卡必须来自 `pending_ask` |
 
 ## 8. 通用约束

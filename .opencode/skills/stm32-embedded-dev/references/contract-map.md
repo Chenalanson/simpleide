@@ -6,7 +6,7 @@
 
 | 层 | 文件 | 职责 | 不允许 |
 |---|---|---|---|
-| L0 | `SKILL.md` §0 | O1–O13 硬规则、拦截点 | 被模板/AI/用户临时指令/evolution 覆盖 |
+| L0 | `SKILL.md` §0 | O1–O14 硬规则、拦截点 | 被模板/AI/用户临时指令/evolution 覆盖 |
 | L1 | `SKILL.md` §1、`orchestration-templates.md`、`task-registry.md` | 匹配模板、生成链、`plan_validate`、下发 | 读写文件、构建、烧录、发问 |
 | L2 | `task-registry.md` + 15 本领域文件 | 执行原子任务，只写 context | 写 UI、直接发问、越过 guard/accept |
 | L3 | `SKILL.md` §3、`templates.md` | 冻结快照、渲染模板/日志/`se-ask` | 修改 context、补步骤、执行任务 |
@@ -86,6 +86,7 @@
 10. 没有未声明的 `se-*`；预览协议有明确标注。
 11. 全库不含旧阶段词汇（stage gate 时代的编号与术语）。
 12. 源文件变更任务必须置 `build_ok=false`、`flashed=false`、`serial.verified=false`、`firmware_running=false`；纯文档写入不得置 `build_ok=false`。
+13. 用户已确认执行的写任务不得只输出计划或重复读取：已有正文的文件直接 `patch_file`，同一文件不得连续 `se-read` 两次，读完后的下一轮必须落盘（O14）。
 
 ## 7. 改动同步清单
 
