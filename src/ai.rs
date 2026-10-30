@@ -18,8 +18,11 @@ use crate::project_meta::ProjectMeta;
 use crate::util::{display_path, read_text_file};
 
 const SKILL_ID: &str = "stm32-embedded-dev";
-const MAX_SKILL_BYTES: usize = 200_000;
-const MAX_SYSTEM_PROMPT_BYTES: usize = 240_000;
+/// The four-layer skill ships ~230 KB of Markdown. Keep the whole bundle in the
+/// prompt; files that still do not fit are skipped as a whole (never cut in the
+/// middle) and listed so the model can fetch them with `se-read`.
+const MAX_SKILL_BYTES: usize = 240_000;
+const MAX_SYSTEM_PROMPT_BYTES: usize = 300_000;
 const MAX_TREE_FILES: usize = 400;
 /// Reserve enough room for the edit protocol and output requirements at the end
 /// of the system prompt. Project files must not crowd them out.
@@ -74,76 +77,74 @@ pub struct SkillBundle {
     pub text: String,
 }
 
+macro_rules! embedded_skill_file {
+    ($path:literal) => {
+        (
+            $path,
+            include_str!(concat!("../.opencode/skills/stm32-embedded-dev/", $path)),
+        )
+    };
+}
+
+/// Files compiled into the executable, in load priority order: the orchestration
+/// contract (L0/L1/L2/L3) first, domain references afterwards.
 const EMBEDDED_SKILL_FILES: &[(&str, &str)] = &[
-    (
-        "SKILL.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/SKILL.md"),
-    ),
-    (
-        "evolution.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/evolution.md"),
-    ),
-    (
-        "references/checklist.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/checklist.md"),
-    ),
-    (
-        "references/code-rules.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/code-rules.md"),
-    ),
-    (
-        "references/debug-playbook.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/debug-playbook.md"),
-    ),
-    (
-        "references/field-map.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/field-map.md"),
-    ),
-    (
-        "references/ledger-schema.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/ledger-schema.md"),
-    ),
-    (
-        "references/architecture.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/architecture.md"),
-    ),
-    (
-        "references/framework-template.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/framework-template.md"),
-    ),
-    (
-        "references/module-convention.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/module-convention.md"),
-    ),
-    (
-        "references/software-arch.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/software-arch.md"),
-    ),
-    (
-        "references/other-operations.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/other-operations.md"),
-    ),
-    (
-        "references/serial-cli.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/serial-cli.md"),
-    ),
-    (
-        "references/code-style.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/code-style.md"),
-    ),
-    (
-        "references/diagnostics.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/diagnostics.md"),
-    ),
-    (
-        "references/consulting-design.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/consulting-design.md"),
-    ),
-    (
-        "references/system-perception.md",
-        include_str!("../.opencode/skills/stm32-embedded-dev/references/system-perception.md"),
-    ),
+    embedded_skill_file!("SKILL.md"),
+    embedded_skill_file!("evolution.md"),
+    embedded_skill_file!("references/contract-map.md"),
+    embedded_skill_file!("references/task-registry.md"),
+    embedded_skill_file!("references/orchestration-templates.md"),
+    embedded_skill_file!("references/templates.md"),
+    embedded_skill_file!("references/context-schema.md"),
+    embedded_skill_file!("references/system-perception.md"),
+    embedded_skill_file!("references/architecture.md"),
+    embedded_skill_file!("references/code-rules.md"),
+    embedded_skill_file!("references/ledger-schema.md"),
+    embedded_skill_file!("references/field-map.md"),
+    embedded_skill_file!("references/module-convention.md"),
+    embedded_skill_file!("references/software-arch.md"),
+    embedded_skill_file!("references/framework-template.md"),
+    embedded_skill_file!("references/checklist.md"),
+    embedded_skill_file!("references/debug-playbook.md"),
+    embedded_skill_file!("references/diagnostics.md"),
+    embedded_skill_file!("references/serial-cli.md"),
+    embedded_skill_file!("references/code-style.md"),
+    embedded_skill_file!("references/other-operations.md"),
+    embedded_skill_file!("references/consulting-design.md"),
 ];
+
+/// Load order shared by the directory skill and the embedded copy.
+const SKILL_FILE_PRIORITY: &[&str] = &[
+    "SKILL.md",
+    "evolution.md",
+    "references/contract-map.md",
+    "references/task-registry.md",
+    "references/orchestration-templates.md",
+    "references/templates.md",
+    "references/context-schema.md",
+    "references/system-perception.md",
+    "references/architecture.md",
+    "references/code-rules.md",
+    "references/ledger-schema.md",
+    "references/field-map.md",
+    "references/module-convention.md",
+    "references/software-arch.md",
+    "references/framework-template.md",
+    "references/checklist.md",
+    "references/debug-playbook.md",
+    "references/diagnostics.md",
+    "references/serial-cli.md",
+    "references/code-style.md",
+    "references/other-operations.md",
+    "references/consulting-design.md",
+];
+
+fn skill_file_priority(relative: &str) -> usize {
+    SKILL_FILE_PRIORITY
+        .iter()
+        .position(|name| *name == relative)
+        .unwrap_or(SKILL_FILE_PRIORITY.len())
+}
 
 /// Skill copy compiled into the executable. Used when the opened project (and
 /// the usual global skill folders) do not contain stm32-embedded-dev, so AI
@@ -151,23 +152,33 @@ const EMBEDDED_SKILL_FILES: &[(&str, &str)] = &[
 pub fn embedded_skill() -> SkillBundle {
     let mut files = Vec::with_capacity(EMBEDDED_SKILL_FILES.len());
     let mut text = String::new();
+    let mut skipped = Vec::new();
     for (name, body) in EMBEDDED_SKILL_FILES {
         files.push(PathBuf::from(name));
+        if text.len() + name.len() + body.len() + 32 > MAX_SKILL_BYTES {
+            skipped.push(*name);
+            continue;
+        }
         text.push_str("\n\n### skill file: ");
         text.push_str(name);
         text.push('\n');
         text.push_str(body);
-        if text.len() > MAX_SKILL_BYTES {
-            text.truncate(MAX_SKILL_BYTES);
-            text.push_str("\n\n[skill 内容已截断]");
-            break;
-        }
+    }
+    if !skipped.is_empty() {
+        text.push_str(&skill_skipped_note(&skipped));
     }
     SkillBundle {
         root: PathBuf::from("内置 stm32-embedded-dev"),
         files,
         text,
     }
+}
+
+fn skill_skipped_note(skipped: &[&str]) -> String {
+    format!(
+        "\n\n[以下 skill 文件因大小限制未加载：{}；工程内存在对应 skill 目录时，可用 se-read path=.opencode/skills/stm32-embedded-dev/<相对路径> 只读读取]\n",
+        skipped.join("、")
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -930,25 +941,38 @@ pub fn load_skill(skill_md: &Path) -> Result<SkillBundle, String> {
         .to_path_buf();
     let mut files = Vec::new();
     collect_markdown(&root, &root, &mut files, 0)?;
-    files.sort();
+    // Load the four-layer contract first. Alphabetical order would put
+    // task-registry.md / templates.md at the end and truncate them first.
+    files.sort_by_key(|path| {
+        let relative = path
+            .strip_prefix(&root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        (skill_file_priority(&relative), relative)
+    });
     let mut text = String::new();
+    let mut skipped = Vec::new();
     for file in &files {
-        let loaded = read_text_file(file)
-            .map_err(|err| format!("无法读取 skill 文件 {}：{err}", display_path(file)))?;
         let relative = file
             .strip_prefix(&root)
             .unwrap_or(file)
             .to_string_lossy()
             .replace('\\', "/");
+        let loaded = read_text_file(file)
+            .map_err(|err| format!("无法读取 skill 文件 {}：{err}", display_path(file)))?;
+        if text.len() + relative.len() + loaded.text.len() + 32 > MAX_SKILL_BYTES {
+            skipped.push(relative);
+            continue;
+        }
         text.push_str("\n\n### skill file: ");
         text.push_str(&relative);
         text.push('\n');
         text.push_str(&loaded.text);
-        if text.len() > MAX_SKILL_BYTES {
-            text.truncate(MAX_SKILL_BYTES);
-            text.push_str("\n\n[skill 内容已截断]");
-            break;
-        }
+    }
+    if !skipped.is_empty() {
+        let names = skipped.iter().map(String::as_str).collect::<Vec<_>>();
+        text.push_str(&skill_skipped_note(&names));
     }
     Ok(SkillBundle { root, files, text })
 }
@@ -1024,8 +1048,9 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
     let mut prompt = String::new();
     prompt.push_str(
         "你是 Simple embedded 的 AI 助手，正在协助 STM32 嵌入式开发。\n\
-         必须优先遵循已加载的 stm32-embedded-dev skill：先按第 1 节判定 T1–T8 任务类型，再按第 3 节对应固定模板的小节编号、标题和表格输出；\
-         T1–T5 使用模板 A–E，T6 其他操作使用模板 F，T7 代码风格使用模板 G，T8 系统整体感知使用模板 H。模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载，删除文件用 se-delete 承载；\
+         必须优先遵循已加载的 stm32-embedded-dev skill 的四层模型：L0 执行总则 O1–O13 是不可覆盖的硬约束；L1 按第 1 节判定 T1–T8 并生成任务链；L2 按 references/task-registry.md 的 guard / accept / on_error 执行；L3 按第 3 节模板 A–H 输出。未执行的任务不得写成“已完成”。\
+         L3 输出必须保留对应模板的小节编号、标题和表格维度：T1–T5 使用模板 A–E，T6 其他操作使用模板 F，T7 代码风格使用模板 G，T8 系统整体感知使用模板 H。\
+         模板中的代码实现/代码修改节用下方的 se-file / se-replace 承载：已有文件的最小修改必须用 se-replace，新建或整份重写才用 se-file，删除文件用 se-delete 承载；\
          用户要求阅读/理解新导入或别人的工程、分析架构、重新生成或替换 framework.md，或工程明显不是默认 APP/MID/BSP 结构时，先按 T8 盘点实际目录/构建/入口/RTOS/厂商代码和现有文档，判断“默认/兼容/外来/混合”，不要直接套默认架构；T8 默认不改代码/不移动目录，替换或重构前用 se-ask 确认；\
          凡是需要用户选择、确认、授权或回答的内容，必须输出四反引号的 se-ask 卡片（问题 + 2–8 个选项或自由回答），禁止只在正文末尾写问句等待用户回复；只读的 se-list / se-read 不需要用户授权，缺文件时直接读取，禁止问“请允许我读取”；\
          每次回复必须有正文；禁止只输出思考过程，或只写“下一轮会输出/立即写出”却不给正文。检索轮至少给简短说明和 se-read；承诺的文件、代码或结论必须在同一轮或紧接着的下一轮实际输出；\
@@ -1420,7 +1445,7 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
          se-read：读取一个文本文件，lines 可省略；一次最多 24KB，单文件上限 2MB；需要后续内容时用 lines 继续读。\n\
          se-list / se-read 是只读操作，不需要用户授权；缺文件时直接读取，禁止在正文问“请允许我读取”。只有写文件、删除、重构、烧录、串口连接等有副作用的动作才用 se-ask 确认。\n\
          只写“本轮读取/读取目标/下一轮读取”的计划或表格不算请求；必须实际输出四反引号的 se-read / se-list 块，且不要放进普通代码块。只写计划时 IDE 不会读取，会自动要求你重写；连续两次仍不输出可执行块就停止自动检索并提示用户。\n\
-         一次最多 12 个检索请求，IDE 最多自动继续 6 轮；路径必须相对工程根目录，禁止绝对路径、`..`、build/Debug/Release/out/target、`.simple-embedded`、`.git`、`.opencode` 等生成或配置目录，禁止符号链接和二进制文件。\n\
+         一次最多 12 个检索请求，IDE 最多自动继续 6 轮；路径必须相对工程根目录，禁止绝对路径、`..`、build/Debug/Release/out/target、`.simple-embedded`、`.git`、`.opencode` 等生成或配置目录，禁止符号链接和二进制文件。唯一例外：`.opencode/skills/stm32-embedded-dev/` 下的 `.md` 参考文件可以只读 se-read（当某个 skill 文件未加载或被截断时使用）。\n\
          检索回复只输出 se-list / se-read 和简短说明，不要在同一回复里输出 se-file / se-replace / se-delete；拿到正文后再生成修改。优先按 framework.md 的文件表定位，再 list 目录、read 关键文件，不要重复读取已经出现过的全文。\n\n\
          ## 文件修改协议（重要）\n\n\
          你运行在 Simple embedded 的 AI 模式中，IDE 会执行你给出的文件修改。不要声称无法写入磁盘，也不要把完整代码只放在普通 Markdown 代码块里让用户手动复制。\n\n\
@@ -1499,7 +1524,7 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
          1. 正文结构以 skill 第 1 节任务判定和第 3 节对应模板为准：T1–T5 使用模板 A–E，T6 使用模板 F，T7 使用模板 G，T8 使用模板 H；保留模板的小节编号、标题、表格维度和 N/A 行，不得自创分点。\n\
          2. skill 模板中的代码实现/代码修改节仍保留编号，但实际写入工程的内容用 se-file / se-replace 块承载，删除用 se-delete，确认问题用 se-ask，真实构建验证用 se-build，串口调试用 se-cli，文件检索用 se-list / se-read，问题/解决方案记录用 se-issue；执行器会显示差异卡片、独立删除卡片、确认卡片、构建卡片、串口调试卡片和文件检索卡片，并把问题写入 .ai-issues.md，不要在普通代码块里重复同一份完整代码。\n\
          3. 涉及硬件资源变化时，先按模板输出 hardware.dts 台账；手册级事实不确定时放在待核对表/TODO 中。\n\
-         4. S4 核对表、S5 构建/排查和 S7 串口 Debug 是 T1–T5 的必输出项；S5 必须用 se-build 实际构建并引用 IDE 回传输出，串口可用时 S7 必须用 se-cli 实际收发，不能只给命令或伪造结果；T6 按模板 F 给出影响分析、执行预览、结果、验证与回退；T8 按模板 H 先给工程盘点、归属判断、framework.md 处理和用户确认项，不得在未确认时改写/替换 framework.md。\n\
+         4. 模板中的核对表、构建/排查、串口 Debug 小节是 T1–T5 的必输出项；构建必须用 se-build 实际构建并引用 IDE 回传输出，串口可用时必须用 se-cli 实际收发，不能只给命令或伪造结果；T6 按模板 F 给出影响分析、执行预览、结果、验证与回退；T8 按模板 H 先给工程盘点、归属判断、framework.md 处理和用户确认项，不得在未确认时改写/替换 framework.md。\n\
          5. 若模型无法完整遵循模板，至少给出任务判定、台账/无变更说明、代码修改或删除预览、核对表和验证步骤，并明确缺失项。\n",
     );
 
@@ -2541,6 +2566,14 @@ mod tests {
     fn embedded_skill_contains_workflow_and_references() {
         let bundle = embedded_skill();
         assert!(bundle.text.contains("hardware.dts"));
+        assert!(bundle.text.contains("O1"));
+        assert!(bundle.text.contains("references/contract-map.md"));
+        assert!(bundle.text.contains("references/task-registry.md"));
+        assert!(bundle
+            .text
+            .contains("references/orchestration-templates.md"));
+        assert!(bundle.text.contains("references/templates.md"));
+        assert!(bundle.text.contains("references/context-schema.md"));
         assert!(bundle.text.contains("references/checklist.md"));
         assert!(bundle.text.contains("references/framework-template.md"));
         assert!(bundle.text.contains("references/software-arch.md"));
@@ -2552,11 +2585,32 @@ mod tests {
         assert!(bundle.text.contains("references/system-perception.md"));
         assert!(bundle.text.contains("T7 代码风格"));
         assert!(bundle.text.contains("T8 系统整体感知"));
-        assert!(!bundle.text.contains("skill 文本已截断"));
+        assert!(!bundle.text.contains("skill 内容已截断"));
+        assert!(!bundle.text.contains("因大小限制未加载"));
         assert!(bundle.text.contains("code_style.md"));
         assert!(bundle.text.contains("se-cli"));
+        assert!(bundle.text.contains("se-replace"));
         assert!(bundle.text.contains("evolution.md"));
-        assert!(bundle.files.len() >= 17);
+        assert_eq!(bundle.files.len(), 22);
+    }
+
+    #[test]
+    fn loads_priority_skill_files_first_and_skips_whole_oversized_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("stm32-embedded-dev");
+        write(&skill.join("SKILL.md"), "# Skill body\n");
+        write(&skill.join("references/aaa-domain.md"), "domain body\n");
+        write(&skill.join("references/templates.md"), "# 模板 A\n");
+        write(&skill.join("references/huge.md"), &"x".repeat(300_000));
+        let bundle = load_skill(&skill.join("SKILL.md")).unwrap();
+        let skill_at = bundle.text.find("Skill body").unwrap();
+        let templates_at = bundle.text.find("# 模板 A").unwrap();
+        let domain_at = bundle.text.find("domain body").unwrap();
+        assert!(skill_at < templates_at);
+        assert!(templates_at < domain_at);
+        assert!(!bundle.text.contains("xxxxx"));
+        assert!(bundle.text.contains("因大小限制未加载"));
+        assert!(bundle.text.contains("references/huge.md"));
     }
 
     #[test]
@@ -3046,6 +3100,8 @@ mod tests {
         assert!(prompt.contains("se-list"));
         assert!(prompt.contains("se-read"));
         assert!(prompt.contains("T8 系统整体感知"));
+        assert!(prompt.contains("L0 执行总则"));
+        assert!(prompt.contains("references/task-registry.md"));
         assert!(prompt.contains("用户导入的额外 Skill"));
         assert!(prompt.contains("extra skill marker"));
         assert!(prompt.contains("用户导入的参考资料"));

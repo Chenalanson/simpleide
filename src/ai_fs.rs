@@ -186,7 +186,7 @@ fn execute_list(
     section: &mut String,
 ) -> Result<(), String> {
     let relative = normalize_dir_path(&request.path)?;
-    if relative.split('/').any(is_blocked_part) {
+    if !is_skill_dir(&relative) && relative.split('/').any(is_blocked_part) {
         return Err(format!("不允许读取该目录：{}", request.path));
     }
     let absolute = if relative.is_empty() {
@@ -241,7 +241,7 @@ fn execute_read(
     section: &mut String,
 ) -> Result<(), String> {
     let relative = crate::ai_edit::normalize_rel_path(&request.path)?;
-    if relative.split('/').any(is_blocked_part) {
+    if !is_skill_markdown(&relative) && relative.split('/').any(is_blocked_part) {
         return Err(format!("不允许读取该文件：{}", request.path));
     }
     let absolute = root.join(&relative);
@@ -415,6 +415,21 @@ fn is_blocked_part(part: &str) -> bool {
         )
 }
 
+/// The four-layer skill may be larger than the prompt budget. Its own Markdown
+/// references are the only `.opencode` files the model may read, so skipped or
+/// truncated files can still be fetched on demand.
+const SKILL_REFERENCE_DIR: &str = ".opencode/skills/stm32-embedded-dev";
+
+fn is_skill_dir(relative: &str) -> bool {
+    let lower = relative.to_ascii_lowercase();
+    lower == SKILL_REFERENCE_DIR || lower.starts_with(".opencode/skills/stm32-embedded-dev/")
+}
+
+fn is_skill_markdown(relative: &str) -> bool {
+    let lower = relative.to_ascii_lowercase();
+    lower.starts_with(".opencode/skills/stm32-embedded-dev/") && lower.ends_with(".md")
+}
+
 fn is_skipped_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     is_blocked_part(name)
@@ -552,5 +567,32 @@ mod tests {
         let outcome = execute(dir.path(), &requests);
         assert!(!outcome.errors.is_empty());
         assert!(!outcome.report.contains("int main"));
+    }
+
+    #[test]
+    fn allows_reading_skill_markdown_but_not_other_opencode_files() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path()
+                .join(".opencode/skills/stm32-embedded-dev/references/templates.md"),
+            "# 模板 A\n",
+        );
+        write(
+            &dir.path().join(".opencode/opencode.json"),
+            "{\"key\":\"secret\"}\n",
+        );
+        let requests = vec![
+            AiFsRequest::parse(
+                true,
+                "path=.opencode/skills/stm32-embedded-dev/references/templates.md",
+            ),
+            AiFsRequest::parse(true, "path=.opencode/opencode.json"),
+            AiFsRequest::parse(false, "path=.opencode/skills/stm32-embedded-dev depth=2"),
+        ];
+        let outcome = execute(dir.path(), &requests);
+        assert!(outcome.report.contains("# 模板 A"));
+        assert!(!outcome.report.contains("secret"));
+        assert_eq!(outcome.files, 1);
+        assert!(!outcome.errors.is_empty());
     }
 }

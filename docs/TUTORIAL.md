@@ -719,13 +719,13 @@ AI 设置里已经包含专门写嵌入式代码的 `stm32-embedded-dev` Skill�
 
 ### Skill 与工程上下文
 
-每次发送请求时，程序会优先在以下位置查找 `stm32-embedded-dev` skill：
+每次发送请求时，程序会优先在以下位置查找 `stm32-embedded-dev` 四层执行器 skill（L0 总则 → L1 编排 → L2 任务 → L3 输出）：
 
 1. 当前工程目录或其上级目录的 `.opencode/skills/stm32-embedded-dev/`
 2. 当前工作目录、可执行文件目录的 `.opencode/skills/`
 3. 用户全局 skills 目录（如 `~/.config/opencode/skills/`）
 
-找到后会读取 `SKILL.md` 和 `references/` 下的 Markdown，把 skill 工作流和工程信息一起发送给模型。工程信息包括芯片、CPU、FPU、工具链、内存布局、包含目录、宏、当前文件、文件树、`hardware.dts`、**完整的 `framework.md`**、`main.c`、`gpio.c`、`APP` / `MID` / `BSP` / `Core/Src` / `Core/Inc` / `src` / `include` 下的主要源文件、`.ioc`、`Makefile` / CMake / Cargo，以及 `<工程名>.resources.json` 摘要。程序还会解析 `framework.md` 中出现的工程文件路径（如 `APP/app_init.c`、`BSP/PERIPHERAL/bsp_led.c`、裸文件名 `bsp_led.c`），按路径大小写不敏感地自动读取并附在上下文里，不需要你手动逐个添加；过长文件会按上下文预算截断并标注，避免挤掉文件修改协议。其余工程源文件由本地上下文索引按当前问题检索，只附带相关片段。这些文件从磁盘读取；发送请求前程序会先自动保存所有未保存的标签页，保存失败会中止发送，因此上下文始终是当前编辑内容。
+找到后会读取 `SKILL.md` 和 `references/` 下的 Markdown，按 L0 总则 → L1 编排 → L2 任务注册表 → L3 输出模板的优先顺序加载；放不下的文件会整体跳过并列出，模型可用 `se-read` 只读补读。程序会把 skill 工作流和工程信息一起发送给模型。工程信息包括芯片、CPU、FPU、工具链、内存布局、包含目录、宏、当前文件、文件树、`hardware.dts`、**完整的 `framework.md`**、`main.c`、`gpio.c`、`APP` / `MID` / `BSP` / `Core/Src` / `Core/Inc` / `src` / `include` 下的主要源文件、`.ioc`、`Makefile` / CMake / Cargo，以及 `<工程名>.resources.json` 摘要。程序还会解析 `framework.md` 中出现的工程文件路径（如 `APP/app_init.c`、`BSP/PERIPHERAL/bsp_led.c`、裸文件名 `bsp_led.c`），按路径大小写不敏感地自动读取并附在上下文里，不需要你手动逐个添加；过长文件会按上下文预算截断并标注，避免挤掉文件修改协议。其余工程源文件由本地上下文索引按当前问题检索，只附带相关片段。这些文件从磁盘读取；发送请求前程序会先自动保存所有未保存的标签页，保存失败会中止发送，因此上下文始终是当前编辑内容。
 
 如果目录里没有 skill，程序会使用编译进 exe 的内置副本。右侧 **Skill 状态** 卡片会显示当前来源和文件数，修改 skill 后可以点 **重新加载**。
 
@@ -754,7 +754,7 @@ AI 模式内置了一个本地上下文索引（参考 context-mode 的思路）
 - `se-read` 读取一个文本文件，`lines` 可省略；需要后续内容时用 `lines=201-400` 继续读。
 - IDE 读取真实磁盘内容后，会把结果加入下一轮上下文并自动继续，最多 6 轮。
 - 聊天里显示 **AI 文件检索** 卡片，列出请求、结果摘要和“查看读取内容”。
-- 单文件最多 24KB，单轮最多 48KB、12 个请求；禁止工程外路径、`..`、生成/配置目录、`.opencode`、符号链接和二进制文件。
+- 单文件最多 24KB，单轮最多 48KB、12 个请求；禁止工程外路径、`..`、生成/配置目录、`.opencode`、符号链接和二进制文件。唯一例外是 `.opencode/skills/stm32-embedded-dev/` 下的 `.md` 参考文件可只读读取（用于补读未加载的 skill 文件）。
 - 只写“读取目标 / 本轮读取 / 下一轮读取”的计划或表格不算请求，必须实际输出四反引号 `se-read` / `se-list` 块；只写计划时 IDE 会自动要求重写，连续 2 次仍不输出可执行块就停止自动检索并提示你手动打开文件。
 - 同一回复里如果还有待确认的修改/删除/问题卡片，IDE 会保留读取结果，等你处理完再发送下一条消息时带上。
 
