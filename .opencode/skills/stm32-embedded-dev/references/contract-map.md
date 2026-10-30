@@ -46,7 +46,7 @@
 | `se-list` / `se-read` | 列目录/读文件 | 只读，不需授权，不产生 `pending_ask` |
 | `se-file` | 新建文件 / 整份重写 | 必须先 `index_context`；修改已有文件前必须 `read_file`（O3）；能局部改就不要整份覆盖 |
 | `se-replace` | 局部修改已有文件 | 必须先 `read_file`；`SEARCH` 必须唯一匹配；只改必要片段（O3、最小改动 M1–M7） |
-| `se-delete` | 删除文件 | 只能由 `delete_file` 使用；O12 全部满足 |
+| `se-delete` | 删除文件 | 只能由 `delete_file` 使用；O12 全部满足；IDE 删除后自动从 Makefile `C_SOURCES` 移除（Makefile 未保存时跳过并提示） |
 | `se-build` | 真实构建 | 必须引用回传输出；0 error 才是 `build_ok=true` |
 | `se-cli` | 串口收发 | 必须满足 O13；引用真实 `OK/ERR` |
 | `se-ask` | 提问/确认卡 | **只能由 L3 渲染**，内容必须来自 `pending_ask` |

@@ -1449,6 +1449,7 @@ pub fn build_system_prompt_with_stats(context: &Context<'_>) -> (String, Context
          检索轮只用于补齐仍然缺失的正文，不是固定要单独占一轮。已经在本轮或之前拿到正文的目标文件不要再 se-read；如果需要修改，直接输出 se-replace / se-file，不要把已经能改的文件拖到下一轮。只有仍缺正文时才输出 se-read / se-list，并且同一文件不得连续读取两次（除非上次读取被截断或文件已被修改）。读完后的下一条回复必须直接落盘（se-replace / se-file / se-delete）或 se-build，禁止再写“我将落盘/接下来修改”却不输出实际块；用户已明确要求执行时，只读回复不算执行。优先按 framework.md 的文件表定位，再 list 目录、read 关键文件，不要重复读取已经出现过的全文。\n\n\
          ## 文件修改协议（重要）\n\n\
          你运行在 Simple embedded 的 AI 模式中，IDE 会执行你给出的文件修改。不要声称无法写入磁盘，也不要把完整代码只放在普通 Markdown 代码块里让用户手动复制。\n\n\
+         se-file 对已有文件是“整份重写”，和 se-replace 一样必须先拿到旧文件正文；没有正文时禁止猜写，禁止用 se-file 绕过 se-read。用户催落盘但部分文件缺正文时，先把已有正文的文件用 se-replace 落盘，并明确列出仍待读的文件；不要把部分完成说成全部完成。删除源文件后 IDE 会自动从 Makefile 的 C_SOURCES 移除对应条目（Makefile 有未保存修改时跳过并提示），不需要先读 Makefile 才能删；但如果被删文件仍被未读文件引用（如 it.c 引用 huart1），必须先读该文件。\n\n\
          新建或整体覆盖文件，使用四个反引号（内容里可以安全包含普通的三反引号 Markdown 代码块，例如 framework.md 的 Mermaid 图）：\n\n\
          ````se-file path=相对路径\n\
          <完整文件内容>\n\
@@ -3166,6 +3167,8 @@ mod tests {
         assert!(prompt.contains("T8 系统整体感知"));
         assert!(prompt.contains("L0 执行总则"));
         assert!(prompt.contains("O1–O14"));
+        assert!(prompt.contains("整份重写"));
+        assert!(prompt.contains("C_SOURCES"));
         assert!(prompt.contains("references/task-registry.md"));
         assert!(prompt.contains("用户导入的额外 Skill"));
         assert!(prompt.contains("extra skill marker"));

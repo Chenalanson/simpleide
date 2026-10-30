@@ -29,7 +29,7 @@
 | `patch_plan` | 生成最小改动清单 | 推理 | — | `code.files`, `requirements` → `code.diff` | 目标已读取 | 每处含 文件/位置/原值/新值/原因；越权项标 `need_confirm` | 无法定位 → 回 `read_file` |
 | `patch_file` | 按定位最小修改 | `se-replace` | — | `code.diff[target]`, `before_hash` → `code.files`, `code.backups`, `失效链` | `indexed=true`；已读；hash 匹配；改动在用户请求/已确认范围内 | diff 与计划一致；无越界；hash 更新；失效链已置 | 哈希冲突 → 失败，重读重规划 |
 | `write_file` | 新建文件 | `se-file` | — | `target`, `content` → `code.files`, `失效链` | `indexed=true`；目标不存在；落在允许层 | 路径合规；内容符合模板；索引更新 | 已存在 → 改用 `patch_file` |
-| `delete_file` | 删除普通文件（先备份） | `se-delete` | `other-operations.md` | 用户确认 + `targets` → `code.backups`, `失效链` | O12 全部满足；已索引；已确认；目标 mtime/size 与索引记录一致；回退可行 | 备份存在；禁区检查通过；≤10；删除前复核 mtime/size 未变；删除后验证不存在；构建元数据仅预览（不自动改） | 任一不满足 → 拒绝执行 |
+| `delete_file` | 删除普通文件（先备份） | `se-delete` | `other-operations.md` | 用户确认 + `targets` → `code.backups`, `失效链` | O12 全部满足；已索引；已确认；引用已闭合；目标 mtime/size 与索引记录一致；回退可行 | 备份存在；禁区检查通过；≤10；删除前复核 mtime/size 未变；删除后验证不存在；IDE 自动从 Makefile `C_SOURCES` 移除（Makefile 有未保存修改时跳过并提示） | 任一不满足 → 拒绝执行 |
 
 ## 3. 台账与架构（7）
 
