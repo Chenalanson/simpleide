@@ -267,30 +267,53 @@ impl App {
         }
 
         if let Some(view) = self.ai.swimlane.clone() {
-            let mut open = true;
             let mut close = false;
             let screen = ui.ctx().content_rect();
-            egui::Window::new(format!("泳道图 · {}", view.title))
+            let size = egui::vec2(screen.width() * 0.92, screen.height() * 0.90);
+            egui::Window::new("")
                 .id(egui::Id::new("simple_embedded_swimlane"))
-                .open(&mut open)
+                .title_bar(false)
                 .collapsible(false)
-                .resizable(true)
-                .default_size(egui::vec2(screen.width() * 0.9, screen.height() * 0.9))
+                .resizable(false)
+                .fixed_size(size)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .frame(
+                    Frame::new()
+                        .fill(theme::panel())
+                        .stroke(Stroke::new(1.0_f32, theme::border_soft()))
+                        .corner_radius(12)
+                        .inner_margin(Margin::symmetric(14, 12)),
+                )
                 .show(ui.ctx(), |ui| {
+                    ui.set_width((size.x - 28.0).max(200.0));
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("泳道图 · {}", view.title))
+                                .size(14.0)
+                                .strong()
+                                .color(theme::text()),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ai_close_button(ui) {
+                                close = true;
+                            }
+                            if ai_ghost_button(ui, "关闭") {
+                                close = true;
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    let height = (size.y - 84.0).max(120.0);
                     egui::ScrollArea::both()
                         .id_salt("simple_embedded_swimlane_scroll")
+                        .max_height(height)
                         .show(ui, |ui| {
                             render_markdown(ui, view.body.trim(), 30_000, false);
                         });
-                    ui.add_space(6.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ai_ghost_button(ui, "关闭") {
-                            close = true;
-                        }
-                    });
                 });
-            if !open || close {
+            if close || ui.ctx().input(|input| input.key_pressed(egui::Key::Escape)) {
                 self.ai.swimlane = None;
             }
         }
@@ -1825,42 +1848,27 @@ fn framework_sequence_part(
     width: f32,
     swimlane: &mut Option<AiSwimlaneView>,
 ) {
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(title)
-                .size(9.5)
-                .strong()
-                .color(theme::text_dim()),
-        );
-        if section.is_some() {
-            ui.add_space(4.0);
-            let response = ui.add(
-                Button::new(
-                    RichText::new("全屏泳道图")
-                        .size(9.0)
-                        .color(theme::accent())
-                        .underline(),
-                )
-                .frame(false),
-            );
-            if response.on_hover_text("打开该小节的全屏泳道图").clicked() {
-                *swimlane = Some(AiSwimlaneView {
-                    title: title.to_owned(),
-                    body: section
-                        .map(|section| section.body.clone())
-                        .unwrap_or_default(),
-                });
-            }
-        }
-    });
+    ui.label(
+        RichText::new(title)
+            .size(9.5)
+            .strong()
+            .color(theme::text_dim()),
+    );
     match section {
-        Some(section) => render_sequence_body(ui, &section.body, seed, width),
+        Some(section) => render_sequence_body(ui, &section.body, title, seed, width, swimlane),
         None => framework_missing_section(ui),
     }
     ui.add_space(6.0);
 }
 
-fn render_sequence_body(ui: &mut Ui, body: &str, seed: usize, width: f32) {
+fn render_sequence_body(
+    ui: &mut Ui,
+    body: &str,
+    title: &str,
+    seed: usize,
+    width: f32,
+    swimlane: &mut Option<AiSwimlaneView>,
+) {
     let mut rest = body;
     let mut block = 0usize;
     let mut text = String::new();
@@ -1878,7 +1886,16 @@ fn render_sequence_body(ui: &mut Ui, body: &str, seed: usize, width: f32) {
                 None => ("", after),
             };
             if let Some(end) = body.find("```") {
-                render_sequence_fence(ui, language.trim(), &body[..end], seed, block, width);
+                render_sequence_fence(
+                    ui,
+                    language.trim(),
+                    &body[..end],
+                    title,
+                    seed,
+                    block,
+                    width,
+                    swimlane,
+                );
                 block += 1;
                 rest = &body[end + 3..];
             } else {
@@ -1895,21 +1912,34 @@ fn render_sequence_body(ui: &mut Ui, body: &str, seed: usize, width: f32) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_sequence_fence(
     ui: &mut Ui,
     language: &str,
     code: &str,
+    title: &str,
     seed: usize,
     block: usize,
     width: f32,
+    swimlane: &mut Option<AiSwimlaneView>,
 ) {
     if language.eq_ignore_ascii_case("mermaid") {
         if let Some(crate::mermaid::Diagram::Sequence(sequence)) = crate::mermaid::parse(code) {
-            ui.label(
-                RichText::new("程序流程")
-                    .size(8.5)
-                    .color(theme::text_faint()),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("程序流程")
+                        .size(8.5)
+                        .color(theme::text_faint()),
+                );
+                ui.add_space(4.0);
+                let response = ui.add(theme::secondary_button("全屏泳道图"));
+                if response.on_hover_text("打开这张泳道图").clicked() {
+                    *swimlane = Some(AiSwimlaneView {
+                        title: title.to_owned(),
+                        body: format!("```mermaid\n{}\n```", code.trim()),
+                    });
+                }
+            });
             if crate::mermaid::render_compact(
                 ui,
                 &sequence,

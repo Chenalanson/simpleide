@@ -835,8 +835,8 @@ struct FlowEdgeLayout {
 }
 
 fn render_flow(ui: &mut Ui, flow: &FlowChart, id: Id) {
-    let (nodes, edges, size) = layout_flow(flow);
-    let available = ui.available_width();
+    let available = ui.available_width().min(440.0);
+    let (nodes, edges, size) = layout_flow(flow, available);
     if size.x <= available + 4.0 {
         paint_flow(ui, &nodes, &edges, size);
     } else {
@@ -870,7 +870,10 @@ fn paint_flow(ui: &mut Ui, nodes: &[FlowNodeLayout], edges: &[FlowEdgeLayout], s
     }
 }
 
-fn layout_flow(flow: &FlowChart) -> (Vec<FlowNodeLayout>, Vec<FlowEdgeLayout>, Vec2) {
+fn layout_flow(
+    flow: &FlowChart,
+    max_width: f32,
+) -> (Vec<FlowNodeLayout>, Vec<FlowEdgeLayout>, Vec2) {
     let count = flow.nodes.len();
     let mut index = HashMap::new();
     for (position, node) in flow.nodes.iter().enumerate() {
@@ -939,56 +942,74 @@ fn layout_flow(flow: &FlowChart) -> (Vec<FlowNodeLayout>, Vec<FlowEdgeLayout>, V
         by_layer[value].push(node);
     }
 
-    let mut sizes = Vec::with_capacity(count);
-    for node in &flow.nodes {
-        let lines = wrap_label(&node.label, 10);
-        let max_width = lines
-            .iter()
-            .map(|line| text_width(line, 8.5))
-            .fold(0.0_f32, f32::max);
-        let width = (max_width + 16.0).clamp(70.0, 200.0);
-        let height = (lines.len() as f32 * 13.0 + 14.0).clamp(28.0, 130.0);
-        sizes.push((width, height, lines));
-    }
-
+    let top_down = flow.direction == FlowDirection::TopDown;
+    let columns = if top_down {
+        if max_width >= 760.0 {
+            3
+        } else if max_width >= 300.0 {
+            2
+        } else {
+            1
+        }
+    } else {
+        1
+    };
     let pad = 12.0;
     let gap_x = 14.0;
     let gap_y = 30.0;
+    let row_gap = 16.0;
+    let layer_gap = 32.0;
+    let total_width = max_width.max(240.0);
+    let cell_width = ((total_width - pad * 2.0 - gap_x * (columns - 1) as f32) / columns as f32)
+        .clamp(100.0, 220.0);
+    let mut sizes = Vec::with_capacity(count);
+    for node in &flow.nodes {
+        let wrap_chars = if top_down {
+            ((cell_width - 18.0) / 8.4).max(10.0) as usize
+        } else {
+            18
+        };
+        let lines = wrap_label(&node.label, wrap_chars);
+        let width = if top_down {
+            cell_width
+        } else {
+            (lines
+                .iter()
+                .map(|line| text_width(line, 8.5))
+                .fold(0.0_f32, f32::max)
+                + 16.0)
+                .clamp(90.0, 220.0)
+        };
+        let height = (lines.len() as f32 * 12.5 + 14.0).clamp(28.0, 150.0);
+        sizes.push((width, height, lines));
+    }
+
     let mut rects = vec![Rect::ZERO; count];
-    let total = if flow.direction == FlowDirection::TopDown {
-        let layer_widths = by_layer
-            .iter()
-            .map(|nodes| {
-                nodes.iter().map(|&node| sizes[node].0).sum::<f32>()
-                    + gap_x * nodes.len().saturating_sub(1) as f32
-            })
-            .collect::<Vec<_>>();
-        let layer_heights = by_layer
-            .iter()
-            .map(|nodes| {
-                nodes
+    let total = if top_down {
+        let mut y = pad;
+        for nodes in &by_layer {
+            let mut row_y = y;
+            for row in nodes.chunks(columns) {
+                let row_width = row.iter().map(|&node| sizes[node].0).sum::<f32>()
+                    + gap_x * row.len().saturating_sub(1) as f32;
+                let row_height = row
                     .iter()
                     .map(|&node| sizes[node].1)
-                    .fold(0.0_f32, f32::max)
-            })
-            .collect::<Vec<_>>();
-        let max_width = layer_widths.iter().copied().fold(0.0_f32, f32::max);
-        let mut y = pad;
-        for (layer_index, nodes) in by_layer.iter().enumerate() {
-            let layer_width = layer_widths[layer_index];
-            let layer_height = layer_heights[layer_index];
-            let mut x = pad + (max_width - layer_width) / 2.0;
-            for &node in nodes {
-                let (width, height, _) = &sizes[node];
-                rects[node] = Rect::from_min_size(
-                    egui::pos2(x, y + (layer_height - height) / 2.0),
-                    egui::vec2(*width, *height),
-                );
-                x += width + gap_x;
+                    .fold(0.0_f32, f32::max);
+                let mut x = pad + (total_width - pad * 2.0 - row_width) / 2.0;
+                for &node in row {
+                    let (width, height, _) = &sizes[node];
+                    rects[node] = Rect::from_min_size(
+                        egui::pos2(x, row_y + (row_height - height) / 2.0),
+                        egui::vec2(*width, *height),
+                    );
+                    x += width + gap_x;
+                }
+                row_y += row_height + row_gap;
             }
-            y += layer_height + gap_y;
+            y = row_y - row_gap + layer_gap;
         }
-        egui::vec2(max_width + pad * 2.0, y - gap_y + pad)
+        egui::vec2(total_width, (y - layer_gap + pad).max(80.0))
     } else {
         let layer_heights = by_layer
             .iter()
@@ -1180,14 +1201,13 @@ fn draw_flow_edge(painter: &egui::Painter, edge: &FlowEdgeLayout, offset: Pos2) 
         draw_arrow_head(painter, tip, previous, stroke);
     }
     if !edge.label.is_empty() {
-        let lines = wrap_label(&edge.label, 18);
+        let mut text = edge.label.chars().take(12).collect::<String>();
+        if edge.label.chars().count() > 12 {
+            text.push('…');
+        }
         let mid = points[1] + (points[2] - points[1]) * 0.5;
-        let width = lines
-            .iter()
-            .map(|line| text_width(line, 7.5))
-            .fold(0.0_f32, f32::max)
-            + 8.0;
-        let height = lines.len() as f32 * 11.0 + 4.0;
+        let width = text_width(&text, 7.2) + 8.0;
+        let height = 14.0;
         let rect = Rect::from_center_size(mid, egui::vec2(width, height));
         painter.rect_filled(rect, CornerRadius::same(3), theme::panel());
         painter.rect_stroke(
@@ -1196,15 +1216,13 @@ fn draw_flow_edge(painter: &egui::Painter, edge: &FlowEdgeLayout, offset: Pos2) 
             Stroke::new(0.7_f32, theme::border_soft()),
             StrokeKind::Inside,
         );
-        for (line_index, line) in lines.iter().enumerate() {
-            painter.text(
-                egui::pos2(mid.x, rect.top() + 2.0 + line_index as f32 * 11.0 + 5.5),
-                Align2::CENTER_CENTER,
-                line,
-                FontId::proportional(7.5),
-                theme::text_dim(),
-            );
-        }
+        painter.text(
+            mid,
+            Align2::CENTER_CENTER,
+            text,
+            FontId::proportional(7.2),
+            theme::text_dim(),
+        );
     }
 }
 
@@ -1661,7 +1679,7 @@ mod tests {
         };
         assert_eq!(flow.nodes.len(), 10);
         assert_eq!(flow.edges.len(), 16);
-        let (nodes, edges, size) = layout_flow(&flow);
+        let (nodes, edges, size) = layout_flow(&flow, 400.0);
         assert_eq!(nodes.len(), 10);
         assert_eq!(edges.len(), 16);
         assert!(size.x > 200.0);
