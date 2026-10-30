@@ -1,6 +1,6 @@
 # 代码风格学习与极致优化参考（code-style）
 
-本文件用于 T7：从用户已有代码中学习 `.c` / `.h` 写法、模块封装习惯和优化偏好，产出工程根目录的 `code_style.md`，并在后续编码中优先执行。
+本文件用于 T7：从用户已有代码中学习 `.c` / `.h` 写法、模块封装习惯和优化偏好，产出工程根目录的 `code_style.md`，并在满足 L0 与强制规范的前提下执行。T1–T3/T8 只负责读取遵守，生成与维护归 T7。
 
 ---
 
@@ -9,18 +9,20 @@
 | 项 | 约定 |
 |---|---|
 | 文件位置 | `<工程根目录>/code_style.md`（固定，不放到 `docs/`） |
-| 优先级 | `code_style.md` > `code-rules.md` 默认风格 > 通用习惯；但不得覆盖安全、硬件事实、当前指令和编译器限制 |
-| 生成方式 | AI 用 `se-file path=code_style.md` 写入；不要只把风格写在聊天里 |
+| 优先级 | **L0 O1–O13** > `code-rules.md` / `architecture.md` 强制规则 > `code_style.md`（仅命名/格式/注释/封装习惯）> 通用习惯；`code_style.md` 不得授权违反 O11 的改动，也不得把业务 `.c/.h` 放到工程根目录 |
+| 生成/维护方式 | 由 `code_style_write` 任务写入（工具 `se-file`），不得绕过任务裸写；写入前必须 `index_context` + 读取旧文件（O3） |
+| 读取守卫 | T1–T3/T8 在编码前必须用 `read_file` 读取 `code_style.md`；未读取不得开始 `codegen_by_layer` |
+| 二次写入 | 风格审计发现可复用规则时，经用户确认后再走一次 `code_style_write` 增量更新，不直接手改 |
 | 完整性 | 规则必须可执行：写清“怎么做、反例、检查方法”，禁止只写“保持整洁” |
 | 样例位置 | 默认扫描 `<工程根目录>/code_style_samples/`；也扫描用户上传到根目录的代码、用户点名的目录/文件 |
 | 覆盖范围 | 在文档开头写清样例来源、文件数、未覆盖项（例如没有中断代码、没有 FreeRTOS） |
-| 维护 | 用户可随时手改；AI 下次编码前必须重新读取，不得凭记忆 |
+| 维护 | 用户可随时手改；AI 下次编码前必须重新读取，不得凭记忆（读取守卫见上） |
 
 `code_style.md` 建议同时包含“给 AI 的规则”和“给用户的自查清单”，方便用户自己找错误。
 
 ---
 
-## 2. 样例收集流程（S8）
+## 2. 样例收集流程（collect_samples）
 
 1. 列出候选来源：
    - `code_style_samples/` 下的 `.c` / `.h`（递归，最多 40 个文件）
@@ -233,7 +235,7 @@ bsp_xxx_status_t bsp_xxx_init(bsp_xxx_t *self, const bsp_xxx_config_t *config)
 - 先列高影响问题（错误码、越界、ISR 阻塞、模块越层），再列格式问题。
 - 不擅自批量改旧代码；用户确认后才修改。
 - 修改后跑 `se-build`；必要时用 `se-cli` 或 LED/GPIO 验证行为。
-- 把重复出现的偏差补充进 `code_style.md` 的自查清单。
+- 把重复出现的偏差经用户确认后，用 `code_style_write` 增量补充进 `code_style.md` 自查清单；不要直接裸写。
 
 ---
 
@@ -260,8 +262,9 @@ bsp_xxx_status_t bsp_xxx_init(bsp_xxx_t *self, const bsp_xxx_config_t *config)
 7. 启动/内存：合理栈堆；`_Min_Stack_Size`；避免大局部数组；检查 map 文件。
 8. 测量：构建前后 `size`/map 对比；GPIO 翻转或 DWT 计时；功耗表；不能用“感觉更快”。
 
-### 7.3 优化 Gate
+### 7.3 优化收尾（`optimize_plan` + `build` 验收补充）
 
+- 本节不另立关卡；目标/约束/测量/风险/回退写入 `optimize_plan` 的 accept，结果由 `build` 与回归验证验收。
 - 必须写目标、约束、测量方法、预期收益和回退。
 - 不得牺牲正确性、安全性、硬件时序或可维护性换性能。
 - 未测量不得宣称“极致优化完成”；只可写“已按清单优化，待实测”。

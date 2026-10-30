@@ -17,6 +17,8 @@
 
 ## 2. 工程盘点（先证据，后结论）
 
+> 前置守卫：必须先完成 `index_context`（`index.indexed=true`）；未建索引不得开始盘点（`inventory` guard）。
+
 按顺序读取，不要只看文件名：
 
 1. **构建系统**：`Makefile`、`CMakeLists.txt`、`Cargo.toml`、`*.uvprojx`、`platformio.ini`、`idf.py`/`sdkconfig`、`meson.build`。
@@ -48,12 +50,16 @@
 
 | 方案 | 适用 | 动作 | 风险 |
 |---|---|---|---|
-| 保留 + 更新文档 | 外来/兼容工程，结构可维护 | 用 `se-file` 写真实分层、入口、调度、映射 | 与默认结构不一致，需要团队接受 |
-| 增量补全 | 已有文档，只缺章节/过期 | 用 `se-replace` 按小节补，保留已有正确内容 | 旧内容可能仍有错，需要逐节核对 |
-| 替换整份 | 文档严重过期或来自别的工程 | 说明将删除的旧内容，`se-ask` 确认后用 `se-file` 重写 | 丢失历史设计说明 |
+| 保留 + 更新文档 | 外来/兼容工程，结构可维护 | 用 `framework_write`（经 `se-file`）写真实分层、入口、调度、映射 | 与默认结构不一致，需要团队接受 |
+| 增量补全 | 已有文档，只缺章节/过期 | 用 `framework_patch`（经 `se-replace`）按小节补，保留已有正确内容 | 旧内容可能仍有错，需要逐节核对 |
+| 替换整份 | 文档严重过期或来自别的工程 | 说明将删除的旧内容，`se-ask` 确认后走 `[confirm]` → `framework_write`（经 `se-file`）重写 | 丢失历史设计说明 |
 | 重构目录 | 用户明确要求标准化 | T8 只给迁移方案；实际执行按 T1/T2/T3/T6 | 构建、包含路径、C_SOURCES、调试产物全部受影响 |
 
 **默认推荐**：外来工程先“保留 + 更新文档”，不要为了好看强行搬目录。
+
+**写入前置（O3 + `[confirm]`）**：任何 `framework_write` / `framework_patch` 前必须已完成 `[confirm]`（`pending_confirm`）；已有 `framework.md` 且用户未确认“保留/补全/替换”时，`framework_write` 的 guard 判 REJECT，只能输出草案/差异，不得写入。
+
+`framework.md` 的写入协议归 `framework_write`（整份写入，`se-file`）/ `framework_patch`（增量修改，`se-replace`）任务，协议只是落盘通道；禁止绕过任务直接裸写 `se-file`。
 
 ---
 
@@ -73,7 +79,9 @@
 
 ---
 
-## 6. 重构迁移方案模板
+## 6. 重构迁移方案模板（T6 执行计划，非 T8 动作）
+
+> 本表是 T8 输出给 T6 的**执行计划草案**；T8 不移动/重命名/删除任何文件。实际执行必须走 T6：`classify` → `impact_analysis` → `[confirm]` → `execute_or_preview` / `delete_file`；未确认不得执行。重命名/移动目前只有预览，需用户手动执行。
 
 | 序号 | 动作 | 源 | 目标 | 影响 | 验证 |
 |---|---|---|---|---|---|
@@ -98,7 +106,7 @@
 - 不看构建文件，直接按默认层生成 `framework.md`。
 - 把“结构不同”当成错误，强行给迁移方案。
 - 未确认就覆盖别人的 `framework.md`。
-- 用 `se-file` 写一份“理想架构”，但代码实际不在这些目录。
+- 绕过 `framework_write`/`framework_patch` 直接裸写 `se-file` / `se-replace`，写一份“理想架构”，但代码实际不在这些目录。
 - 把厂商生成代码、启动文件、链接脚本当成业务代码移动。
 - 编造入口、RTOS 任务、中断优先级或调用链；没读到就标 TODO/待确认。
 

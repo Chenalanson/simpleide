@@ -1,7 +1,7 @@
-# 代码编写规则速查（S3 专用）
+# 代码编写规则速查（codegen_by_layer 专用）
 
 > 目录
-> 1. 技术栈判定（S0 结论表）
+> 1. 技术栈判定（collect_requirements 结论表）
 > 2. 台账字段 → 代码位置同源映射表
 > 3. 分层落点速查（细则见 architecture.md）
 > 4. 通用编码规范（编号规则）
@@ -9,23 +9,23 @@
 > 6. FreeRTOS 可选层（与 software-arch.md 抢占式模型衔接）
 > 7. 现有工程最小改动规则（强制）
 >
-> 用法：S3 阶段照本表选模式、填参数、组织代码；不展开教科书解释。参数未核实处集中宏 + TODO 注释。
+> 用法：编码时照本表选模式、填参数、组织代码；不展开教科书解释。参数未核实处集中宏 + TODO 注释。
 
-## 1. 技术栈判定（S0 结论表）
+## 1. 技术栈判定（collect_requirements 结论表）
 
 | 维度 | 选项 | 默认与切换规则 |
 |---|---|---|
 | 固件库 | HAL / LL / 标准库 SPL | 默认 HAL；用户指定即切换函数风格，分层结构不变 |
-| 系统 | 裸机主循环状态机 / FreeRTOS | 默认裸机；出现「任务、队列、调度、并发」需求时启用第 6 节 |
+| 系统 | 裸机主循环状态机 / FreeRTOS | 默认裸机；仅当用户明确要求 RTOS 内核 / 抢占式多任务，或存在阻塞队列、信号量、并发保护等硬需求时启用第 6 节；仅出现「任务/调度」字样不构成切换理由 |
 | 工程形式 | 新建模块 / 现有工程续写 | 现有工程走第 7 节；句柄与初始化复用不重写 |
 
 ## 2. 台账字段 → 代码位置同源映射表
 
 | 台账字段（hardware.dts） | 代码落地位置 | 代码中承载方式 |
 |---|---|---|
-| 实例 label（`uart2`） | 句柄 `huart2`；模块前缀 `uart2_xxx()` | 命名对齐，不另起名 |
-| `current-speed = <115200>` | `huartX.Init.BaudRate` | 集中宏 `BSP_UART2_BAUDRATE` |
-| 引脚组 `uart2_tx_pa2`（pin/af） | GPIO 初始化结构体端口/引脚/模式/复用 | AF 未核实 → `#define BSP_UART2_TX_AF n /* TODO: RM 复用表核对 */` |
+| 实例 label（`uart2`） | 句柄 `huart2`；模块前缀 `bsp_usart2_xxx()` | 命名对齐，不另起名 |
+| `current-speed = <115200>` | `huartX.Init.BaudRate` | 集中宏 `BSP_USART2_BAUDRATE` |
+| 引脚组 `uart2_tx_pa2`（pin/af） | GPIO 初始化结构体端口/引脚/模式/复用 | AF 未核实 → `#define BSP_USART2_TX_AF n /* TODO: RM 复用表核对 */` |
 | `channel@2`（label `ch_vin`） | ADC 通道号配置、采集数组下标顺序 | 通道枚举宏 `ADC_CH_VIN`，顺序与台账 label 列表一致 |
 | `frequency-hz = <20000>`（PWM） | TIM PSC/ARR 复算后填入；CCR 范围 | 复算过程写入注释；常量入宏 |
 | `dmas` / `dma-names` | DMA 句柄配置 + 外设 Init 关联 | 通道号 TODO 集中在 `bsp_conf.h` |
@@ -47,18 +47,18 @@
 
 命名规则：
 
-- PERIPHERAL：`bsp_<外设>.c/.h`（`bsp_spi.c`、`bsp_adc.c`），接口 `<外设>_<动作>`（`spi_init`、`adc_init_dma`）。
-- MODULES：`bsp_<器件缩写>.c/.h`（`bsp_st7789v.c`、`bsp_sc8701.c`），接口 `<器件>_<动作>`（`st7789v_init`）。
+- PERIPHERAL：`bsp_<外设>.c/.h`（`bsp_spi.c`、`bsp_adc.c`），接口 `bsp_<外设>_<动作>`（`bsp_spi_init`、`bsp_adc_init_dma`）。
+- MODULES：`bsp_<器件缩写>.c/.h`（`bsp_st7789v.c`、`bsp_sc8701.c`），接口 `bsp_<器件>_<动作>`（`bsp_st7789v_init`、`bsp_sc8701_read_voltage`）。
 - MID：`task_sched`、`dev_manager`、`service_<域>`；APP 固定 `app.c/app.h`。
-- 依赖方向：APP → MID → MODULES → PERIPHERAL → LL/HAL；禁止反向包含与循环依赖。
-- 目录落点红线：文件路径写全相对目录（`BSP/MODULES/bsp_sc8701.c`）；业务 `.c/.h` 禁止放工程根目录；根目录仅 `hardware.dts`、`framework.md` 与构建工程；骨架缺失时先列入新建清单（architecture.md 3.3），不把文件随手丢进根目录或只读库目录。
+- 依赖方向：APP → MID → MODULES → PERIPHERAL → LL/HAL；禁止反向包含与循环依赖；同层模块经 MID 公共服务协作。
+- 目录落点红线：文件路径写全相对目录（`BSP/MODULES/bsp_sc8701.c`）；业务 `.c/.h` 禁止放工程根目录；根目录仅允许 `hardware.dts`、`framework.md`、`code_style.md`、只读库目录（`Drivers/`、`LIB/`、`third_party/`）与构建工程目录；骨架缺失时先列入新建清单（architecture.md 3.3），不把文件随手丢进根目录或只读库目录。
 
 ## 4. 通用编码规范（编号规则，违反即返工）
 
 | 编号 | 规则 |
 |---|---|
-| R1 | 命名：模块前缀 + 动作（`adc1_read_vin_mv()`）；静态函数 `static`；宏大写下划线 |
-| R2 | 返回值：HAL 调用检查 `HAL_OK`；自定义模块枚举错误码；等待接口必带 `timeout_ms`，超时返回错误，禁止裸 `while(1)` 死等 |
+| R1 | 命名：`bsp_<器件/外设>_<动作>`（`bsp_adc_read_vin_mv()`）；静态函数 `static`；宏大写下划线 |
+| R2 | 返回值：HAL 调用检查 `HAL_OK`；LL/SPL 按其返回约定处理（返回 `ErrorStatus` 的判 `SUCCESS`/`ERROR`，返回 `void` 的必须检查状态标志/计数器并给出结果）；自定义模块枚举错误码；等待接口必带 `timeout_ms`，超时返回错误，禁止裸 `while(1)` 死等 |
 | R3 | 参数宏化：速率、缓冲长度、超时、通道号、滤波窗口全部 `#define`，函数体无字面量常数 |
 | R4 | 注释：文件头写职责与对应台账节点；函数注释含功能/参数/返回；待核实行 `/* TODO: 手册核对点 + 查阅位置 */` |
 | R5 | 常量入 Flash：查表、协议字串 `const`；中断与主循环共享变量 `volatile` |
@@ -74,7 +74,7 @@
 | 项 | 规则 |
 |---|---|
 | 模式 | ADC 脚 = `Analog`；复用功能 = `AF` 模式；I2C = 开漏；输出 = 推挽；输入按键 = 上下拉/浮空按台账 `pull` |
-| 输出封装 | `xxx_set(on/off)` 内部处理有效电平翻转，逻辑不散落多处 |
+| 输出封装 | `bsp_<器件>_set(on/off)` 内部处理有效电平翻转，逻辑不散落多处 |
 | EXTI | 触发沿对齐台账 `trigger`；回调先判引脚；只置标志/提交任务 |
 | 未用脚 | 按台账 `disabled` 建议配模拟输入或下拉，不悬空 |
 | 易错 | 复用脚再被 GPIO 函数读写；EXTI 线号跨引脚冲突；调试脚（PA13/PA14）被挪用 |
@@ -101,7 +101,7 @@
 
 | 项 | 规则 |
 |---|---|
-| 频率公式 | `f = fTIMCLK / ((PSC+1)×(ARR+1))`；APB 预分频 ≠1 时 `fTIMCLK = 2×PCLK`；中心对齐周期约 `2×ARR`；复算过程写注释 |
+| 频率公式 | `f = fTIMCLK / ((PSC+1)×(ARR+1))`；APB 预分频 ≠1 时 `fTIMCLK = 2×PCLK`；中心对齐周期约 `2×(ARR+1)`；复算过程写注释 |
 | 定时中断 | `HAL_TIM_PeriodElapsedCallback` 先判 `Instance`；回调内不跑长逻辑 |
 | PWM | 先 `HAL_TIM_PWM_Start`；运行期 `__HAL_TIM_SET_COMPARE` 更新占空比；`ARR ≥ CCR` |
 | 高级定时器（TIM1/8） | MOE 主输出使能；刹车极性、死区为安全项，对齐台账刹车节点；故障动作 = 停 PWM + 关使能 |
@@ -121,7 +121,7 @@
 | 项 | 规则 |
 |---|---|
 | 速率 | 100k/400k 对齐台账；上拉与电容属硬件，台账已备注 |
-| 封装 | `dev_read_reg(addr, reg, buf, len)` / `dev_write_reg(...)`；7bit 地址（按所用 HAL 版本约定核对 R/W 处理） |
+| 封装 | 低层总线访问 `dev_read_reg(bus, reg, buf, len)` / `dev_write_reg(bus, reg, buf, len)`；业务层走上层 `dev_write(name, reg, buf, len)`；7bit 地址（按所用 HAL 版本约定核对 R/W 处理） |
 | 健壮性 | 超时返回错误码；总线忙/仲裁失败重试或上报；禁止死等；上电时序延时对齐台账 note |
 
 ### 5.7 CAN / FDCAN
@@ -174,10 +174,10 @@
 
 | 步骤 | 动作要求 | 证据输出 |
 |---|---|---|
-| M1 通读 | 通读初始化、句柄定义、模块命名、头文件包含、现有台账 | S0 复用资源清单（文件:对象名） |
+| M1 通读 | 通读初始化、句柄定义、模块命名、头文件包含、现有台账 | collect_requirements 复用资源清单（文件:对象名） |
 | M2 只追加 | 新功能归入新 `.c/.h` 或现有模块末尾；不改 `MX_xxx_Init`、不重构签名、不动已验证时钟/引脚 | 最小改动说明表逐行登记 |
-| M3 标注插入点 | 每段代码给文件路径与插入位置（如「`bsp_adc.c` 末尾追加」「`main()` 中 `MX_ADC1_Init()` 之后」） | 代码块前标注 `【文件:位置】` |
+| M3 标注插入点 | 每段代码给文件路径与插入位置（如「`bsp_adc.c` 末尾追加」「`main()` 中 `MX_ADC1_Init()` 之后」）；插入点必须落在 CubeMX `/* USER CODE BEGIN ... */` 与 `/* USER CODE END ... */` 之间，生成代码区不得插入；每段插入标 `need_confirm` 并登记最小改动说明表 | 代码块前标注 `【文件:位置｜need_confirm】`；最小改动说明表逐行登记 |
 | M4 必要修改说明 | 必须改现有行时登记「文件\|位置\|原值\|新值\|原因」；能用新增封装规避则不修改 | 改动表不得出现无理由修改 |
 | M5 复用优先 | 现有句柄、宏、延时/打印工具直接引用，不重复定义同义设施 | 复用清单与代码引用一致 |
 | M6 台账先行 | 新增硬件资源先登记台账片段，再写代码；代码参数回指台账字段 | 模板 B 第 2 节先于第 3 节 |
-| M7 新模块挂接 | 新 MODULES/PERIPHERAL 模块按 module-convention.md M-DEV 步骤完成句柄与接口；初始化按 architecture.md 第 6 节三步法挂入 `app_init`；注册（设备管理器/调度器）同步完成 | framework.md 依赖矩阵与任务表同步更新 |
+| M7 新模块挂接 | 新 MODULES/PERIPHERAL 模块按 module-convention.md M-DEV 步骤完成句柄与接口；初始化按 architecture.md 第 6 节三步法挂入 `app_init`；注册（设备管理器/调度器）同步完成；只生成 framework 增量片段（依赖矩阵/调用链/任务表）写入 context，不得直接写 framework.md | framework 增量片段（context 待落盘，由 framework_patch/framework_write 持久化） |

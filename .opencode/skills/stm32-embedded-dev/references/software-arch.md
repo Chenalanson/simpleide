@@ -1,4 +1,4 @@
-# 软件架构规范（S3.4：执行范式 / 调度模式 / 设计模式）
+# 软件架构规范（执行范式 / 调度模式 / 设计模式）
 
 > 目录
 > 1. 三层次判定顺序（先范式、再调度、后模式）
@@ -55,9 +55,13 @@
 | `app_sched_thread()` | 主循环 | 检查各任务时间变量到点后调用对应周期任务 | 时间片触发；注册顺序等效静态优先级 |
 | `app_loop_thread()` | 主循环 | 连续调用状态机任务，每次只推进一个状态 | 瞬时判断，不挂固定间隔；解决异步等待 |
 
+命名固定：APP 对外只有 `app_init` / `app_sched_thread` / `app_loop_thread`；调度器内部函数名（如 `task_create` / `task_time_sched`）与框架自带 API 均为参考实现，落地时按工程实际适配，不新增同义入口。
+
 时基：SysTick 1ms 中断 `sys_tick_ms++`（`volatile`）；中断内只做计数与定时器递减，不跑业务。
 
 #### 3.2.2 调度器最小实现（参照）
+
+> `task_create` / `task_time_sched` 为参考实现命名，需按工程调度器适配；APP 侧仍固定 `app_init` / `app_sched_thread` / `app_loop_thread`。
 
 ```c
 typedef struct {
@@ -165,13 +169,22 @@ typedef struct {
 
 规则：读函数与速率要求冲突（需区分 8/16 位或高速专用路径）时 `read_fn` 允许传 `NULL`；无实际多设备复用需求时可省略设备管理器，不强行引入。
 
+设备管理器分两层 API（与 `architecture.md` 第 2 节、`code-rules.md` 5.6 一致）：
+
+| 层级 | API 原型 | 参数 | 调用者 |
+|---|---|---|---|
+| 高层（设备名寻址） | `dev_write(name, reg, buf, len)` / `dev_read(name, reg, buf, len)` | `name`=注册名；`reg`=寄存器/命令；`buf/len`=数据；单字节命令可简写 `dev_write(name, reg)` | MID service / APP |
+| 低层（总线寻址） | `dev_write_reg(bus, reg, buf, len)` / `dev_read_reg(bus, reg, buf, len)` | `bus`=总线实例/句柄；`reg`=寄存器/命令；`buf/len`=数据 | 设备管理器内部 / 驱动适配层 |
+
+`dev_entry_t.write_fn/read_fn` 是绑定到具体设备后的回调，签名不带 `name`；高层 `dev_write` 先按 `name` 查表命中 `dev_entry_t`，再转调 `write_fn` 或 `dev_write_reg`。
+
 ### 4.4 门面 / 解释层高级 API
 
-MID service 层封装业务语义接口（`power_set("SC8701", 8.20f)`）：完成单位换算、量程约束、寻址后再调用设备管理器 `dev_write`；屏蔽底层寄存器与总线细节。
+MID service 层封装业务语义接口（`power_set("SC8701", 8.20f)`）：完成单位换算、量程约束、寻址后再调用高层 `dev_write("SC8701", 0x21, buf, len)`；屏蔽底层寄存器与总线细节。
 
 ### 4.5 注册表寻址
 
-设备管理器 `name → 接口表` 统一访问入口；价值：统一命名寻址、屏蔽总线差异、供上层与测试脚本复用。
+设备管理器 `name → 接口表` 统一访问入口；高层按 `name` 寻址，低层按 `bus` 访问；价值：统一命名寻址、屏蔽总线差异、供上层与测试脚本复用。
 
 ### 4.6 生产者-消费者环形缓冲
 

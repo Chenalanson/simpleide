@@ -12,14 +12,14 @@
 | 传输 | UART，8N1，默认 115200；波特率必须与工程 CLI 配置一致 |
 | 行尾 | 默认 `CRLF`；固件同时接受 `\r`、`\n`、`\r\n` |
 | 编码 | ASCII；中文说明放在注释里，不放在响应中 |
-| 单行长度 | ≤ 200 字节，超出直接丢弃并回 `ERR line-too-long` |
+| 单行长度 | ≤ 200 字节，超出直接丢弃并回 `ERR 2 line-too-long` |
 | 响应 | 每条命令至少一行；成功 `OK ...`，失败 `ERR <code> <message>` |
-| 非阻塞 | `cli_poll()` 单次执行 ≤ 5 ms；禁止在 ISR 里解析命令 |
+| 非阻塞 | `cli_poll()` 单次执行 ≤ 5 ms（按 `CLI_POLL_MAX_BYTES` 限量）；禁止在 ISR 里解析命令 |
 | 动态内存 | 禁止 `malloc`；命令表和缓冲区全部静态分配 |
 | 复位 | `reset` 只做 `NVIC_SystemReset()`；擦除/写 Flash 必须二次确认，默认不提供 |
 | 调试口 | CLI 占用一路 UART；不要和业务协议共用同一路，除非协议明确多路复用 |
 
-> 烧录后先确认串口能收到 `help` 的响应，再让 AI 发 `se-cli`。没有响应时不要假设命令执行成功。
+> 烧录后先确认运行的是本轮新固件（O13），再确认串口能收到 `help` 的响应，然后才让 AI 发 `se-cli`。没有响应时不要假设命令执行成功。
 
 ---
 
@@ -29,9 +29,9 @@
 |---|---|---|
 | `BSP/PERIPHERAL/bsp_cli.h` | BSP/PERIPHERAL | 命令结构体、注册/初始化/轮询接口 |
 | `BSP/PERIPHERAL/bsp_cli.c` | BSP/PERIPHERAL | 行缓冲、分词、命令查找、内置命令 |
-| `BSP/PERIPHERAL/bsp_uart.c/.h` | BSP/PERIPHERAL | UART 初始化、收发、RX 环形缓冲（若已存在则沿用） |
-| `APP/app_init.c` | APP | UART 初始化后调用 `cli_init()`，注册业务命令 |
-| `APP/app_loop.c`（或调度器任务） | APP | 主循环周期调用 `cli_poll()` |
+| `BSP/PERIPHERAL/bsp_usart.c/.h` | BSP/PERIPHERAL | USART 初始化、收发、RX 环形缓冲（若已存在则沿用） |
+| `APP/app.c` | APP | `app_init()` 中 USART 初始化后调用 `cli_init()`，注册业务命令 |
+| `APP/app.c` | APP | `app_sched_thread()` 或 `app_loop_thread()` 周期调用 `cli_poll()` |
 
 现有工程已有 UART 封装时**沿用**，只补 CLI 层；不要为 CLI 再初始化一路 UART。
 
@@ -73,15 +73,17 @@ void cli_printf(const char *fmt, ...);
 
 ```c
 #include "bsp_cli.h"
-#include "bsp_uart.h"       /* 工程现有 UART 封装：bsp_uart_read_byte / bsp_uart_write */
+#include "bsp_usart.h"       /* 工程现有 USART 封装：bsp_usart_read_byte / bsp_usart_write */
 #include "main.h"           /* CubeMX 工程；裸机工程改为对应 CMSIS 设备头 */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 #define CLI_CMD_MAX       24u
 #define CLI_PROMPT        "cli> "
+#define CLI_POLL_MAX_BYTES 64u   /* 单次 cli_poll 最多处理的字节数，按波特率/主频核算 ≤5 ms */
 
 static cli_command_t s_commands[CLI_CMD_MAX];
 static size_t s_command_count;
@@ -96,7 +98,7 @@ static void cli_builtin_reset(int argc, char *argv[]);
 
 static const cli_command_t s_builtins[] = {
     { "help",  "help                列出所有命令", cli_builtin_help },
-    { "info",  "info                输出版本、时钟、复位原因", cli_builtin_info },
+    { "info",  "info                输出版本、时钟、复位状态（原始 RCC_CSR）", cli_builtin_info },
     { "echo",  "echo <text>         原样回显，用于链路自检", cli_builtin_echo },
     { "reset", "reset               软件复位 MCU", cli_builtin_reset },
 };
@@ -128,7 +130,7 @@ void cli_register(const cli_command_t *commands, size_t count)
 void cli_write(const char *text)
 {
     if (text != NULL) {
-        bsp_uart_write((const uint8_t *)text, strlen(text));
+        bsp_usart_write((const uint8_t *)text, strlen(text));
     }
 }
 
@@ -186,7 +188,10 @@ static void cli_execute(char *line)
 void cli_poll(void)
 {
     uint8_t byte;
-    while (bsp_uart_read_byte(&byte)) {
+    uint16_t budget = CLI_POLL_MAX_BYTES;   /* 单次限量；剩余字节留在环形缓冲，下次再处理 */
+
+    while (budget > 0u && bsp_usart_read_byte(&byte)) {
+        budget--;
         if (byte == '\r') {
             s_ignore_lf = 1u;
         } else if (byte == '\n') {
@@ -239,6 +244,8 @@ static void cli_builtin_info(int argc, char *argv[])
     (void)argv;
     cli_printf("build: %s %s\r\n", __DATE__, __TIME__);
     cli_printf("clock: %lu Hz\r\n", (unsigned long)SystemCoreClock);
+    /* TODO: 按系列 RM 核对 RCC_CSR 复位标志位定义；未核实前只输出原始值，不解释 */
+    cli_printf("reset-csr: 0x%08lX\r\n", (unsigned long)RCC->CSR);
     cli_write_line("OK info");
 }
 
@@ -262,35 +269,39 @@ static void cli_builtin_reset(int argc, char *argv[])
 }
 ```
 
-> `bsp_uart_read_byte` 返回 1 表示取到字节，0 表示缓冲为空。若工程现有 UART 只有中断回调，请在回调里写入环形缓冲，再由 `bsp_uart_read_byte` 出队；ISR 内不要调用 `cli_*`。
+> `bsp_usart_read_byte` 返回 1 表示取到字节，0 表示缓冲为空。若工程现有 UART 只有中断回调，请在回调里写入环形缓冲，再由 `bsp_usart_read_byte` 出队；ISR 内不要调用 `cli_*`。
 
-`bsp_uart.h` 至少需要提供给 CLI 使用的三个接口：
+`bsp_usart.h` 至少需要提供给 CLI 使用的三个接口：
 
 ```c
-void    bsp_uart_init(void);
-void    bsp_uart_write(const uint8_t *data, size_t len);
-uint8_t bsp_uart_read_byte(uint8_t *byte);   /* 1 = 取到，0 = 当前无数据 */
+void    bsp_usart_init(void);
+void    bsp_usart_write(const uint8_t *data, size_t len);
+uint8_t bsp_usart_read_byte(uint8_t *byte);   /* 1 = 取到，0 = 当前无数据 */
 ```
 
 ### 3.3 APP 侧接入
 
 ```c
-/* app_init.c */
+/* APP/app.c — app_init() */
 void app_init(void)
 {
-    bsp_uart_init();
+    bsp_usart_init();
     cli_init();
     /* 注册业务命令，例如 LED、ADC、PWM */
     cli_register(app_commands, app_command_count);
 }
 
-/* app_loop.c 或调度器周期任务 */
+/* APP/app.c — app_sched_thread()：周期任务，CLI 轮询放这里，周期 ≤ 10 ms */
+void app_sched_thread(void)
+{
+    cli_poll();
+    task_time_sched();      /* 工程现有非抢占调度器 */
+}
+
+/* APP/app.c — app_loop_thread()：连续状态机任务 */
 void app_loop_thread(void)
 {
-    for (;;) {
-        cli_poll();
-        app_sched_poll();
-    }
+    multi_menu_ui_task();   /* 工程现有连续状态机任务，按实际替换 */
 }
 ```
 
@@ -339,6 +350,42 @@ static void cmd_adc(int argc, char *argv[])
 ### 4.3 寄存器读写（谨慎）
 
 ```c
+/* 默认只读；量产固件保持 0，调试版才允许写。 */
+#define CLI_REG_WRITE_ENABLE   0
+
+typedef struct {
+    uint32_t base;
+    uint32_t size;
+    const char *name;
+} reg_window_t;
+
+#if !defined(REG_WIN_APB1_BASE) || !defined(REG_WIN_APB1_SIZE) || \
+    !defined(REG_WIN_APB2_BASE) || !defined(REG_WIN_APB2_SIZE) || \
+    !defined(REG_WIN_AHB_BASE)  || !defined(REG_WIN_AHB_SIZE)
+#error "TODO: 先按本芯片 RM Memory map 定义 REG_WIN_* 白名单窗口"
+#endif
+
+/* TODO: 按本芯片 RM 的 Memory map 在 bsp_conf.h 定义窗口；不同系列基址/长度不同，禁止照抄。 */
+static const reg_window_t s_reg_windows[] = {
+    { REG_WIN_APB1_BASE, REG_WIN_APB1_SIZE, "apb1" },
+    { REG_WIN_APB2_BASE, REG_WIN_APB2_SIZE, "apb2" },
+    { REG_WIN_AHB_BASE,  REG_WIN_AHB_SIZE,  "ahb"  },
+};
+
+static bool reg_addr_allowed(uint32_t addr)
+{
+    if ((addr & 0x3u) != 0u) {              /* 只允许 32 位对齐访问 */
+        return false;
+    }
+    for (size_t i = 0u; i < sizeof(s_reg_windows) / sizeof(s_reg_windows[0]); i++) {
+        uint32_t end = s_reg_windows[i].base + s_reg_windows[i].size;
+        if (addr >= s_reg_windows[i].base && addr < end) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void cmd_reg(int argc, char *argv[])
 {
     if (argc < 3) {
@@ -346,7 +393,7 @@ static void cmd_reg(int argc, char *argv[])
         return;
     }
     uint32_t addr = (uint32_t)strtoul(argv[2], NULL, 0);
-    if ((addr & 0xFFFF0000u) != 0x40000000u) {   /* 只允许 APB 外设窗口 */
+    if (!reg_addr_allowed(addr)) {
         cli_write_line("ERR 31 address-not-allowed");
         return;
     }
@@ -355,15 +402,19 @@ static void cmd_reg(int argc, char *argv[])
                    (unsigned long)*(volatile uint32_t *)addr);
         cli_write_line("OK reg");
     } else if (strcmp(argv[1], "write") == 0 && argc == 4) {
+#if CLI_REG_WRITE_ENABLE
         *(volatile uint32_t *)addr = (uint32_t)strtoul(argv[3], NULL, 0);
         cli_write_line("OK reg");
+#else
+        cli_write_line("ERR 33 reg-write-disabled");
+#endif
     } else {
         cli_write_line("ERR 32 usage: reg read|write <addr> [value]");
     }
 }
 ```
 
-寄存器写命令必须限制地址范围，禁止开放任意地址；量产固件建议用宏整体关闭。
+寄存器写命令默认编译关闭（`CLI_REG_WRITE_ENABLE 0`）；只读命令也必须过按芯片定义的地址白名单与 4 字节对齐检查，禁止用单一 `0x4000xxxx` 通配。
 
 ---
 
@@ -376,6 +427,7 @@ static void cmd_reg(int argc, char *argv[])
 | 未就绪 | `ERR 20 adc-not-ready` |
 | 未知命令 | `ERR 1 unknown-command <name>` |
 | 超长行 | `ERR 2 line-too-long` |
+| 寄存器写被关闭 | `ERR 33 reg-write-disabled` |
 | 复位前 | `OK reset` |
 
 约定：
@@ -389,22 +441,22 @@ static void cmd_reg(int argc, char *argv[])
 
 ## 6. AI / IDE 交互流程
 
-1. S5 构建通过后，固件必须已经烧录（用户操作或 IDE 烧录按钮）。
+1. 满足 O13 才能发 `se-cli`：`build.build_ok == true`，且 `flash.flashed == true` 或用户确认正在运行的是本轮新固件；`build.artifact` 的哈希/时间戳与烧录产物一致。不满足时先 `flash`（预览 + 用户执行）或 `pending_ask`，不得用旧固件输出冒充本轮结果。
 2. AI 输出 `se-cli` 块：每行一条命令，先 `help` 确认命令表，再发目标命令。
 3. IDE 按工程 CLI 配置（端口、波特率、行尾、等待时间）逐条发送，等待每条命令的超时后收集输出。
 4. IDE 把真实输出作为下一条消息发回；AI 只能依据回传内容判断，禁止编造。
-5. 无响应时依次检查：端口/波特率 → TX/RX 接线 → 固件是否包含 `cli_poll()` → 是否与业务协议抢占同一 UART。
-6. 问题及解决方案用 `se-issue` 写入 `.ai-issues.md`。
+5. 无响应时依次检查：端口/波特率 → TX/RX 接线 → 固件是否包含 `cli_poll()` → 是否与业务协议抢占同一 UART；仍无响应 → 转 `observe`（LED/GPIO/watch）或 `pending_ask(kind=observe)`，验证状态保持未验证，禁止写“通过”。
+6. 问题及解决方案用 `se-issue` 写入问题记录（`quality.issues` / IDE 问题面板）；不要另建第二份问题文件。
 
 示例：
 
-````text
+`````text
 ````se-cli
 help
 info
 adc read
 ````
-````
+`````
 
 ---
 
@@ -412,7 +464,7 @@ adc read
 
 | 检查项 | 要求 |
 |---|---|
-| 文件 | `bsp_cli.c/.h` 落在 `BSP/PERIPHERAL/`，不散落根目录 |
+| 文件 | `bsp_cli.c/.h`、`bsp_usart.c/.h` 落在 `BSP/PERIPHERAL/`，不散落根目录 |
 | 构建 | 新 `.c` 已加入 `C_SOURCES`（或 Keil 工程组） |
 | 初始化 | `cli_init()` 在 UART 初始化之后调用 |
 | 轮询 | 主循环/调度任务周期调用 `cli_poll()`，周期 ≤ 10 ms |
@@ -420,7 +472,7 @@ adc read
 | 中断 | ISR 只搬运字节，不解析、不打印、不阻塞 |
 | 安全 | 写寄存器/Flash/复位命令有范围限制或编译开关 |
 | 文档 | `hardware.dts` 记录调试串口节点；`framework.md` 更新调用链 |
-| 验证 | 构建 0 error；`help` 有响应；每条命令有 `OK`/`ERR` |
+| 验证 | 构建 0 error；O13 满足（新固件已运行）；`help` 有响应；每条命令有 `OK`/`ERR` |
 
 ---
 
