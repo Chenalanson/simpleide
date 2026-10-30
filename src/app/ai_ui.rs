@@ -281,8 +281,7 @@ impl App {
                     egui::ScrollArea::both()
                         .id_salt("simple_embedded_swimlane_scroll")
                         .show(ui, |ui| {
-                            let fenced = format!("```mermaid\n{}\n```", view.body.trim());
-                            render_markdown(ui, &fenced, 30_000, false);
+                            render_markdown(ui, view.body.trim(), 30_000, false);
                         });
                     ui.add_space(6.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
