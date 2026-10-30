@@ -38,6 +38,7 @@ mod macro_check;
 mod makefile;
 mod memory;
 mod memory_check;
+mod mermaid;
 mod micropython;
 mod minimap;
 mod multi_cursor;

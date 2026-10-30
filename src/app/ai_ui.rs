@@ -1779,87 +1779,10 @@ fn render_framework_body(ui: &mut Ui, body: &str, seed: usize) {
         framework_missing_section(ui);
         return;
     }
-    let lines = body.lines().collect::<Vec<_>>();
-    let mut prose = String::new();
-    let mut index = 0usize;
-    let mut prose_index = 0usize;
-    let mut table_index = 0usize;
-    let mut in_fence = false;
-    while index < lines.len() {
-        let line = lines[index];
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") {
-            in_fence = !in_fence;
-            prose.push_str(line);
-            prose.push('\n');
-            index += 1;
-            continue;
-        }
-        if !in_fence && is_framework_table_start(&lines, index) {
-            if !prose.trim().is_empty() {
-                render_markdown(ui, &prose, seed * 100 + prose_index, false);
-                prose_index += 1;
-                prose.clear();
-            }
-            let start = index;
-            index += 1;
-            while index < lines.len() && lines[index].trim_start().starts_with('|') {
-                index += 1;
-            }
-            render_framework_table(ui, &lines[start..index].join("\n"), seed, table_index);
-            table_index += 1;
-            ui.add_space(3.0);
-            continue;
-        }
-        prose.push_str(line);
-        prose.push('\n');
-        index += 1;
-    }
-    if !prose.trim().is_empty() {
-        render_markdown(ui, &prose, seed * 100 + prose_index, false);
-    }
-}
-
-fn is_framework_table_start(lines: &[&str], index: usize) -> bool {
-    let Some(line) = lines.get(index) else {
-        return false;
-    };
-    if !line.trim_start().starts_with('|') {
-        return false;
-    }
-    let Some(separator) = lines.get(index + 1) else {
-        return false;
-    };
-    let separator = separator.trim();
-    separator.starts_with('|')
-        && separator.contains("---")
-        && separator
-            .chars()
-            .all(|character| matches!(character, '|' | '-' | ':' | ' ' | '\t'))
-}
-
-fn render_framework_table(ui: &mut Ui, text: &str, seed: usize, table_index: usize) {
-    Frame::new()
-        .fill(theme::with_alpha(theme::surface(), 110))
-        .stroke(Stroke::new(1.0_f32, theme::border_soft()))
-        .corner_radius(5)
-        .inner_margin(Margin::symmetric(5, 4))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ScrollArea::horizontal()
-                .id_salt(("simple_embedded_framework_table", seed, table_index))
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    ui.add(
-                        Label::new(
-                            RichText::new(text)
-                                .font(FontId::monospace(9.2))
-                                .color(theme::text()),
-                        )
-                        .wrap_mode(egui::TextWrapMode::Extend),
-                    );
-                });
-        });
+    // Use the same Markdown renderer as chat: headings, lists, tables, links,
+    // fenced code and Mermaid diagrams all behave consistently. Offset the id
+    // base so framework blocks never share scroll state with chat messages.
+    render_markdown(ui, body, 10_000 + seed, false);
 }
 fn arch_section(ui: &mut Ui, number: &str, title: &str) {
     ui.horizontal(|ui| {
@@ -3539,10 +3462,11 @@ fn render_markdown(ui: &mut Ui, text: &str, message_index: usize, error: bool) {
     let color = if error { theme::error() } else { theme::text() };
     let mut rest = text;
     let mut block = 0usize;
+    let mut table_index = 0usize;
     while !rest.is_empty() {
         if let Some(start) = rest.find("```") {
             let prose = &rest[..start];
-            render_prose(ui, prose, color);
+            render_prose(ui, prose, color, message_index, &mut table_index);
             let after = &rest[start + 3..];
             let (language, body) = match after.find('\n') {
                 Some(newline) => (&after[..newline], &after[newline + 1..]),
@@ -3557,37 +3481,98 @@ fn render_markdown(ui: &mut Ui, text: &str, message_index: usize, error: bool) {
                 rest = "";
             }
         } else {
-            render_prose(ui, rest, color);
+            render_prose(ui, rest, color, message_index, &mut table_index);
             rest = "";
         }
     }
 }
 
-fn render_prose(ui: &mut Ui, text: &str, color: Color32) {
+fn render_prose(
+    ui: &mut Ui,
+    text: &str,
+    color: Color32,
+    message_index: usize,
+    table_index: &mut usize,
+) {
     let text = text.trim_matches('\n');
     if text.trim().is_empty() {
         return;
     }
-    for line in text.lines() {
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = lines[index];
         let trimmed = line.trim_end();
         if trimmed.trim().is_empty() {
             ui.add_space(4.0);
+            index += 1;
             continue;
         }
-        let (content, size, strong, prefix) = if let Some(rest) = trimmed.strip_prefix("### ") {
-            (rest, 13.5, true, "")
-        } else if let Some(rest) = trimmed.strip_prefix("## ") {
-            (rest, 14.0, true, "")
-        } else if let Some(rest) = trimmed.strip_prefix("# ") {
-            (rest, 15.0, true, "")
-        } else if let Some(rest) = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
+        if is_markdown_table_start(&lines, index) {
+            let start = index;
+            index += 2;
+            while index < lines.len()
+                && lines[index].contains('|')
+                && !lines[index].trim().is_empty()
+            {
+                index += 1;
+            }
+            render_markdown_table(ui, &lines[start..index], message_index, *table_index, color);
+            *table_index += 1;
+            continue;
+        }
+        if is_horizontal_rule(trimmed.trim()) {
+            ui.add_space(2.0);
+            ui.separator();
+            ui.add_space(2.0);
+            index += 1;
+            continue;
+        }
+        if trimmed.trim_start().starts_with('>') {
+            let start = index;
+            while index < lines.len() && lines[index].trim_start().starts_with('>') {
+                index += 1;
+            }
+            render_quote(ui, &lines[start..index], color);
+            continue;
+        }
+        let indent = trimmed
+            .chars()
+            .take_while(|ch| *ch == ' ' || *ch == '\t')
+            .count();
+        let content_line = trimmed.trim_start();
+        let (content, size, strong, prefix) = if let Some(rest) = content_line.strip_prefix("### ")
         {
-            (rest, 12.0, false, "· ")
+            (rest, 13.5, true, String::new())
+        } else if let Some(rest) = content_line.strip_prefix("## ") {
+            (rest, 14.0, true, String::new())
+        } else if let Some(rest) = content_line.strip_prefix("# ") {
+            (rest, 15.0, true, String::new())
+        } else if let Some(rest) = content_line
+            .strip_prefix("- ")
+            .or_else(|| content_line.strip_prefix("* "))
+            .or_else(|| content_line.strip_prefix("+ "))
+        {
+            (
+                rest,
+                12.0,
+                false,
+                format!("{}· ", "  ".repeat((indent / 2).min(6))),
+            )
+        } else if let Some((number, rest)) = numbered_item(content_line) {
+            (
+                rest,
+                12.0,
+                false,
+                format!("{}{number}. ", "  ".repeat((indent / 2).min(6))),
+            )
         } else {
-            (trimmed, 12.0, false, "")
+            (content_line, 12.0, false, "  ".repeat((indent / 2).min(6)))
         };
+        if content.trim().is_empty() {
+            index += 1;
+            continue;
+        }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             if !prefix.is_empty() {
@@ -3596,45 +3581,292 @@ fn render_prose(ui: &mut Ui, text: &str, color: Color32) {
             render_inline(ui, content, size, strong, color);
         });
         ui.add_space(3.0);
+        index += 1;
     }
+}
+
+fn numbered_item(line: &str) -> Option<(&str, &str)> {
+    let dot = line.find(". ")?;
+    if dot == 0 || dot > 3 {
+        return None;
+    }
+    let number = &line[..dot];
+    if !number.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some((number, line[dot + 2..].trim_start()))
+}
+
+fn is_horizontal_rule(line: &str) -> bool {
+    if line.chars().count() < 3 {
+        return false;
+    }
+    let markers = line
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<Vec<_>>();
+    !markers.is_empty()
+        && (markers.iter().all(|ch| *ch == '-')
+            || markers.iter().all(|ch| *ch == '*')
+            || markers.iter().all(|ch| *ch == '_'))
+}
+
+fn is_markdown_table_start(lines: &[&str], index: usize) -> bool {
+    let Some(separator) = lines.get(index + 1) else {
+        return false;
+    };
+    let header = lines[index].trim();
+    let separator = separator.trim();
+    if !header.contains('|') || !separator.contains('|') {
+        return false;
+    }
+    if separator
+        .chars()
+        .any(|ch| !matches!(ch, '|' | '-' | ':' | ' '))
+    {
+        return false;
+    }
+    separator.contains('-')
+}
+
+fn parse_table_cells(line: &str) -> Vec<String> {
+    let mut text = line.trim();
+    if let Some(rest) = text.strip_prefix('|') {
+        text = rest;
+    }
+    if let Some(rest) = text.strip_suffix('|') {
+        text = rest;
+    }
+    text.split('|')
+        .map(|cell| strip_inline_markers(cell.trim()))
+        .collect()
+}
+
+fn strip_inline_markers(text: &str) -> String {
+    let mut output = text.replace("**", "").replace('`', "").replace("~~", "");
+    while let Some(start) = output.find('[') {
+        let Some(middle) = output[start..].find("](") else {
+            break;
+        };
+        let Some(end) = output[start + middle + 2..].find(')') else {
+            break;
+        };
+        let replacement = output[start + 1..start + middle].to_owned();
+        output.replace_range(start..start + middle + 2 + end + 1, replacement.as_str());
+    }
+    output
+}
+
+fn render_markdown_table(
+    ui: &mut Ui,
+    lines: &[&str],
+    message_index: usize,
+    table_index: usize,
+    color: Color32,
+) {
+    if lines.len() < 2 {
+        return;
+    }
+    let header = parse_table_cells(lines[0]);
+    let rows = lines[2.min(lines.len())..]
+        .iter()
+        .map(|line| parse_table_cells(line))
+        .collect::<Vec<_>>();
+    ScrollArea::horizontal()
+        .id_salt(("simple_embedded_md_table", message_index, table_index))
+        .scroll_source(egui::scroll_area::ScrollSource::SCROLL_BAR)
+        .show(ui, |ui| {
+            egui::Grid::new(("simple_embedded_md_table_grid", message_index, table_index))
+                .striped(true)
+                .spacing([14.0, 4.0])
+                .show(ui, |ui| {
+                    for cell in &header {
+                        ui.label(RichText::new(cell).size(10.0).strong().color(color));
+                    }
+                    ui.end_row();
+                    for row in &rows {
+                        for cell in row {
+                            ui.label(RichText::new(cell).size(10.0).color(theme::text_dim()));
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+    if header.len() >= 4 {
+        ui.label(
+            RichText::new("横向拖动滚动条查看完整表格")
+                .size(8.0)
+                .color(theme::text_faint()),
+        );
+    }
+    ui.add_space(4.0);
+}
+
+fn render_quote(ui: &mut Ui, lines: &[&str], color: Color32) {
+    Frame::new()
+        .fill(theme::with_alpha(theme::accent(), 18))
+        .corner_radius(5)
+        .inner_margin(Margin::symmetric(8, 5))
+        .show(ui, |ui| {
+            for line in lines {
+                let text = line.trim_start().trim_start_matches('>').trim_start();
+                if text.is_empty() {
+                    continue;
+                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(RichText::new("> ").size(11.0).color(theme::accent()));
+                    render_inline(ui, text, 11.0, false, color);
+                });
+                ui.add_space(2.0);
+            }
+        });
+    ui.add_space(4.0);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InlineToken {
+    Code,
+    Bold,
+    Strike,
+    Link,
+    Italic,
 }
 
 fn render_inline(ui: &mut Ui, text: &str, size: f32, strong: bool, color: Color32) {
     let mut rest = text;
-    let mut bold = strong;
+    let bold = strong;
     while !rest.is_empty() {
-        let next_tick = rest.find('`');
-        let next_bold = rest.find("**");
-        let next = match (next_tick, next_bold) {
-            (Some(a), Some(b)) => Some((a.min(b), a <= b)),
-            (Some(a), None) => Some((a, true)),
-            (None, Some(b)) => Some((b, false)),
-            (None, None) => None,
-        };
-        let Some((index, is_code)) = next else {
+        let mut candidates = Vec::new();
+        if let Some(index) = rest.find('`') {
+            candidates.push((index, InlineToken::Code));
+        }
+        if let Some(index) = rest.find("**") {
+            candidates.push((index, InlineToken::Bold));
+        }
+        if let Some(index) = rest.find("~~") {
+            candidates.push((index, InlineToken::Strike));
+        }
+        if let Some(index) = rest.find('[') {
+            candidates.push((index, InlineToken::Link));
+        }
+        if let Some(index) = rest.find('*') {
+            if !rest[index..].starts_with("**") {
+                candidates.push((index, InlineToken::Italic));
+            }
+        }
+        let Some((index, token)) = candidates.into_iter().min_by_key(|(index, _)| *index) else {
             push_inline_text(ui, rest, size, bold, color, false);
             break;
         };
         if index > 0 {
             push_inline_text(ui, &rest[..index], size, bold, color, false);
         }
-        if is_code {
-            let after = &rest[index + 1..];
-            if let Some(end) = after.find('`') {
-                push_inline_text(ui, &after[..end], size, false, theme::accent(), true);
-                rest = &after[end + 1..];
-            } else {
-                push_inline_text(ui, "`", size, false, color, false);
-                rest = after;
+        let after = &rest[index..];
+        match token {
+            InlineToken::Code => {
+                if let Some(end) = after[1..].find('`') {
+                    push_inline_text(ui, &after[1..1 + end], size, false, theme::accent(), true);
+                    rest = &after[1 + end + 1..];
+                } else {
+                    push_inline_text(ui, "`", size, false, color, false);
+                    rest = &after[1..];
+                }
             }
-        } else {
-            bold = !bold;
-            rest = &rest[index + 2..];
+            InlineToken::Bold => {
+                if let Some(end) = after[2..].find("**") {
+                    push_inline_styled(
+                        ui,
+                        &after[2..2 + end],
+                        size,
+                        true,
+                        color,
+                        false,
+                        false,
+                        false,
+                    );
+                    rest = &after[2 + end + 2..];
+                } else {
+                    push_inline_text(ui, "**", size, bold, color, false);
+                    rest = &after[2..];
+                }
+            }
+            InlineToken::Strike => {
+                if let Some(end) = after[2..].find("~~") {
+                    push_inline_styled(
+                        ui,
+                        &after[2..2 + end],
+                        size,
+                        bold,
+                        color,
+                        false,
+                        true,
+                        false,
+                    );
+                    rest = &after[2 + end + 2..];
+                } else {
+                    push_inline_text(ui, "~~", size, bold, color, false);
+                    rest = &after[2..];
+                }
+            }
+            InlineToken::Link => {
+                if let Some(middle) = after[1..].find("](") {
+                    if let Some(end) = after[1 + middle + 2..].find(')') {
+                        let label = &after[1..1 + middle];
+                        let url = &after[1 + middle + 2..1 + middle + 2 + end];
+                        ui.hyperlink_to(
+                            RichText::new(strip_inline_markers(label))
+                                .size(size)
+                                .color(theme::accent()),
+                            url,
+                        );
+                        rest = &after[1 + middle + 2 + end + 1..];
+                    } else {
+                        push_inline_text(ui, "[", size, bold, color, false);
+                        rest = &after[1..];
+                    }
+                } else {
+                    push_inline_text(ui, "[", size, bold, color, false);
+                    rest = &after[1..];
+                }
+            }
+            InlineToken::Italic => {
+                if let Some(end) = after[1..].find('*') {
+                    push_inline_styled(
+                        ui,
+                        &after[1..1 + end],
+                        size,
+                        bold,
+                        color,
+                        false,
+                        false,
+                        true,
+                    );
+                    rest = &after[1 + end + 1..];
+                } else {
+                    push_inline_text(ui, "*", size, bold, color, false);
+                    rest = &after[1..];
+                }
+            }
         }
     }
 }
 
 fn push_inline_text(ui: &mut Ui, text: &str, size: f32, strong: bool, color: Color32, code: bool) {
+    push_inline_styled(ui, text, size, strong, color, code, false, false);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_inline_styled(
+    ui: &mut Ui,
+    text: &str,
+    size: f32,
+    strong: bool,
+    color: Color32,
+    code: bool,
+    strike: bool,
+    italic: bool,
+) {
     if text.is_empty() {
         return;
     }
@@ -3646,6 +3878,12 @@ fn push_inline_text(ui: &mut Ui, text: &str, size: f32, strong: bool, color: Col
     }
     if strong {
         rich = rich.strong();
+    }
+    if strike {
+        rich = rich.strikethrough();
+    }
+    if italic {
+        rich = rich.italics();
     }
     ui.label(rich);
 }
@@ -3678,6 +3916,15 @@ fn render_code_block(ui: &mut Ui, language: &str, code: &str, message_index: usi
                     }
                 });
             });
+            if language.eq_ignore_ascii_case("mermaid")
+                && crate::mermaid::render(
+                    ui,
+                    code,
+                    Id::new(("simple_embedded_mermaid", message_index, block)),
+                )
+            {
+                return;
+            }
             ScrollArea::horizontal()
                 .id_salt(("simple_embedded_ai_code", message_index, block))
                 .auto_shrink([false, true])
@@ -4136,5 +4383,21 @@ mod tests {
         let short = truncate_chars(text, 4);
         assert_eq!(short.chars().count(), 5);
         assert!(short.ends_with('…'));
+    }
+
+    #[test]
+    fn parses_markdown_tables_and_numbered_lists() {
+        let table = ["| 层 | 目录 |", "|---|---|", "| APP | APP/ |"];
+        assert!(is_markdown_table_start(&table, 0));
+        assert_eq!(
+            parse_table_cells("| APP 应用层 | `APP/` |"),
+            vec!["APP 应用层".to_owned(), "APP/".to_owned()]
+        );
+        assert!(is_horizontal_rule("---"));
+        assert_eq!(numbered_item("1. first"), Some(("1", "first")));
+        assert_eq!(
+            strip_inline_markers("[docs](https://example.com) **bold**"),
+            "docs bold"
+        );
     }
 }
