@@ -1054,6 +1054,12 @@ struct ContextIndexState {
     built_at: Option<Instant>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(super) struct AiSwimlaneView {
+    pub title: String,
+    pub body: String,
+}
+
 #[derive(Default)]
 struct AiState {
     enabled: bool,
@@ -1076,6 +1082,7 @@ struct AiState {
     framework_checked_at: Option<Instant>,
     framework_mtime: Option<SystemTime>,
     framework_missing: bool,
+    swimlane: Option<AiSwimlaneView>,
     extra_skills: Vec<crate::ai::ResourceEntry>,
     extra_references: Vec<crate::ai::ResourceEntry>,
     import_receiver: Option<Receiver<Result<crate::ai::ImportOutcome, String>>>,
@@ -4697,6 +4704,7 @@ impl App {
     }
 
     fn exit_ai_mode(&mut self) {
+        self.ai.swimlane = None;
         if let Some(index) = self
             .ai
             .build_check

@@ -13,7 +13,7 @@ use eframe::egui::{
 };
 
 use super::{
-    AiBuildStatus, AiChatMessage, AiCliStatus, AiEditStatus, AiFsStatus, App,
+    AiBuildStatus, AiChatMessage, AiCliStatus, AiEditStatus, AiFsStatus, AiSwimlaneView, App,
     AI_REASONING_PREVIEW_BYTES, AI_STREAM_PREVIEW_BYTES,
 };
 use crate::framework::{FrameworkDoc, GanttChart, GanttKind};
@@ -208,6 +208,7 @@ impl App {
             self.ai.framework_path.as_deref(),
             self.ai.framework_error.as_deref(),
             self.ai.framework_missing,
+            &mut self.ai.swimlane,
             &mut framework_refresh,
             &mut framework_generate,
             &mut framework_open,
@@ -263,6 +264,36 @@ impl App {
         }
         if send {
             self.send_ai_message();
+        }
+
+        if let Some(view) = self.ai.swimlane.clone() {
+            let mut open = true;
+            let mut close = false;
+            let screen = ui.ctx().content_rect();
+            egui::Window::new(format!("泳道图 · {}", view.title))
+                .id(egui::Id::new("simple_embedded_swimlane"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_size(egui::vec2(screen.width() * 0.9, screen.height() * 0.9))
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ui.ctx(), |ui| {
+                    egui::ScrollArea::both()
+                        .id_salt("simple_embedded_swimlane_scroll")
+                        .show(ui, |ui| {
+                            let fenced = format!("```mermaid\n{}\n```", view.body.trim());
+                            render_markdown(ui, &fenced, 30_000, false);
+                        });
+                    ui.add_space(6.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ai_ghost_button(ui, "关闭") {
+                            close = true;
+                        }
+                    });
+                });
+            if !open || close {
+                self.ai.swimlane = None;
+            }
         }
 
         if progress < 1.0 {
@@ -1483,6 +1514,7 @@ fn ai_architecture_panel(
     path: Option<&Path>,
     error: Option<&str>,
     missing: bool,
+    swimlane: &mut Option<AiSwimlaneView>,
     refresh: &mut bool,
     generate: &mut bool,
     open: &mut bool,
@@ -1608,11 +1640,13 @@ fn ai_architecture_panel(
         };
 
         let height = ui.available_height().max(60.0);
+        let content_width = (rect.width() - 24.0).max(180.0);
         ScrollArea::vertical()
             .id_salt("simple_embedded_ai_framework_scroll")
             .auto_shrink([false, false])
             .max_height(height)
             .show(ui, |ui| {
+                ui.set_max_width(content_width);
                 ui.set_width(ui.available_width());
                 ui.label(
                     RichText::new(&doc.title)
@@ -1679,12 +1713,27 @@ fn ai_architecture_panel(
                 );
 
                 ai_section(ui, "函数调度图");
+                let flow_width = (rect.width() - 48.0).max(180.0);
                 framework_part(ui, "调用方向图", doc.section("调用方向图"), 5);
-                framework_part(ui, "关键事件上下文链", doc.section("关键事件上下文链"), 6);
+                framework_sequence_part(
+                    ui,
+                    "关键事件上下文链",
+                    doc.section("关键事件上下文链"),
+                    6,
+                    flow_width,
+                    swimlane,
+                );
                 ui.add_space(9.0);
 
                 ai_section(ui, "调度入口");
-                framework_part(ui, "启动调用链", doc.section("启动调用链"), 7);
+                framework_sequence_part(
+                    ui,
+                    "启动调用链",
+                    doc.section("启动调用链"),
+                    7,
+                    flow_width,
+                    swimlane,
+                );
                 ui.add_space(9.0);
 
                 ai_section(ui, "中断与任务");
@@ -1764,6 +1813,116 @@ fn framework_part(
         None => framework_missing_section(ui),
     }
     ui.add_space(6.0);
+}
+
+/// Sequence sections are shown as a compact program flow in the narrow
+/// architecture panel. The original lifeline/swimlane diagram is available in
+/// a large window through the "全屏泳道图" button.
+fn framework_sequence_part(
+    ui: &mut Ui,
+    title: &str,
+    section: Option<&crate::framework::FrameworkSection>,
+    seed: usize,
+    width: f32,
+    swimlane: &mut Option<AiSwimlaneView>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(title)
+                .size(9.5)
+                .strong()
+                .color(theme::text_dim()),
+        );
+        if section.is_some() {
+            ui.add_space(4.0);
+            let response = ui.add(
+                Button::new(
+                    RichText::new("全屏泳道图")
+                        .size(9.0)
+                        .color(theme::accent())
+                        .underline(),
+                )
+                .frame(false),
+            );
+            if response.on_hover_text("打开该小节的全屏泳道图").clicked() {
+                *swimlane = Some(AiSwimlaneView {
+                    title: title.to_owned(),
+                    body: section
+                        .map(|section| section.body.clone())
+                        .unwrap_or_default(),
+                });
+            }
+        }
+    });
+    match section {
+        Some(section) => render_sequence_body(ui, &section.body, seed, width),
+        None => framework_missing_section(ui),
+    }
+    ui.add_space(6.0);
+}
+
+fn render_sequence_body(ui: &mut Ui, body: &str, seed: usize, width: f32) {
+    let mut rest = body;
+    let mut block = 0usize;
+    let mut text = String::new();
+    while !rest.is_empty() {
+        if let Some(start) = rest.find("```") {
+            text.push_str(&rest[..start]);
+            if !text.trim().is_empty() {
+                render_markdown(ui, &text, seed * 1000 + block, false);
+                block += 1;
+                text.clear();
+            }
+            let after = &rest[start + 3..];
+            let (language, body) = match after.find('\n') {
+                Some(newline) => (&after[..newline], &after[newline + 1..]),
+                None => ("", after),
+            };
+            if let Some(end) = body.find("```") {
+                render_sequence_fence(ui, language.trim(), &body[..end], seed, block, width);
+                block += 1;
+                rest = &body[end + 3..];
+            } else {
+                render_code_block(ui, language.trim(), body, seed * 1000 + block, block);
+                rest = "";
+            }
+        } else {
+            text.push_str(rest);
+            rest = "";
+        }
+    }
+    if !text.trim().is_empty() {
+        render_markdown(ui, &text, seed * 1000 + block, false);
+    }
+}
+
+fn render_sequence_fence(
+    ui: &mut Ui,
+    language: &str,
+    code: &str,
+    seed: usize,
+    block: usize,
+    width: f32,
+) {
+    if language.eq_ignore_ascii_case("mermaid") {
+        if let Some(crate::mermaid::Diagram::Sequence(sequence)) = crate::mermaid::parse(code) {
+            ui.label(
+                RichText::new("程序流程")
+                    .size(8.5)
+                    .color(theme::text_faint()),
+            );
+            if crate::mermaid::render_compact(
+                ui,
+                &sequence,
+                Id::new(("simple_embedded_compact_sequence", seed, block)),
+                width,
+            ) {
+                ui.add_space(6.0);
+                return;
+            }
+        }
+    }
+    render_code_block(ui, language, code, seed * 1000 + block, block);
 }
 
 fn framework_missing_section(ui: &mut Ui) {

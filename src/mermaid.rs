@@ -109,6 +109,143 @@ pub fn render(ui: &mut Ui, source: &str, id: Id) -> bool {
     }
 }
 
+/// Compact vertical event flow used inside the narrow architecture panel. The
+/// full lifeline/swimlane view stays available behind the "全屏泳道图" button.
+pub fn render_compact(ui: &mut Ui, sequence: &SequenceDiagram, id: Id, max_width: f32) -> bool {
+    if sequence.events.is_empty() {
+        return false;
+    }
+    let available = max_width.max(180.0);
+    let text_chars = ((available - 34.0) / 5.6).max(18.0) as usize;
+    enum CompactRow {
+        Box {
+            lines: Vec<String>,
+            height: f32,
+            note: bool,
+        },
+        Label(String),
+    }
+    let mut rows = Vec::new();
+    for event in &sequence.events {
+        match event {
+            SeqEvent::Message { from, to, text, .. } => {
+                let from_label = participant_label(sequence, from);
+                let to_label = participant_label(sequence, to);
+                let line = if text.trim().is_empty() {
+                    format!("{from_label} → {to_label}")
+                } else {
+                    format!("{from_label} → {to_label}：{text}")
+                };
+                let lines = wrap_label(&line, text_chars);
+                let height = lines.len() as f32 * 12.0 + 12.0;
+                rows.push(CompactRow::Box {
+                    lines,
+                    height,
+                    note: false,
+                });
+            }
+            SeqEvent::Note { text, .. } => {
+                let lines = wrap_label(text, text_chars);
+                let height = lines.len() as f32 * 12.0 + 12.0;
+                rows.push(CompactRow::Box {
+                    lines,
+                    height,
+                    note: true,
+                });
+            }
+            SeqEvent::Label { text } => rows.push(CompactRow::Label(text.clone())),
+            SeqEvent::Empty => {}
+        }
+    }
+    if rows.is_empty() {
+        return false;
+    }
+    let gap = 17.0;
+    let mut total = 6.0;
+    for row in &rows {
+        total += match row {
+            CompactRow::Box { height, .. } => *height + gap,
+            CompactRow::Label(_) => 18.0,
+        };
+    }
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(available, total.max(40.0)), Sense::hover());
+    let painter = ui.painter();
+    let left = rect.left() + 6.0;
+    let width = (rect.width() - 12.0).max(120.0);
+    let mut y = rect.top() + 4.0;
+    let mut previous: Option<egui::Pos2> = None;
+    for row in rows {
+        match row {
+            CompactRow::Label(text) => {
+                painter.text(
+                    egui::pos2(left, y),
+                    Align2::LEFT_TOP,
+                    text,
+                    FontId::proportional(8.5),
+                    theme::warning(),
+                );
+                y += 18.0;
+                previous = None;
+            }
+            CompactRow::Box {
+                lines,
+                height,
+                note,
+            } => {
+                let box_rect = Rect::from_min_size(egui::pos2(left, y), egui::vec2(width, height));
+                let (fill, stroke_color) = if note {
+                    (
+                        theme::with_alpha(theme::info(), 22),
+                        theme::with_alpha(theme::info(), 150),
+                    )
+                } else {
+                    (theme::surface(), theme::with_alpha(theme::accent(), 150))
+                };
+                painter.rect_filled(box_rect, CornerRadius::same(6), fill);
+                painter.rect_stroke(
+                    box_rect,
+                    CornerRadius::same(6),
+                    Stroke::new(1.0_f32, stroke_color),
+                    StrokeKind::Inside,
+                );
+                if let Some(previous) = previous {
+                    let start = egui::pos2(previous.x, previous.y + 2.0);
+                    let end = egui::pos2(box_rect.center().x, box_rect.top() - 2.0);
+                    painter.line_segment([start, end], Stroke::new(1.0_f32, theme::text_faint()));
+                    draw_arrow_head(
+                        painter,
+                        end,
+                        start,
+                        Stroke::new(1.0_f32, theme::text_faint()),
+                    );
+                }
+                for (index, line) in lines.iter().enumerate() {
+                    painter.text(
+                        egui::pos2(left + 8.0, y + 5.0 + index as f32 * 12.0),
+                        Align2::LEFT_TOP,
+                        line,
+                        FontId::proportional(8.5),
+                        theme::text(),
+                    );
+                }
+                previous = Some(egui::pos2(box_rect.center().x, box_rect.bottom()));
+                y += height + gap;
+            }
+        }
+    }
+    let _ = id;
+    true
+}
+
+fn participant_label(sequence: &SequenceDiagram, id: &str) -> String {
+    sequence
+        .participants
+        .iter()
+        .find(|participant| participant.id == id)
+        .map(|participant| participant.label.clone())
+        .unwrap_or_else(|| id.to_owned())
+}
+
 pub fn parse(source: &str) -> Option<Diagram> {
     let lines = source
         .lines()
